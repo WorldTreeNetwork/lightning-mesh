@@ -1,7 +1,20 @@
 import { Elysia } from "elysia";
+import { cors } from "@elysiajs/cors";
+import { RoomManager } from "./rooms/RoomManager";
+import { createSignalingWs } from "./ws/setup";
+import { createHealthRoutes } from "./health/routes";
+import { logger } from "./logger";
+import { config } from "./config";
 
-const app = new Elysia().get("/", () => "Hello Elysia").listen(3000);
+const roomManager = new RoomManager();
 
-console.log(
-  `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
+const app = new Elysia()
+  .use(cors())
+  .use(createSignalingWs(roomManager))
+  .use(createHealthRoutes(roomManager))
+  .listen(config.port);
+
+logger.info(
+  { host: app.server?.hostname, port: app.server?.port },
+  "Signaling server started"
 );
