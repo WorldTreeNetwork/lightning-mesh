@@ -1,416 +1,260 @@
-# Mesh Network Coordination: Vision and Architecture
+# mjolnir-mesh: Mesh VPN with Distributed Network Coordination
 
-**Status:** Vision document | **Date:** 2026-03-25
+**Status:** Architecture overview | **Updated:** 2026-03-26
 
-mjolnir-mesh is expanding from a WebRTC audio signaling server into a distributed mesh coordination daemon for ad-hoc router networks. The system will replicate DHCP lease tables and DNS records across OpenWrt routers (GL.iNet devices like AXT1800, BE3600) using Iroh's QUIC mesh and CRDTs, enabling seamless roaming, hostname-based service discovery, and partition-tolerant network coordination.
+mjolnir-mesh is a Rust daemon that runs on OpenWrt routers and creates a
+decentralized mesh network. Routers coordinate via Iroh QUIC connections
+and a gossip-replicated CRDT store — no leader election, no central server.
+Any router can go offline without disrupting the mesh.
 
-## Problem Statement
+## What It Provides
 
-When multiple OpenWrt routers form an ad-hoc mesh, each runs its own dnsmasq DHCP/DNS daemon. Today, these servers operate independently, causing critical failures:
+- **Unified DHCP** across co-located routers on the same L2 — no IP conflicts,
+  seamless device roaming
+- **Cross-site IP routing** via Iroh tunnels between geographically separate sites
+- **Mesh-wide DNS** for hostname and service discovery across all sites
+- **Service registration** — any device can publish services; all routers update DNS
+- **Iroh as global address space** — routers and Iroh-aware devices have a NodeId
+  as their global identity; IPv4 is for local LAN; DNS bridges the two
 
-- **IP collision**: Two routers can assign the same IP address to different devices because they lack shared lease state.
-- **Hostname fragmentation**: A device on Router-A cannot resolve the hostname of a device on Router-B.
-- **No seamless roaming**: When a device roams from Router-A to Router-B, it loses its IP lease and must request a new one, breaking ongoing connections.
-- **No partition recovery**: When a router rejoins the mesh after a network split, its stale lease table has no way to sync with others.
+## Target Deployment
 
-**Solution**: Use iroh-docs (a replicated CRDT key-value store) to sync DHCP leases and DNS records across all mesh nodes, backed by iroh-gossip for low-latency broadcast. dnsmasq on each router reads the merged state, providing a unified address space across the mesh.
+**Primary**: DWEB (decentralized web) events — 200+ people, 10+ GL.iNet routers
+(AXT1800, BE3600), heavy device roaming between access points.
+
+**Also**: Home meshes (2-3 routers), global roaming between sites.
+
+---
+
+## Two Modes of Router Interconnection
+
+The mesh supports two modes simultaneously. A real deployment uses both.
+
+### Mode 1: Local (same venue / same L2 broadcast domain)
+
+Routers at the same venue bridge their LAN interfaces into one L2 domain.
+All routers share a single subnet (e.g., `10.42.1.0/24`).
+
+```
+                    [ L2 Bridge ]
+         ______________|______________
+         |             |             |
+    [Router-A]    [Router-B]    [Router-C]
+    dnsmasq       dnsmasq       dnsmasq
+    10.42.1.1     10.42.1.2     10.42.1.3
+         |             |             |
+     [devices]     [devices]     [devices]
+```
+
+- Every router runs dnsmasq on the same subnet — no leader election
+- CRDT-synced hostsfile prevents IP conflicts (each dnsmasq knows all MAC→IP bindings)
+- Devices roam between APs and keep the same IP
+- mDNS works natively (same broadcast domain)
+
+### Mode 2: Remote (different sites / via Iroh)
+
+Each site has its own subnet. Routers connect via Iroh QUIC tunnels.
+
+```
+    [ Site A: 10.42.1.0/24 ]          [ Site B: 10.42.2.0/24 ]
+         [Router-A] ──── Iroh QUIC tunnel ──── [Router-D]
+         dnsmasq                                dnsmasq
+         10.42.1.1                              10.42.2.1
+              |                                      |
+          [devices]                              [devices]
+```
+
+- Each site has its own subnet; cross-site routing via Iroh tunnels
+- Route table synced via CRDT (`/routes/{subnet}`)
+- DNS synced mesh-wide — any device resolves any hostname on any site
+- mDNS forwarded via avahi reflector for `.local` names
+
+Both modes coexist in the same mesh. A router at a venue can tunnel to a home router simultaneously.
+
+---
+
+## Fully P2P DHCP (No Leader)
+
+Every router on local L2 runs dnsmasq with three integration points:
+
+```
+dhcp-hostsfile=/tmp/mjolnir/reservations   # CRDT-synced MAC→IP bindings
+addn-hosts=/tmp/mjolnir/dns                # CRDT-synced hostname→IP
+dhcp-script=/usr/bin/mjolnir-mesh dhcp-event  # reports new leases to CRDT
+```
+
+**Flow when a device connects:**
+
+1. Device sends DHCP Discover on the L2 broadcast domain
+2. One or more routers receive it; each checks `/tmp/mjolnir/reservations`
+3. If the MAC has an existing binding, dnsmasq renews that IP (roaming case)
+4. If the MAC is new, dnsmasq assigns a free IP and invokes `dhcp-event`
+5. `mjolnir-mesh dhcp-event` writes the binding to the local CRDT store
+6. iroh-gossip broadcasts the new binding to all mesh routers (~100ms)
+7. All routers update their reservations file; dnsmasq on each router
+   now knows that IP is taken
+
+**Roaming** is a renewal, not a conflict — the same MAC reclaims its existing
+IP from a new router. The CRDT treats this as an in-place update; FWW conflict
+resolution only applies when two different MACs race for the same IP.
+
+---
+
+## Conflict Resolution
+
+Two routers can assign the same IP to different devices within the ~100ms gossip
+window. This is rare but handled cleanly:
+
+- **FWW (first-writer-wins)** with HLC ordering — lower timestamp wins
+- **Losing router**: removes the lease from dnsmasq, deauths the losing device
+- **Losing device**: auto-reconnects (~2 sec), gets a new non-conflicting IP
+- **Winning device**: completely undisturbed
+
+Lease times can be long (1 hour+). Conflicts are resolved immediately on
+detection, not deferred to renewal time.
+
+---
+
+## CRDT Store
+
+A custom eventually-consistent KV store built on iroh-gossip (not iroh-docs,
+which is not available as a shipped crate):
+
+| Concern | Mechanism |
+|---------|-----------|
+| Local state | In-memory HashMap + optional disk persistence (SD card) |
+| Hot path | iroh-gossip broadcast to all peers |
+| Catch-up | Anti-entropy full state exchange on reconnect |
+| Conflict rule | FWW + HLC for leases; last-write-wins for DNS/services/routes |
+
+**Schema:**
+
+```
+/devices/{mac}       →  { ip, hostname, router_id, expiry }
+/dns/{hostname}      →  { ip, mac }
+/services/{name}     →  { hostname, ip, port, protocol, txt }
+/routes/{subnet}     →  { node_id, via_node_id }
+```
+
+**Anti-entropy**: When a router rejoins after a partition, it performs a full
+state exchange with its peers. Both sides apply FWW merge and converge without
+re-broadcasting. Subsequent queries reflect the merged state.
+
+---
+
+## Service Discovery
+
+Any device can publish a service into the mesh CRDT:
+
+```
+/services/wiki  →  { hostname: "wiki.mesh", ip: 10.42.1.50, port: 8080 }
+```
+
+All routers update their DNS. Anyone on any site reaches `wiki.mesh:8080`.
+This works across both local and remote modes.
+
+---
+
+## Iroh as Global Address Space
+
+```
+    Global identity:  Iroh NodeId  (routers, VMs, Iroh-aware devices)
+    Local identity:   IPv4 address (consumer devices, standard apps)
+    Bridge:           DNS + CRDT   (hostname → IP  or  hostname → NodeId)
+```
+
+Iroh NodeId is a public key derived from a secret key stored on each router.
+It serves as a stable, globally routable identity that persists across IP changes,
+NAT boundaries, and site moves. The mesh DNS namespace spans both:
+
+- `device.mesh` → `10.42.1.42` (IPv4 for local LAN apps)
+- `router-b.mesh` → `<NodeId>` (Iroh for direct peer connections)
+
+---
+
+## Relationship to Mjolnir VMs
+
+Mjolnir VMs have Iroh built into their network stack. VMs join the same Iroh
+mesh as the routers and appear in the shared DNS namespace:
+
+```
+Mesh namespace (routers + VMs + devices):
+  Router-A  10.42.1.1   node_abc...
+  Router-B  10.42.1.2   node_def...
+  VM-nginx  10.42.1.100 node_ghi...   ← Mjolnir VM
+  laptop    10.42.1.42  (IPv4 only)
+  phone     10.42.1.43  (IPv4 only)
+```
+
+Any device on any router can resolve `nginx.mesh` and connect to the VM.
+The mesh becomes a unified namespace spanning infrastructure and clients.
+
+---
 
 ## Architecture Layers
 
 ```
-┌─────────────────────────────────────────┐
-│  dnsmasq (DHCP/DNS per-router)          │
-│  reads /tmp/leases/mesh + /tmp/hosts/mesh
-├─────────────────────────────────────────┤
-│  Lease/DNS Sync Engine (CRDT)           │
-│  iroh-docs: replicated KV store         │
-│  iroh-gossip: broadcast topics          │
-├─────────────────────────────────────────┤
-│  Iroh Node (QUIC mesh)                  │
-│  Encrypted connections, NAT traversal   │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  Applications / Devices                              │
+│  standard DHCP + DNS clients, mDNS, Iroh-aware apps  │
+├──────────────────────────────────────────────────────┤
+│  dnsmasq  (per router)                               │
+│  DHCP server, DNS resolver                           │
+│  reads /tmp/mjolnir/reservations + /tmp/mjolnir/dns  │
+│  invokes mjolnir-mesh dhcp-event on lease events     │
+├──────────────────────────────────────────────────────┤
+│  mjolnir-mesh daemon  (Rust binary)                  │
+│  CRDT store (FWW + HLC)                              │
+│  iroh-gossip replication                             │
+│  dnsmasq file writer                                 │
+│  cross-site route management                         │
+├──────────────────────────────────────────────────────┤
+│  Iroh  (QUIC mesh)                                   │
+│  encrypted connections, NAT traversal, node identity │
+└──────────────────────────────────────────────────────┘
 ```
 
-### Layer 1: Iroh Node Foundation
-
-Each router runs a single Iroh endpoint, providing:
-
-- **QUIC-based mesh**: Encrypted, hole-punched connections between routers
-- **NAT traversal**: Via built-in relay infrastructure
-- **Content-addressed data**: All state is reproducible from a DAG of operations
-- **Node discovery**: Via gossip and n0 (decentralized discovery)
-
-The Rust crates already exist:
-
-- `crates/mjolnir-node`: CLI binary with `host`/`join`/`id` subcommands. Owns an Iroh `Endpoint`, a `MoqBridge`, and a `Room`.
-- `crates/mjolnir-moq`: MoQ protocol bridge (ALPN: `b"moq-lite/0"`) with actor-based session management.
-- `crates/mjolnir-audio`: Opus codec scaffolding with cpal capture/playback.
-
-### Layer 2: Distributed DHCP Lease Sync
-
-**Problem solved**: Ensuring two routers never assign the same IP to different devices.
-
-**Solution**: Use iroh-docs to replicate lease state with last-write-wins conflict resolution.
-
-#### Lease Table Schema
-
-The core data structure in the iroh-doc:
-
-```
-Key: /leases/{ip}
-Value: {
-  mac: "00:1a:2b:3c:4d:5e",
-  hostname: "laptop-alice",
-  expiry: 1711363200,  // Unix timestamp
-  router_id: "node_xyz",  // Which router issued this lease
-  claimed_at: 1711276800  // When the lease was claimed (for tie-breaking)
-}
-
-Key: /dns/{hostname}
-Value: {
-  ip: "192.168.1.42",
-  type: "A",  // or AAAA
-  ttl: 3600,
-  router_id: "node_xyz"
-}
-```
-
-#### Dual-Path Synchronization
-
-**Hot path (gossip):** When a router's dnsmasq issues or renews a lease, the lease daemon broadcasts to all peers via iroh-gossip on topic `"dhcp-leases"`:
-
-```json
-{
-  "action": "claim_lease",
-  "ip": "192.168.1.42",
-  "mac": "00:1a:2b:3c:4d:5e",
-  "hostname": "device-name",
-  "expiry": 1711363200,
-  "router_id": "node_xyz"
-}
-```
-
-All peers receive the message in ~10-100ms and add the entry to their iroh-doc immediately. The message is best-effort (UDP-like) but sufficient because:
-
-- The iroh-doc persists the claim durably
-- Retransmission happens on reconnection
-- Gossip reaches all peers quickly enough to prevent collisions in normal operation
-
-**Cold path (docs):** iroh-docs automatically syncs the full CRDT state when nodes reconnect:
-
-1. Node A goes offline with leases `{IP1, IP2, IP3}`
-2. Node B continues issuing new leases while A is away: `{IP4, IP5}`
-3. When A rejoins, iroh-docs performs a merge: both A and B converge to `{IP1, IP2, IP3, IP4, IP5}` without re-broadcasting
-4. Subsequent queries include merged state
-
-### Layer 3: Shared DNS Resolution
-
-Once leases are replicated across the mesh, DNS becomes unified.
-
-**Per-router DNS update**: The lease sync engine writes the merged lease table to `/tmp/hosts/mesh`:
-
-```
-192.168.1.42  laptop-alice  laptop-alice.local
-192.168.1.43  printer-office  printer-office.local
-192.168.1.50  camera-kitchen  camera-kitchen.local
-```
-
-**dnsmasq configuration**: Each router's dnsmasq includes this file:
-
-```
-addn-hosts=/tmp/hosts/mesh
-```
-
-Now every router's DNS resolver answers queries for any hostname in the mesh, regardless of which router issued the lease.
-
-**Result**: A device on Router-A connecting to Router-B can resolve `printer-office.local` and connect to the printer, which is registered with Router-B.
-
-## Seamless Roaming
-
-When a device moves from Router-A to Router-B:
-
-1. **Device sends DHCP discover** to Router-B's broadcast domain
-2. **Router-B's dnsmasq** checks the iroh-doc: `IP1` is already leased to `laptop-alice` with `mac_A`
-3. **Router-B** sees the MAC is roaming and updates the lease entry: same IP, same hostname, but `router_id` now points to Router-B
-4. **No disruption**: The device keeps its IP, and any peer can resolve `laptop-alice` to the same IP regardless of which router it's connected to
-
-**Key insight**: The CRDT with per-author-key semantics (Iroh's native model) handles this automatically. The latest timestamp from any router wins, so a router can claim an existing lease as long as its timestamp is newer.
-
-## Partition Tolerance
-
-**Scenario**: A travel router gets unplugged (network partition).
-
-**What happens**:
-
-- **Remaining mesh**: Other routers retain the full lease table in their iroh-docs. They continue issuing new leases and syncing via gossip.
-- **Travel router**: Offline, has a stale snapshot of state at time T.
-- **Rejoin**: Router reconnects to the mesh. iroh-docs syncs automatically:
-  - Leases issued while offline are merged in
-  - Travel router's old leases are retained (they may have expired, but that's OK—dnsmasq handles expiry)
-  - Conflicts: Latest-timestamp-wins (Iroh's native semantics)
-
-**No manual intervention needed.** The CRDT merge is automatic.
-
-## Iroh Primitives Used
-
-### iroh-gossip: Broadcast Channel
-
-Topic: `"dhcp-leases"`
-
-- **Purpose**: Low-latency notification of new/updated leases
-- **Semantics**: Best-effort broadcast to all peers
-- **Payload**: Serialized lease claim (JSON or postcard)
-- **Latency**: ~10-100ms to most peers (depends on network topology)
-- **Why gossip and not docs?** Gossip is faster for hot notifications. Docs handles durability and catch-up.
-
-### iroh-docs: CRDT Store
-
-- **Namespace**: Hierarchical keys like `/leases/{ip}` and `/dns/{hostname}`
-- **Authors**: Each router is an author; it can modify entries under its own `router_id` prefix
-- **Conflict resolution**: Per-key, per-author (Iroh's native model). Tie-breaker: timestamp or content hash.
-- **Automatic sync**: When nodes connect, iroh-docs performs a 3-way merge
-- **Durability**: All state is persisted to disk and recoverable on restart
-
-### iroh-net: Encrypted QUIC Transport
-
-- **Connections**: Point-to-point QUIC between routers
-- **NAT traversal**: Automatic hole-punching via relay infrastructure
-- **Encryption**: QUIC's native TLS 1.3, per-connection
-- **Peer discovery**: Via gossip, n0, or static addresses
-
-## Deployment Target
-
-A single Rust static binary per router:
-
-```bash
-mjolnir-mesh-daemon --router-id node_xyz --iroh-secret <key>
-```
-
-**Runs on**: OpenWrt (ARM/MIPS architectures). Cross-compiled via Cargo with OpenWrt toolchain.
-
-**Resource footprint**:
-- **Memory**: ~20-30 MB (Rust binary, Iroh endpoint, doc store)
-- **CPU**: Minimal when idle; spikes during lease/gossip broadcasts
-- **Storage**: Lease table grows by ~100 bytes per device per year; docs store is append-only but garbage-collectible
-
-**Integration points**:
-
-1. **Watch dnsmasq leases** (`/tmp/dhcp.leases`) via inotify
-2. **Broadcast** new/renewed leases via iroh-gossip (topic: `"dhcp-leases"`)
-3. **Merge state** from iroh-docs into local lease table
-4. **Write output** to `/tmp/hosts/mesh` for dnsmasq to read
-5. **Listen** for updates from other routers via iroh-gossip + iroh-docs
-
-## Relationship to Mjolnir VMs
-
-Mjolnir microVMs already have Iroh built into their network stack. This mesh coordination layer creates a unified address space spanning routers + VMs:
-
-- A VM can join the same Iroh mesh as the routers (sharing transport)
-- A device connected to any router can resolve and connect to services running in any VM
-- VMs appear in the shared DNS namespace alongside router-issued leases
-
-**Example workflow**:
-
-```
-OpenWrt Mesh (routers + VMs):
-  Router-A (192.168.1.1)
-    └─ Device: laptop (192.168.1.42)
-  Router-B (192.168.1.2)
-    └─ Mjolnir VM running nginx (192.168.1.100)
-
-Laptop can:
-  1. SSH to another device via hostname (dnsmasq resolves it)
-  2. Roam from Router-A to Router-B without IP change
-  3. Access services in the Mjolnir VM by hostname (nginx.local)
-```
-
-## Future Extensions
-
-### 1. Firewall Rules Propagation
-
-Extend the doc schema to include per-device firewall rules:
-
-```
-Key: /firewall/{device_id}
-Value: {
-  rules: [ { port: 22, protocol: tcp, action: accept } ],
-  router_id: "node_xyz"
-}
-```
-
-Each router's firewall daemon reads the merged rules and applies them locally.
-
-### 2. Network Topology Awareness
-
-Use Iroh's connection metrics to build a dynamic topology map:
-
-```
-Key: /topology/{link}
-Value: {
-  from: "node_xyz",
-  to: "node_abc",
-  latency_ms: 25,
-  bandwidth_mbps: 100,
-  last_update: 1711276800
-}
-```
-
-Routing daemons can use this to optimize path selection.
-
-### 3. Service Discovery
-
-A generalized mDNS-like protocol over the mesh:
-
-```
-Key: /services/{service_type}/{instance}
-Value: {
-  hostname: "printer.local",
-  port: 9100,
-  txt_records: { color: true, model: "HP-4050" },
-  router_id: "node_xyz"
-}
-```
-
-Clients query `/services/_http._tcp/*` to discover web services across the entire mesh.
+---
 
 ## Implementation Roadmap
 
-### Phase 1: Core DHCP Lease Sync (MVP)
+**Phase 1 — Core daemon**: CRDT store, gossip replication, dnsmasq integration
+(hostsfile + dhcp-script + dns), single-router proof of concept.
 
-**Deliverable**: Single router can replicate its lease table to another via iroh-docs, and both serve the same DNS.
+**Phase 2 — Multi-router local mesh**: L2 bridging, multi-dnsmasq coordination,
+conflict resolution via deauth, roaming.
 
-**Work items**:
+**Phase 3 — Remote sites**: Iroh tunnel routing, cross-site DNS, route table CRDT.
 
-1. `LeaseWatcher`: Watch `/tmp/dhcp.leases` (dnsmasq output) via inotify
-2. `LeaseSync`: Module to publish/subscribe lease claims via iroh-gossip and iroh-docs
-3. `MeshDns`: Merge iroh-doc state into `/tmp/hosts/mesh`
-4. `DaemonConfig`: CLI flags for `--router-id`, `--iroh-secret`, `--dnsmasq-leases-path`
-5. Tests: Simulate two routers, verify lease collision prevention
+**Phase 4 — Services and discovery**: Service registration, mDNS forwarding,
+avahi integration.
 
-**Effort**: ~2-3 weeks (Rust/Tokio)
+**Phase 5 — OpenWrt packaging**: Cross-compilation for ARM/MIPS, init scripts,
+UCI integration.
 
-### Phase 2: Multi-Router Mesh
+---
 
-**Deliverable**: 3+ routers form a mesh, all syncing leases automatically.
+## Dependencies
 
-**Work items**:
+| Crate | Version | Role |
+|-------|---------|------|
+| iroh | 0.96 | QUIC mesh, NAT traversal, node identity |
+| iroh-gossip | 0.96 | Gossip broadcast topics |
+| postcard + serde | — | Serialization |
+| tokio | — | Async runtime |
+| clap | — | CLI |
+| tracing | — | Structured logging |
 
-1. Iroh endpoint bootstrapping: n0 discovery or static seed nodes
-2. Gossip join/leave handling: Update mesh topology on router connect/disconnect
-3. Expiry handling: Lease TTL enforcement, garbage collection
-4. Integration test: Spin up 3 VM routers, verify full mesh sync
+iroh is pinned to 0.96 due to `web-transport-iroh 0.2.2` compatibility —
+`Session::raw()` requires matching `Connection` types. Upgrade planned when
+dependencies align.
 
-**Effort**: ~2 weeks
+---
 
-### Phase 3: Roaming and Partition Recovery
+## Architecture Details
 
-**Deliverable**: A device can roam between routers and keep the same IP. Partition-rejoins merge automatically.
-
-**Work items**:
-
-1. MAC-based lease claim logic: Detect roaming, update `router_id` in-place
-2. Timestamp tie-breaker: Implement Iroh's per-author-key conflict resolution
-3. Partition test: Simulate network split, verify merge on rejoin
-4. Stability test: Run 3 routers + 10 devices for 24 hours, measure DNS resolve latency
-
-**Effort**: ~2-3 weeks
-
-### Phase 4: OpenWrt Deployment
-
-**Deliverable**: Static binary runs on actual GL.iNet routers.
-
-**Work items**:
-
-1. Cross-compile for ARM/MIPS (OpenWrt targets)
-2. Init script: Systemd or UCI integration
-3. dnsmasq config: Patch `/etc/dnsmasq.conf` to include `/tmp/hosts/mesh`
-4. Monitoring: Prometheus metrics export (optional)
-
-**Effort**: ~1-2 weeks
-
-## Security Considerations
-
-### Node Identity and Authentication
-
-Each router is identified by its Iroh `NodeId` (public key derived from `SecretKey`). No additional identity layer is needed; Iroh's encryption is sufficient.
-
-**Trust model**: All routers in a mesh trust each other. This is appropriate for a single organization's router mesh. For federated meshes (multiple organizations), add OAuth2/JWT layer on top.
-
-### DHCP Lease Integrity
-
-Leases are mutable by any router (any author can write to iroh-docs). For single-organization deployments, this is acceptable because:
-
-1. All routers are under one operator's control
-2. Iroh provides tamper-evidence via content-addressed data
-3. Leases are cached locally and self-healing (expired leases are ignored)
-
-For untrusted peers, add a signature layer:
-
-```
-Value: {
-  claim: { ip, mac, hostname, expiry },
-  signature: sign(claim, router_private_key),
-  router_id: node_xyz
-}
-```
-
-Each router validates the signature before accepting a lease claim.
-
-### DNS Spoofing
-
-Writing `/tmp/hosts/mesh` allows any peer to inject hostnames. Mitigation:
-
-1. Use DNSSEC on the dnsmasq resolver for upstream queries
-2. For mesh hostnames, validate that the entry came from a trusted router (via signature layer above)
-3. TTL-based expiry: Stale DNS entries eventually disappear
-
-## Testing Strategy
-
-### Unit Tests
-
-- Lease parsing from dnsmasq format
-- CRDT merge logic (especially conflicts and expiry)
-- Gossip message serialization
-
-### Integration Tests
-
-- Two-router sync: Host leases on Router-A, verify Router-B reads them
-- Multi-router gossip: Verify all routers receive broadcasts
-- Partition recovery: Split mesh, rejoin, verify state consistency
-- Roaming: Device moves from Router-A to Router-B, keeps same IP
-
-### Stability Tests
-
-- 3+ routers, 10+ devices, 24-hour run
-- Periodic partitions and heals
-- High churn: Devices joining/leaving frequently
-- Measure: DNS resolve latency, lease replication time, memory growth
-
-### Performance Benchmarks
-
-- Lease claim broadcast latency (p50, p95, p99)
-- Doc sync time for 1000 leases
-- DNS query latency (/tmp/hosts/mesh)
-- Binary size and memory footprint on OpenWrt
-
-## References
-
-**Iroh**:
-- `iroh` 0.97: QUIC mesh, NAT traversal, node discovery
-- `iroh-gossip` 0.97: Broadcast topics, best-effort messaging
-- `iroh-docs` (planned 0.97+): CRDT key-value store with automatic merge
-
-**Router Platforms**:
-- OpenWrt: Linux-based firmware for routers (openwrt.org)
-- GL.iNet devices: AXT1800, BE3600 (GL.iNet.biz)
-
-**Relevant RFCs**:
-- RFC 3315: DHCPv6
-- RFC 2131: DHCP
-- RFC 1035: DNS
-
-**Project Files**:
-- `crates/mjolnir-node/src/mesh.rs`: Iroh endpoint setup
-- `crates/mjolnir-node/src/ticket.rs`: Join ticket generation
-- `crates/mjolnir-moq/src/lib.rs`: MoQ bridge (can be extended for lease topics)
-- Cargo workspace: `Cargo.toml` (iroh, iroh-gossip, tokio, tracing)
+- **CRDT design**: `docs/architecture/dhcp-crdt.md`
+- **Network topology**: `docs/architecture/network-architecture.md`
+- **dnsmasq integration**: `docs/architecture/dnsmasq-integration.md`
+- **Vision**: `docs/vision/why-decentralized-mesh.md`
+- **Existing crates**: `crates/mjolnir-node`, `crates/mjolnir-moq`, `crates/mjolnir-audio`

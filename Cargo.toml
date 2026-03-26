@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # iroh networking
-iroh = "0.97"
-iroh-gossip = "0.97"
+iroh = "0.96"
+iroh-gossip = "0.96"
 web-transport-iroh = "0.2"
 
 # MoQ protocol
@@ -33,6 +33,8 @@ data-encoding = "2"
 rand = "0.9"
 
 # utilities
+blake3 = "1"
+futures-lite = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

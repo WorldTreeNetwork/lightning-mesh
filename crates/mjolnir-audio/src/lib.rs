@@ -5,6 +5,10 @@
 pub mod capture;
 pub mod codec;
 pub mod playback;
+pub mod publish;
+pub mod subscribe;
+
+pub use publish::AUDIO_TRACK_NAME;
 
 /// Audio configuration for the mesh.
 #[derive(Debug, Clone)]

@@ -91,3 +91,36 @@ impl OpusDecoder {
         &self.config
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AudioConfig;
+
+    #[test]
+    fn opus_encode_decode_roundtrip() {
+        let config = AudioConfig::default();
+        let mut encoder = OpusEncoder::new(&config).expect("encoder creation failed");
+        let mut decoder = OpusDecoder::new(&config).expect("decoder creation failed");
+
+        // Generate a sine wave PCM buffer (one frame worth)
+        let frame_size = config.frame_size() * config.channels as usize;
+        let pcm: Vec<i16> = (0..frame_size)
+            .map(|i| {
+                let t = i as f64 / config.sample_rate as f64;
+                (f64::sin(t * 440.0 * 2.0 * std::f64::consts::PI) * 16000.0) as i16
+            })
+            .collect();
+
+        let encoded = encoder.encode(&pcm).expect("encode failed");
+        assert!(!encoded.is_empty(), "encoded packet should not be empty");
+
+        let decoded = decoder.decode(&encoded).expect("decode failed");
+        assert_eq!(
+            decoded.len(),
+            pcm.len(),
+            "decoded length should match input length"
+        );
+        // Don't compare exact values - Opus is lossy
+    }
+}
