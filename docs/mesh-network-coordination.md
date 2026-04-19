@@ -133,7 +133,7 @@ which is not available as a shipped crate):
 /devices/{mac}       →  { ip, hostname, router_id, expiry }
 /dns/{hostname}      →  { ip, mac }
 /services/{name}     →  { hostname, ip, port, protocol, txt }
-/routes/{subnet}     →  { node_id, via_node_id }
+/routes/{subnet}     →  { node_id, via_node_id, site, expires }
 ```
 
 **Anti-entropy**: When a router rejoins after a partition, it performs a full
@@ -152,6 +152,10 @@ Any device can publish a service into the mesh CRDT:
 
 All routers update their DNS. Anyone on any site reaches `wiki.mesh:8080`.
 This works across both local and remote modes.
+
+### DNS Naming
+
+The mesh uses the `.mesh` domain for all daemon-managed names, avoiding `.local` to prevent avahi/mDNS naming collisions. Hostnames come from DHCP Option 12 with a MAC-derived fallback for devices that don't set one.
 
 ---
 
@@ -257,4 +261,28 @@ dependencies align.
 - **Network topology**: `docs/architecture/network-architecture.md`
 - **dnsmasq integration**: `docs/architecture/dnsmasq-integration.md`
 - **Vision**: `docs/vision/why-decentralized-mesh.md`
-- **Existing crates**: `crates/mjolnir-node`, `crates/mjolnir-moq`, `crates/mjolnir-audio`
+
+## Crate Architecture
+
+### Current (Audio MVP)
+- `mjolnir-node` — binary crate. CLI entry point + room logic. Currently hardcodes audio: room.rs imports mjolnir_audio directly, wiring gossip peer discovery to Opus encode/decode pipelines.
+- `mjolnir-moq` — MoQ-over-WebTransport bridge. Adapts iroh connections to moq-lite sessions. Application-agnostic.
+- `mjolnir-audio` — Opus capture/encode/decode/playback. Pure audio, no mesh awareness.
+
+### Planned (Mesh Library Extraction)
+- `mjolnir-mesh` — new lib crate. Owns: iroh endpoint, gossip, MoQ pub/sub of generic byte streams, CRDT store, DHCP/DNS coordination, routing. Exposes: `publish_stream(name) -> BytesSink` and `on_peer_stream(peer_id) -> BytesStream`. Knows nothing about audio.
+- `mjolnir-node` — becomes a thin binary depending on mjolnir-mesh + mjolnir-audio. Wires mesh byte streams to audio pipelines.
+- `mjolnir-moq` — stays in networking layer (mjolnir-mesh depends on it).
+- `mjolnir-audio` — stays in application layer (mjolnir-node depends on it).
+
+The DHCP/DNS/CRDT coordination described in this doc suite lives in the mjolnir-mesh lib crate — it is networking infrastructure, not application logic.
+
+## Reading Order
+
+For newcomers to the project:
+1. [Why Decentralized Mesh](vision/why-decentralized-mesh.md) — motivation and big picture
+2. [This document](mesh-network-coordination.md) — architecture overview
+3. [Network Architecture](architecture/network-architecture.md) — local vs remote modes, routing
+4. [DHCP CRDT](architecture/dhcp-crdt.md) — distributed state design and Rust types
+5. [dnsmasq Integration](architecture/dnsmasq-integration.md) — practical integration reference
+6. [Mjolnir Integration](vision/mjolnir-integration.md) — how the mesh ties into Mjolnir's microVM platform

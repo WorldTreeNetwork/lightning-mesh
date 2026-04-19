@@ -94,8 +94,8 @@ Incoming packets from Iroh are written back to `mj-tun0` for kernel delivery.
 Remote subnets are announced via the shared CRDT document:
 
 ```
-/routes/10.42.1.0_24  → { node_id: "router1_nodeid", site: "site-a", expires: <timestamp> }
-/routes/10.42.2.0_24  → { node_id: "router5_nodeid", site: "site-b", expires: <timestamp> }
+/routes/10.42.1.0_24  → { node_id: "router1_nodeid", via_node_id: "router1_nodeid", site: "site-a", expires: <timestamp> }
+/routes/10.42.2.0_24  → { node_id: "router5_nodeid", via_node_id: "router5_nodeid", site: "site-b", expires: <timestamp> }
 ```
 
 When a new route appears in the CRDT, the daemon:
@@ -134,13 +134,30 @@ detection window), it claims a /24 from the mesh address space:
 2. Derive a preferred /24 from a deterministic hash of the router's Iroh NodeId — this reduces
    collisions without requiring coordination
 3. If the preferred /24 is already claimed, increment until a free one is found
-4. Write to CRDT: `/routes/{subnet} → { node_id, site, expires }`
+4. Write to CRDT: `/routes/{subnet} → { node_id, via_node_id, site, expires }`
 5. Configure dnsmasq with that range and begin issuing leases
 6. If another router later joins the same physical site, it detects the local peer (see below),
    abandons its own subnet claim, and joins the existing /24 in Mode 1 instead
 
 The two-phase approach (derive then check) is optimistic: hash-based derivation makes collisions
 rare, and the CRDT resolves the uncommon case where two routers happen to prefer the same /24.
+
+### Claim Cooldown
+
+A router that determines it needs a new subnet waits 10 seconds before writing the claim to the CRDT. This aligns with the local peer detection window — if a local peer is found during the cooldown, the router abandons the claim and joins the existing subnet instead.
+
+If two routers at different sites claim the same /24 (rare — hash derivation makes collision probability ~1/256):
+- FWW resolves: lower HLC wins the route entry
+- The loser has zero or very few devices (it just started) — it picks the next free /24
+- If the loser has already assigned IPs from the contested range, those devices are deauthed and re-DHCP on the new range
+
+### Late Local Peer Discovery
+
+If a router claims a subnet and then discovers (via delayed mDNS or gossip) that its site already has one:
+1. Relinquish its route claim (remove `/routes/{subnet}` from CRDT)
+2. Reconfigure dnsmasq to the existing site subnet
+3. Deauth any devices already assigned IPs from the abandoned range
+4. Those devices reconnect and get IPs from the correct subnet
 
 ---
 
@@ -164,6 +181,18 @@ When a local peer is confirmed:
 - It bridges into the peer's existing L2 segment
 - dnsmasq is configured with the peer's subnet range; the CRDT hostsfile ensures no IP conflicts
 - The router announces itself to the local cluster via the shared CRDT
+
+---
+
+## SSID and VLAN Guidance
+
+**Recommended:** All routers use the same SSID and the same VLAN (one broadcast domain). This gives the best experience: seamless roaming, single subnet, native mDNS/Bonjour.
+
+**Different SSIDs, same VLAN:** Works identically. DHCP operates at L2; the SSID is irrelevant once frames are bridged to the shared VLAN. Devices may not roam automatically between different SSIDs (depends on client behavior), but the network coordination is unaffected.
+
+**Different VLANs (even if co-located):** Each VLAN is a separate L2 domain. Routers on different VLANs cannot exchange DHCP broadcasts and are treated as Mode 2 (remote sites) with separate subnets and Iroh tunnel routing, regardless of physical proximity.
+
+**Multi-VLAN on one router:** Future extension. Would require per-VLAN dnsmasq instances and per-VLAN hostsfile management. Not in scope for MVP.
 
 ---
 
@@ -210,12 +239,20 @@ route table churn and is deferred to a later milestone.
 Traffic between sites is secured at the transport layer by Iroh:
 
 - All Iroh connections use QUIC with TLS 1.3 — encryption is mandatory and cannot be disabled
-- Router identity is bound to the Iroh NodeId (Ed25519 keypair); only nodes with NodeIds
-  listed in the mesh membership CRDT can join and exchange routes
+- Router identity is bound to the Iroh NodeId (Ed25519 keypair); membership enforcement is
+  planned, not yet implemented (see Future Work below)
 - IP forwarding on each router is restricted to known mesh subnets via iptables rules — arbitrary
   external traffic cannot be injected through the tunnel
 - No open relay: the Iroh relay servers are used only for NAT traversal handshake, not for
   sustained packet forwarding between routers
+
+### Future Work: Membership Control
+
+**Current gap:** Any Iroh node that knows the gossip topic can join the mesh and inject data. There is no membership enforcement.
+
+**Phase 1 (MVP):** Pre-shared key (PSK) configured on each router. The gossip topic is derived from `blake3(b"mjolnir/mesh/" || psk)` instead of a static name, preventing unauthorized joining. Simple but key rotation requires touching every router.
+
+**Phase 2:** Membership CRDT (`/members/{node_id}`) with signed enrollment invitations. Any existing member can invite a new node by signing its public key. Peers validate membership before accepting gossip messages. Revocation via CRDT tombstone.
 
 ---
 

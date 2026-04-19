@@ -233,6 +233,9 @@ domain=mesh,10.42.1.0/24,local
 # Don't serve DHCP on WAN interface
 no-dhcp-interface=eth0.2
 # (WAN interface name varies by device)
+
+# dnsmasq reads additional config fragments from this directory
+conf-dir=/tmp/mjolnir/conf.d/
 ```
 
 OpenWrt UCI equivalent:
@@ -264,15 +267,19 @@ All `/tmp/` files are on tmpfs (RAM). Survives reboots only if CRDT store is on 
 
 ## Startup Sequence
 
-1. mjolnir-mesh daemon starts
-2. Connects to Iroh mesh, runs anti-entropy sync with peers
-3. Populates `/tmp/mjolnir/reservations` from CRDT
-4. Populates `/tmp/mjolnir/dns` from CRDT
-5. Sends SIGHUP to dnsmasq (or waits for dnsmasq to start)
-6. Reads `/tmp/dhcp.leases` for any leases assigned before daemon started
-7. Writes those leases to CRDT (if not already present)
-8. Opens Unix socket at `/run/mjolnir-mesh.sock`
-9. Ready to receive dhcp-event messages
+1. dnsmasq starts with **no dhcp-range configured** (DHCP serving disabled, DNS still active)
+2. mjolnir-mesh daemon starts
+3. Connects to Iroh mesh, begins anti-entropy sync with peers
+4. Waits for sync to complete **or** 10-second timeout (for solo first router with no peers)
+5. Populates `/tmp/mjolnir/reservations` from CRDT
+6. Populates `/tmp/mjolnir/dns` from CRDT
+7. Writes `/tmp/mjolnir/conf.d/dhcp-range.conf` with the subnet's dhcp-range
+8. Sends SIGHUP to dnsmasq (picks up reservations, DNS, and dhcp-range)
+9. Reads `/tmp/dhcp.leases` for any leases from a previous daemon run
+10. Opens Unix socket at `/run/mjolnir-mesh.sock`
+11. Ready to receive dhcp-event messages
+
+This sequence prevents DHCP assignment before the CRDT is populated. The 10-second timeout ensures a solo router (first at a new site) can start serving without peers.
 
 ---
 
@@ -282,6 +289,28 @@ All `/tmp/` files are on tmpfs (RAM). Survives reboots only if CRDT store is on 
 - **Daemon restarts**: On startup, reads CRDT from peers (anti-entropy), repopulates both files, SIGHUPs dnsmasq. Brief window where new hostsfile may be missing recent entries — gossip catches up within seconds.
 - **Both restart**: First one up waits for the other. Daemon can start without dnsmasq (just can't SIGHUP yet). dnsmasq can start without daemon files (serves DHCP from its own state, daemon catches up).
 - **WAN DHCP**: dhcp-script only fires for LAN-side DHCP. dnsmasq doesn't serve DHCP on WAN interface (`no-dhcp-interface`). No special handling needed.
+
+---
+
+## Multi-dnsmasq Offer Behavior
+
+When multiple routers run dnsmasq on the same L2, a single DHCP Discover broadcast triggers Offers from ALL routers. This is by design and is not a problem.
+
+**Per-device packet count (10 routers):**
+- 1 Discover (broadcast, ~342 bytes)
+- 10 Offers (one per router, ~342 bytes each)
+- 1 Request (broadcast, names the selected router)
+- 1 Ack (from selected router)
+- **Total: 13 packets, ~4.5 KB**
+
+**At scale (200 devices, 10 routers, 30 minutes):**
+- ~2,600 DHCP packets, ~900 KB total
+- WiFi at 20 Mbps can transmit this in under 0.4 seconds
+- Negligible compared to beacon traffic on a busy channel
+
+The 9 non-selected routers simply discard their tentative allocation per RFC 2131. dnsmasq handles this correctly with no side effects, no error logging, and no leaked state.
+
+> **Testing note:** Verify with a 3-router manual test that dnsmasq logs no errors on unselected Offers.
 
 ---
 

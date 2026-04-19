@@ -162,6 +162,20 @@ When a device disconnects or its lease expires, dnsmasq calls `mjolnir-mesh dhcp
 
 ---
 
+## Service Lifecycle
+
+Service entries are tied to their host device via `host_mac`. When a device lease expires and is reaped from the CRDT, all `/services/*` entries with matching `host_mac` are also removed. A `ServiceRemove` gossip message is broadcast to all peers.
+
+This avoids a separate heartbeat/TTL mechanism for services — device expiry is the single source of truth.
+
+### DNS Naming
+
+The mesh uses `.mesh` as its DNS domain (e.g., `laptop-alice.mesh`, `wiki.mesh`). This avoids `.local`, which is reserved for mDNS/avahi and causes naming collisions when a device reconnects before its old mDNS name expires (avahi appends `-2`, `-3`, etc.).
+
+Hostnames are sourced from DHCP Option 12 (what the client sends). If the client sends no hostname, the daemon generates a MAC-derived fallback: `dev-{last 4 hex digits}` (e.g., `dev-4d5e`). The hostname persists in the CRDT across roaming — a device keeps its name regardless of which router it connects to.
+
+---
+
 ## 5. Conflict Resolution
 
 ### 5.1 When Conflicts Happen
@@ -309,7 +323,7 @@ This design keeps the dhcp-script process short-lived and non-blocking. dnsmasq 
 
 The daemon sends `SIGHUP` to dnsmasq after rewriting either managed file. dnsmasq reloads both files without restarting, without dropping active leases. This is the standard dnsmasq reload mechanism and takes <10ms.
 
-The daemon debounces SIGHUPs: if multiple gossip updates arrive within 50ms, the files are written once and a single SIGHUP is sent.
+The daemon debounces SIGHUPs: if multiple gossip updates arrive within 100ms, the files are written once and a single SIGHUP is sent.
 
 ---
 
@@ -465,6 +479,7 @@ pub struct ServiceEntry {
     pub port: u16,
     pub protocol: String,
     pub txt: HashMap<String, String>,
+    pub host_mac: [u8; 6],  // tied to device lease — service expires when device expires
 }
 ```
 
@@ -477,6 +492,8 @@ Keyed by service name (`/services/printer._ipp._tcp`). Used for mDNS-style servi
 pub struct RouteEntry {
     pub node_id: String,
     pub via_node_id: String,
+    pub site: Option<String>,
+    pub expires: u64,
 }
 ```
 
@@ -590,7 +607,7 @@ The store holds one entry per MAC address (not per IP, not per lease event). The
 
 ### 11.4 SIGHUP Cost
 
-dnsmasq SIGHUP reload takes <10ms. File rewrite (hostsfile, dns) takes <1ms for typical mesh sizes. The 50ms debounce prevents excessive reloads during gossip bursts (e.g., when a large batch of anti-entropy updates arrives).
+dnsmasq SIGHUP reload takes <10ms. File rewrite (hostsfile, dns) takes <1ms for typical mesh sizes. The 100ms debounce prevents excessive reloads during gossip bursts (e.g., when a large batch of anti-entropy updates arrives).
 
 ### 11.5 dhcp-script Overhead
 
@@ -651,5 +668,5 @@ If two devices present the same MAC (rare but possible with MAC randomization bu
 - **Hybrid Logical Clocks**: Kulkarni et al., "Logical Physical Clocks and Consistent Snapshots in Globally Distributed Databases", HotDeps 2014.
 - **Related docs**:
   - `../mesh-network-coordination.md` — high-level mesh vision
-  - `../gossip-transport.md` — iroh gossip transport details
-  - `../routing.md` — route entry lifecycle
+  - [§8 Gossip Protocol](#8-gossip-protocol) — iroh gossip transport details (this document)
+  - `network-architecture.md` — route entry lifecycle and cross-site routing

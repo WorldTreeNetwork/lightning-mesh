@@ -1,230 +1,181 @@
 # P2P Resilience: Centralization Analysis & Plan
 
-## Current Architecture
+mjolnir-mesh is an Iroh-based mesh VPN with distributed network coordination: DHCP,
+DNS, routing, and service discovery are all CRDT-synchronized across mesh nodes. This
+doc analyzes where centralization still exists, what the failure modes are, and what
+the roadmap looks like for improving resilience.
 
-mjolnir-mesh uses iroh QUIC endpoints + iroh-gossip for peer discovery, with moq-lite
-for pub/sub data streams. The CLI exposes two roles:
-
-```
-mjolnir-mesh host --name=<room>   # creates room, prints join ticket
-mjolnir-mesh join <ticket>        # joins via ticket
-```
-
-Once connected, all peers are functionally equal: each publishes a broadcast
-(named by their EndpointId), discovers peers via gossip, and subscribes to
-their streams. The asymmetry is entirely in **how the room is bootstrapped**.
+See [mesh-network-coordination.md](../../mesh-network-coordination.md) for the full
+architecture and [mesh-network-crdt.md](mesh-network-crdt.md) for the CRDT data model.
 
 ---
 
-## Where Centralization Lives
+## Centralization Analysis
 
-### 1. Ticket embeds a single address (ticket.rs)
+### Ticket-based joining (ticket.rs)
+
+Tickets are the bootstrap mechanism for new nodes entering the mesh. A ticket embeds
+one or more `NodeAddr` values (multi-address support is already implemented) — Iroh
+node IDs paired with their known addresses. The joiner tries each address until one
+succeeds.
 
 ```rust
 pub struct MeshTicket {
     pub name: String,
-    pub addr: EndpointAddr,   // <-- one peer's address
+    pub addrs: Vec<NodeAddr>,   // multi-address: any live peer works
     pub topic_id: [u8; 32],
 }
 ```
 
-The ticket encodes exactly one `EndpointAddr` — the host's. This is the only
-bootstrap entry point for gossip. If that peer is unreachable when a new peer
-tries to join, the ticket is dead.
+**Remaining centralization:** The ticket must be obtained out-of-band (shared link,
+QR code, PSK-derived topic). The topic_id is currently derived deterministically from
+the room name; a PSK-based derivation would prevent uninvited nodes from computing the
+topic independently.
 
-**What's already good:** The `topic_id` is deterministic (`blake3(room_name)`),
-so any peer in the room could theoretically produce a valid ticket with their
-own address. The protocol doesn't require the original host — it just requires
-*some* live peer's address.
+**Already good:** Multi-address tickets mean no single peer is a required bootstrap
+point. Any peer in the mesh can mint a valid ticket using its own `NodeAddr`.
 
-### 2. Host-only gossip bootstrap (mesh.rs:72-81 vs 113-123)
+### DHCP coordination
 
-```rust
-// Host: subscribe with no bootstrap peers
-self.gossip.subscribe(topic_id, vec![]).await
+Every router node runs dnsmasq and participates in DHCP lease assignment. CRDT
+conflict-free merge prevents duplicate address assignment across concurrent allocations.
+No single DHCP server — any router can hand out leases from its assigned subnet range.
 
-// Joiner: subscribe with host as sole bootstrap
-self.gossip.subscribe_and_join(topic_id, vec![ticket.addr.id]).await
-```
+**Centralization:** None for ongoing operation. New subnet ranges require coordination
+(manual or future auto-assignment).
 
-The host calls `subscribe()` with an empty bootstrap list (it *is* the
-bootstrap). Every joiner calls `subscribe_and_join()` with the host's
-EndpointId as the sole bootstrap peer. If the host is gone, gossip join fails.
+### DNS
 
-**What's already good:** iroh-gossip propagates peer addresses transitively.
-Once peer B has joined via host A, and peer C joins via A, peers B and C
-discover each other through gossip — they don't need A anymore for ongoing
-communication. The gossip mesh is self-healing among connected peers.
+DNS records are replicated via CRDT across all nodes. No single authoritative server.
+Each node answers DNS queries for the mesh domain using its local CRDT replica.
 
-### 3. No ticket regeneration (mesh.rs:71-110)
+**Centralization:** None structurally. Propagation lag means a freshly added record
+may not be visible on all nodes immediately (eventual consistency).
 
-Only `host_room()` produces a ticket. There is no `generate_ticket()` or
-`invite()` method. A peer that joined via `join_room()` has all the information
-needed to produce a ticket (room name, own address, topic_id) but the code
-doesn't expose this.
+### Routing
 
-### 4. One room per node, no rejoin (mesh.rs:26-31)
+The route table is CRDT-synced. Each router advertises its own subnet; all routers
+learn all routes. A node going offline does not break routing for other subnets.
 
-```rust
-pub struct MeshNode {
-    room: Mutex<Option<Room>>,  // single slot
-}
-```
+**Centralization:** None. Routes are additive CRDTs — removal requires tombstoning,
+which is propagated on rejoin.
 
-A node can hold exactly one room. There's no mechanism to rejoin after
-disconnect, re-enter a room the node was previously in, or handle the room
-surviving across node restarts.
+### Service discovery
 
----
+Service registrations are CRDT-synced and tied to device leases. When a device's
+lease expires, its service entries are cleaned up.
 
-## What Happens in Failure Scenarios
+**Centralization:** None. Any node can answer service discovery queries.
 
-| Scenario | Existing peers | New joiners |
-|----------|---------------|-------------|
-| Host leaves after peers connected | Survive (gossip + direct QUIC) | Cannot join (ticket dead) |
-| Host leaves before any peers join | N/A | Cannot join |
-| Non-host peer leaves | Others unaffected | Can still join via host |
-| Network partition (host isolated) | Partitioned peers survive in subgroups | Can join host's partition only |
-| Host restarts with same identity (IROH_SECRET) | Peers may reconnect via gossip | Ticket still valid (same addr) |
-| Host restarts with new identity | Peers unaffected among themselves | Old ticket dead |
+### Gossip transport (iroh-gossip)
 
-The critical gap: **once the host is gone, the room is closed to newcomers**,
-even though the room itself is alive and functioning among existing peers.
+iroh-gossip is already fully P2P. Once peers have joined a topic, the gossip mesh is
+self-healing — no bootstrap peer is needed for ongoing communication.
+
+**Centralization:** Bootstrap only. The first join requires a known peer address (from
+the ticket). After that, gossip propagates peer addresses transitively.
+
+### Iroh relay infrastructure
+
+Iroh uses n0's relay servers for NAT traversal fallback when direct connections fail.
+This is an external dependency on n0's infrastructure (or a self-hosted relay).
+
+**Centralization:** Real but bounded. Relay is used only for connection establishment,
+not for data. If n0's relays are unreachable, direct connections still work where NAT
+allows. Self-hosted relay is supported by Iroh.
 
 ---
 
-## What Pure P2P Requires (Theory)
+## Failure Scenarios
 
-A fully decentralized room needs:
+| Scenario | Effect |
+|----------|--------|
+| Router goes offline | Other routers keep serving DHCP/DNS/routing. CRDT state is fully replicated — no data loss. |
+| Network partition | Each partition operates independently with full CRDT state. On rejoin, CRDTs merge automatically. |
+| Daemon crash | systemd restarts the daemon. Anti-entropy sync rebuilds any missed CRDT updates from peers on reconnect. |
+| All routers restart simultaneously | CRDT state rebuilds from disk (if persisted) or anti-entropy from peers. New joins blocked until at least one router rejoins gossip. |
+| Bootstrap peer unreachable | Multi-address ticket provides fallback peers. If all ticket peers are gone, out-of-band re-sharing needed. |
+| n0 relay unreachable | Direct connections unaffected. NAT-traversal-dependent connections fall back to relay-less paths or fail. |
 
-1. **Any peer can bootstrap new joiners.** Every participant should be able to
-   produce a valid join ticket containing their own address and the room's
-   topic_id.
-
-2. **Multi-address tickets (optional but helpful).** A ticket with N addresses
-   succeeds if any 1 of N is reachable. More addresses = more resilient
-   bootstrap.
-
-3. **Distributed room state.** Currently "the room" is just a gossip topic +
-   whoever happens to be subscribed. There's no durable membership list. This
-   is fine for ephemeral rooms but means a room can't survive total peer
-   departure and later revival.
-
-4. **Peer-to-peer discovery without gossip bootstrap.** For truly
-   infrastructure-free operation, peers could discover each other via:
-   - DHT (iroh supports this via mainline DHT integration)
-   - mDNS/local network broadcast
-   - Out-of-band signaling (QR code, shared secret, etc.)
-
-5. **Graceful departure.** When a peer leaves, it should hand off bootstrap
-   responsibility — or all peers should already be capable of it.
+The critical remaining gap: **if all peers with valid tickets are offline simultaneously,
+new nodes cannot join** until at least one existing peer comes back online with a
+reachable address. This is inherent to any ticket-based bootstrap.
 
 ---
 
-## Plan: Getting There With What We Have
+## What Pure P2P Requires
 
-The good news: iroh and iroh-gossip already provide most of the primitives.
-The changes are mostly in mjolnir-mesh's usage of them, not in the underlying
-transport.
+A fully decentralized mesh needs:
 
-### Phase 1: Any Peer Can Mint Tickets
+1. **Any peer can bootstrap new joiners.** Every participant should be able to produce
+   a valid join ticket. This is already implemented.
 
-**Goal:** Remove the host/joiner asymmetry for ticket generation.
+2. **Multi-address tickets.** A ticket with N addresses succeeds if any 1 of N is
+   reachable. Already implemented in ticket.rs.
 
-**Changes:**
+3. **Distributed coordination state.** DHCP, DNS, routing, and service discovery all
+   use CRDT replication — no central coordinator. Already implemented.
 
-- Add `MeshNode::generate_ticket(&self, room_name: &str) -> Result<String>`
-  that works for any peer currently in a room. It uses the peer's own
-  `EndpointAddr` + the deterministic topic_id.
+4. **Peer-to-peer discovery without a fixed bootstrap.** For truly infrastructure-free
+   operation: DHT (iroh supports mainline DHT), mDNS for local networks, or PSK-derived
+   topic IDs that any pre-authorized node can compute independently.
 
-- The `host` command is then just: create room + generate_ticket + print it.
+5. **Graceful departure.** When a peer leaves, its CRDT tombstones propagate so the
+   rest of the mesh can clean up its leases and routes. Partially implemented via lease
+   TTLs.
 
-- Add an `invite` CLI command (or just print the ticket periodically) so any
-  peer can share a working ticket at any time.
+---
 
-- Optionally: `Room` stores the room name so `generate_ticket` doesn't need
-  it passed in.
+## Implementation Roadmap
 
-**Complexity:** Small. The ticket format doesn't change. `MeshTicket` already
-has everything needed — we just need to construct it from any peer's state.
+### Phase 1: Multi-address tickets — DONE
 
-### Phase 2: Multi-Peer Bootstrap
+ticket.rs now carries `Vec<NodeAddr>`. Any peer in the mesh can mint a ticket using
+its own node address. Joiners try each address in order.
 
-**Goal:** Tickets survive individual peer failure.
+### Phase 2: Unified join flow (mesh.rs) — DONE
 
-**Changes:**
+mesh.rs has `enter_room()` which handles both the "first node" case (no bootstrap peers)
+and the "joining" case (bootstrap from ticket addrs). The host/join asymmetry at the
+protocol level is gone.
 
-- Extend `MeshTicket` to carry a `Vec<EndpointAddr>` instead of a single addr.
-  The joiner tries each address until one succeeds.
+### Phase 3: Mesh lib extraction — PLANNED
 
-  ```rust
-  pub struct MeshTicket {
-      pub name: String,
-      pub addrs: Vec<EndpointAddr>,  // any live peer works
-      pub topic_id: [u8; 32],
-  }
-  ```
+Extract a generic stream interface from room.rs so the mesh core (gossip, ticket, peer
+management) can be used independently of the VPN coordination layer. This enables
+embedding the mesh library in other Mjolnir components (e.g., guest agent peer
+communication) without taking the full VPN stack.
 
-- When generating a ticket, a peer can include addresses of other known peers
-  from its `Room.peers` set (it learns their `EndpointAddr` via gossip).
+### Phase 4: DHCP/DNS/routing coordination — PLANNED
 
-- `join_room` iterates `ticket.addrs` and passes all their EndpointIds to
-  `subscribe_and_join()` as bootstrap peers.
+Full CRDT-based network coordination as described in mesh-network-coordination.md and
+mesh-network-crdt.md. Key work items:
+- CRDT merge on gossip message receive
+- Anti-entropy sync on peer reconnect
+- Lease TTL expiry + tombstone propagation
+- dnsmasq config generation from CRDT state
 
-**Complexity:** Medium. Requires ticket format change (versioned format or
-backwards-compatible encoding). Gossip already supports multiple bootstrap
-peers.
+### Phase 5: Route persistence & offline resilience — FUTURE
 
-### Phase 3: Unified Host/Join Flow
-
-**Goal:** Eliminate the host/join distinction at the protocol level.
-
-**Changes:**
-
-- Replace `host` and `join` with a single command:
-  ```
-  mjolnir-mesh room <name> [--bootstrap <ticket>]
-  ```
-
-- Without `--bootstrap`: creates a new room (equivalent to current `host`).
-- With `--bootstrap`: joins existing room (equivalent to current `join`).
-- In both cases, the node immediately becomes a full peer that can mint tickets.
-
-- Under the hood, both paths call the same `Room::new()` — the only difference
-  is whether `subscribe()` or `subscribe_and_join()` is called on gossip.
-
-**Complexity:** Small refactor of CLI + mesh.rs. The underlying room logic
-doesn't change.
-
-### Phase 4: Room Persistence (Future)
-
-**Goal:** A room can survive total peer departure and be revived.
-
-This is a larger architectural question and may not be needed for MVP. Options:
-
-- **Sticky rooms via DHT:** Publish room metadata to iroh's DHT keyed by
-  topic_id. Any peer can discover the room by name without a ticket.
-
-- **Seed peers:** Designate long-lived nodes (not centralized servers, but
-  known-stable peers) that stay subscribed to rooms and serve as reliable
-  bootstrap points.
-
-- **Room state on disk:** Persist the room name + last-known peer addresses
-  so a restarting node can attempt to rejoin automatically.
-
-These are out of scope for now but the Phase 1-3 changes don't preclude them.
+Store CRDT state to disk so a restarting node can serve DHCP/DNS immediately without
+waiting for anti-entropy. Store-and-forward for messages to temporarily offline nodes.
+Explore DHT-based room discovery (iroh mainline DHT) to eliminate the ticket
+requirement entirely for well-known mesh names.
 
 ---
 
 ## Summary
 
-| Phase | What | Effort | P2P Impact |
-|-------|------|--------|------------|
-| 1 | Any peer mints tickets | Small | Eliminates single-point bootstrap failure |
-| 2 | Multi-addr tickets | Medium | Tolerates N-1 bootstrap peer failures |
-| 3 | Unified room command | Small | Removes artificial host/join distinction |
-| 4 | Room persistence | Large | Survives total peer departure (future) |
+| Layer | Centralization | Status |
+|-------|---------------|--------|
+| Ticket bootstrap | Any peer can mint; multi-addr fallback | Done |
+| DHCP coordination | CRDT, no single server | Planned |
+| DNS | CRDT-replicated | Planned |
+| Routing | CRDT-synced route table | Planned |
+| Service discovery | CRDT, tied to leases | Planned |
+| Gossip | iroh-gossip, fully P2P | Done |
+| NAT traversal | n0 relay (external dep) | Accepted / self-hostable |
 
-Phases 1 and 3 can be done together as a single refactor. Phase 2 is
-independent. All three use existing iroh/gossip primitives — no new
-dependencies or protocols needed.
+The CRDT coordination work (Phases 4-5) is the remaining gap between the current
+implementation and a fully resilient mesh. Phases 1-2 are complete; the gossip and
+connection layers are already P2P.

@@ -42,3 +42,4 @@ package-lock.json
 **/*.bun
 .omc
 /target/
+.omx
