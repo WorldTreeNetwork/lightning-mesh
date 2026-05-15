@@ -11,10 +11,6 @@ license = "MIT OR Apache-2.0"
 # iroh networking
 iroh = "0.96"
 iroh-gossip = "0.96"
-web-transport-iroh = "0.2"
-
-# MoQ protocol
-moq-lite = "0.15"
 
 # audio
 opus = "0.3"
