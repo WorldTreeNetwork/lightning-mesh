@@ -286,6 +286,98 @@ fn build_output_i16(
     Ok(stream)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::OpusEncoder;
+    use crate::conceal::{OpusPlc, SilencePlc};
+
+    /// Encode a sine-like frame so the PCM we push isn't silent (otherwise
+    /// "non-silence" assertions would be vacuous).
+    fn synth_frame(encoder: &mut OpusEncoder, config: &AudioConfig, seed: i32) -> Bytes {
+        let n = config.frame_size() * config.channels as usize;
+        let pcm: Vec<i16> = (0..n)
+            .map(|i| {
+                let t = (i as f64) / config.sample_rate as f64;
+                let amp = (t * 440.0 * 2.0 * std::f64::consts::PI + seed as f64).sin() * 8_000.0;
+                amp as i16
+            })
+            .collect();
+        encoder.encode(&pcm).expect("encode")
+    }
+
+    fn build_slot_with_three_frames_and_gap_at_one(
+        plc: Box<PlcBackend>,
+    ) -> (PeerSlot, AudioConfig) {
+        let config = AudioConfig::default();
+        let mut encoder = OpusEncoder::new(&config).expect("encoder");
+        let mut slot = PeerSlot::new(&config, plc).expect("peer slot");
+        // Buffer is configured with target_depth = 3. Push seqs 0, 2, 3
+        // (skipping 1) so the buffer warms up and the gap at seq=1 is what
+        // the consumer actually pulls between two real frames.
+        slot.push(0, synth_frame(&mut encoder, &config, 1));
+        slot.push(2, synth_frame(&mut encoder, &config, 2));
+        slot.push(3, synth_frame(&mut encoder, &config, 3));
+        (slot, config)
+    }
+
+    /// SilencePlc smoke: the gap slot fires `decode_lost` and the backend
+    /// returns zeros, so the middle frame in the output is exactly silent.
+    /// Real frames either side decode normally and are not silent.
+    #[test]
+    fn mixer_fills_gap_with_silence_when_plc_is_silence() {
+        let plc: Box<PlcBackend> = Box::new(SilencePlc::new(&AudioConfig::default()).unwrap());
+        let (mut slot, config) = build_slot_with_three_frames_and_gap_at_one(plc);
+
+        let frame = config.frame_size() * config.channels as usize;
+        let mut mix = vec![0i32; frame * 3];
+        slot.accumulate_into(&mut mix);
+
+        let nonzero_first = mix[..frame].iter().filter(|&&s| s != 0).count();
+        let nonzero_gap = mix[frame..2 * frame].iter().filter(|&&s| s != 0).count();
+        let nonzero_third = mix[2 * frame..].iter().filter(|&&s| s != 0).count();
+
+        assert!(
+            nonzero_first > frame / 2,
+            "seq=0 should decode to non-silent audio, got {nonzero_first}/{frame} non-zero"
+        );
+        assert_eq!(
+            nonzero_gap, 0,
+            "gap at seq=1 with SilencePlc must produce exactly zero non-zero samples"
+        );
+        assert!(
+            nonzero_third > frame / 2,
+            "seq=2 should decode to non-silent audio, got {nonzero_third}/{frame} non-zero"
+        );
+    }
+
+    /// OpusPlc smoke: the gap slot still produces non-silent PCM because
+    /// libopus extrapolates from prior decoder state. We don't assert the
+    /// shape, just that PLC didn't crash and didn't emit silence.
+    #[test]
+    fn mixer_fills_gap_with_extrapolated_audio_when_plc_is_opus() {
+        let plc: Box<PlcBackend> = Box::new(OpusPlc::new(&AudioConfig::default()).unwrap());
+        let (mut slot, config) = build_slot_with_three_frames_and_gap_at_one(plc);
+
+        let frame = config.frame_size() * config.channels as usize;
+        let mut mix = vec![0i32; frame * 3];
+        slot.accumulate_into(&mut mix);
+
+        let nonzero_gap = mix[frame..2 * frame].iter().filter(|&&s| s != 0).count();
+        assert!(
+            nonzero_gap > 0,
+            "Opus PLC should extrapolate non-silent audio at a gap, got all-zero"
+        );
+
+        let stats = slot.stats();
+        assert!(
+            stats.concealed >= 1,
+            "BufferStats should record at least one concealment, got {}",
+            stats.concealed
+        );
+    }
+}
+
 fn build_output_f32(
     device: &cpal::Device,
     stream_config: &cpal::StreamConfig,
