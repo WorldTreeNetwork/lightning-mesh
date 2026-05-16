@@ -1,0 +1,78 @@
+{
+  "question": "Survey the current open-source landscape for voice cloning, speech generation/synthesis, and music generation models and evaluate quantization potential and realistic deployment targets across CPU-only, NVIDIA consumer GPU, and AMD AIE/Ryzen AI tiers, for use as a neural PLC backend in the mjolnir-mesh Rust mesh-audio project.",
+  "mode": "research",
+  "status": "complete",
+  "confidence": "high",
+  "executive_summary": "Ship Opus deep-PLC (FARGAN) via a libopus 1.5+ build flag in the next sprint - it is a zero-Rust-change, BSD-3-clause, ~1% CPU neural PLC upgrade that drops straight into the existing Recover trait. Everything else in the landscape is either architecturally incompatible with sub-40 ms PLC budgets (Bark, MusicGen, Stable Audio, Tortoise, VALL-E, Jukebox - all eliminated by codec frame rate or iterative denoising, not solvable by quantization) or a 6-12 month integration project (CosyVoice 2, F5-TTS, Sesame CSM, all with a structural text-input mismatch for the PLC use case). Burst loss >80 ms is solved by DRED (sender-side redundancy VAE in libopus 1.5+), not a bigger PLC model. AMD AIE/Ryzen AI is research-only for audio in 2026 - zero production audio models in the Vitis Model Zoo, ASR-only on the official Ryzen AI roadmap, and Microsoft's Windows Studio Effects Voice Focus is unavailable on AMD NPUs. The Rust inference path ranking is ort > tract (under-investigated, potentially better fit for hard-real-time) > candle > burn, with the Recover trait's Vec<i16> output flagged as a real-time allocation hazard to address.",
+  "key_findings": [
+    {
+      "finding": "Opus deep-PLC (FARGAN + predictive acoustic model) in libopus 1.5+ is the only true 'today' neural PLC answer - BSD 3-clause, ~1% CPU, 600 MFLOPS, ~1 MB binary, drops in via build flag with zero Rust changes.",
+      "confidence": "high",
+      "sources": ["hypotheses/h1-neural-plc-prior-art/findings.md", "https://opus-codec.org/demo/opus-1.5/", "https://opus-codec.org/demo/opus-1.6/"]
+    },
+    {
+      "finding": "LACE and NoLACE are NOT PLC models - they are Opus codec enhancement postfilters that operate on successfully received frames and cannot synthesize missing ones; the decomposition's framing is incorrect and the real Xiph neural PLC is FARGAN.",
+      "confidence": "high",
+      "sources": ["hypotheses/h1-neural-plc-prior-art/findings.md", "https://arxiv.org/abs/2309.14521"]
+    },
+    {
+      "finding": "DRED (Deep Redundancy) in libopus 1.5+ covers burst loss up to 1 second at <32 kb/s overhead via a sender-side RDO-VAE - this is the right architectural answer for gaps >80 ms, not a bigger PLC model.",
+      "confidence": "high",
+      "sources": ["hypotheses/h1-neural-plc-prior-art/findings.md", "https://arxiv.org/html/2212.04453v3"]
+    },
+    {
+      "finding": "All 'famous' generative audio models (Bark, Tortoise, MusicGen, Stable Audio Open, AudioGen, Riffusion, Jukebox, VALL-E reproductions) are architecturally disqualified from PLC use by codec frame rate (50/75 Hz transformer pass per frame) or iterative denoising (100+ diffusion steps); quantization does not save them.",
+      "confidence": "high",
+      "sources": ["hypotheses/h3-ar-diffusion-elimination/findings.md", "https://huggingface.co/blog/optimizing-bark", "https://huggingface.co/facebook/musicgen-large/discussions/13"]
+    },
+    {
+      "finding": "Voice-cloning TTS (F5-TTS, CosyVoice 2, Sesame CSM) is 6-12 months out at best, with first-chunk latencies of 150-500 ms even on RTX 4090, and carries a structural mismatch: TTS needs text input but the lost packet's text is unknown by definition.",
+      "confidence": "medium",
+      "sources": ["hypotheses/h2-tts-streaming-candidates/findings.md", "https://huggingface.co/FunAudioLLM/CosyVoice2-0.5B", "https://github.com/SWivid/F5-TTS"]
+    },
+    {
+      "finding": "If a standalone neural PLC backend is needed, tPLCnet (MIT-licensed, TFLite weights convertible to ONNX) is the only viable choice; FRN has ONNX weights ready to go but is CC-BY-NC and cannot ship commercially; PLC Challenge 2024 winners have no public weights.",
+      "confidence": "medium",
+      "sources": ["hypotheses/h1-neural-plc-prior-art/findings.md", "https://github.com/breizhn/tPLCnet", "https://github.com/Crystalsound/FRN"]
+    },
+    {
+      "finding": "AMD AIE/Ryzen AI is research-only for audio in 2026: zero audio models in the Vitis Model Zoo, ASR-only on the official Ryzen AI 1.7.1 stack (Whisper/Zipformer), Microsoft's Windows Studio Effects Voice Focus unavailable on AMD NPUs, and even an architecturally compatible CNN-shaped PLC model has zero documented deployment examples.",
+      "confidence": "high",
+      "sources": ["hypotheses/h4-amd-aie-ryzen-ai/findings.md", "https://docs.amd.com/r/en-US/ug1414-vitis-ai/Vitis-AI-Model-Zoo", "https://github.com/amd/LIRA", "https://riallto.ai/notebooks/2_1_MS_Windows_Studio_Effects.html"]
+    },
+    {
+      "finding": "Rust inference ranking is ort > tract > candle > burn; ort is the default with broad EP support including VitisAI, tract (Sonos pure-Rust) is potentially a better fit for hard-real-time audio threads but under-investigated, burn is too immature for this use case.",
+      "confidence": "high",
+      "sources": ["hypotheses/h5-rust-inference-path/findings.md", "https://github.com/pykeio/ort", "https://github.com/huggingface/candle", "https://github.com/sonos/tract"]
+    },
+    {
+      "finding": "The Recover trait's Output = Vec<i16> forces a heap allocation on every concealment call from the cpal audio thread (~1.9 KB at 48 kHz mono 20 ms frames) - a real-time hazard that should be fixed before wiring a neural backend, ideally by changing to SmallVec or caller-provided buffer.",
+      "confidence": "high",
+      "sources": ["hypotheses/h5-rust-inference-path/findings.md"]
+    },
+    {
+      "finding": "Music PLC is solved by small feed-forward CNN models (PARCnet-IS2, 416K params, <11.6 ms per packet on Intel Core i5), NOT by MusicGen or Stable Audio; music-aware concealment is out of scope for mjolnir-mesh voice but the architectural reference is PARCnet-class, not generative transformers.",
+      "confidence": "medium",
+      "sources": ["hypotheses/h3-ar-diffusion-elimination/findings.md", "https://github.com/polimi-ispl/2024-music-plc-challenge/tree/main/parcnet-is2", "https://internetofsounds2025.ieee-is2.org/workshops/3rd-ieee-international-workshop-networked-immersive-audio/music-packet-loss-concealment"]
+    }
+  ],
+  "open_questions": [
+    "Does the existing mjolnir-audio libopus binding deterministically enable deep-PLC or silently fall back to heuristic PLC? Cannot be resolved from current codebase read alone - requires inspecting Cargo.toml deps and runtime probing of the linked libopus version.",
+    "Exact quality delta between Opus deep-PLC and standalone neural models (tPLCnet, FRN) at >80 ms gaps - the CouthIT evaluation shows only plots, no tables, and no published benchmark uses the project's actual loss patterns.",
+    "Is tract (Sonos pure-Rust ONNX runtime) a better fit than ort for the hard-real-time audio thread? Per-frame latency and threading model unverified; one of the highest-value runtime decisions to resolve early.",
+    "TTS-as-PLC text-input mismatch: does the use case actually want speaker-matched fill with predicted text (requires ASR + LM upstream pipeline) or audio extrapolation from prior context (requires a different model class than current text-to-speech)?",
+    "Will multi-peer CPU partitioning work with neural PLC on the audio thread? At 4 peers and 5 ms each, even a small neural model risks callback overrun - architectural question of whether to keep PLC on the cpal thread or offload to a producer-consumer ring buffer.",
+    "CosyVoice 2's 150 ms first-chunk latency claim does not specify hardware; A100-class vs consumer RTX 3090/4090 significantly affects the months-out estimate.",
+    "csm.rs (the only production-grade Rust audio inference engine in the candidate set) is AGPL-3.0 - hard blocker for embedding in proprietary Rust binary unless Cartesia offers a commercial license or PyTorch CSM weights are wrapped separately.",
+    "Whether DRED is already standardized enough for interop with non-mjolnir Opus endpoints (draft-ietf-mlcodec-opus-dred is not yet RFC).",
+    "PARCnet-IS2 measured CPU latency on x86/ARM laptop hardware (the 2025 IS2 challenge constraint is <11.6 ms, but per-system leaderboard numbers are not in the consulted sources)."
+  ],
+  "contradictions": [
+    "H1 reports Opus deep-PLC placed 2nd in the Interspeech 2022 PLC Challenge AND that GitHub issue xiph/opus#306 (open since Dec 2023) reports a subjective quality regression vs the older LPCNet-based PLC in some conditions - these are not strictly contradictory (challenge ranking vs in-the-wild subjective evaluation can differ), but they warrant an A/B test before declaring deep-PLC strictly better than the heuristic fallback for the project's specific loss patterns.",
+    "The decomposition framed LACE/NoLACE as the strongest neural PLC candidates, but H1 found they are not PLC models at all - this is a correction of the priors, not a contradiction between investigators, but it does mean the decomposition's selected-hypothesis #1 was based on a misclassification that the investigation resolved."
+  ],
+  "hypotheses_explored": 5,
+  "hypotheses_total": 5,
+  "verification_status": "PASS_WITH_WARNINGS",
+  "output_dir": "/home/dorje/work/IdentiKey/mjolnir-mesh/docs/research/audio-models-for-neural-plc/"
+}
