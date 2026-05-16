@@ -14,3 +14,4 @@ tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 rtrb.workspace = true
+tract-onnx.workspace = true

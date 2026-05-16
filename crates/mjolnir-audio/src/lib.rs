@@ -10,12 +10,14 @@ pub mod codec;
 pub mod conceal;
 pub mod device;
 pub mod mixer;
+pub mod plc_tract;
 
 pub use conceal::{
     default_plc_factory, silence_plc_factory, OpusPlc, PlcBackend, PlcFactory, SilencePlc,
 };
 pub use mixer::{Mixer, MixerHandle, PeerInput};
 pub use mjolnir_media::{BufferStats, PullStatus};
+pub use plc_tract::TractPlc;
 
 /// Audio configuration for the mesh.
 #[derive(Debug, Clone)]
