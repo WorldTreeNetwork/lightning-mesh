@@ -67,10 +67,14 @@ impl OpusEncoder {
 }
 
 /// Opus decoder wrapper.
+///
+/// All decode methods write into a caller-provided `&mut [i16]` slice;
+/// the wrapper does no allocation on the decode path. The caller is
+/// responsible for sizing `out` to one frame at the configured sample
+/// rate × channels × frame duration.
 pub struct OpusDecoder {
     decoder: opus::Decoder,
     config: AudioConfig,
-    decode_buf: Vec<i16>,
 }
 
 impl OpusDecoder {
@@ -84,48 +88,43 @@ impl OpusDecoder {
         let decoder = opus::Decoder::new(config.sample_rate, channels)
             .context("failed to create opus decoder")?;
 
-        let decode_buf = vec![0i16; config.frame_size() * config.channels as usize];
-
         Ok(Self {
             decoder,
             config: config.clone(),
-            decode_buf,
         })
     }
 
-    /// Decode an opus packet into PCM i16 samples.
-    pub fn decode(&mut self, packet: &[u8]) -> Result<&[i16]> {
+    /// Decode an opus packet into `out`. Returns the number of samples
+    /// written (samples per channel × channels).
+    pub fn decode(&mut self, packet: &[u8], out: &mut [i16]) -> Result<usize> {
         let n = self
             .decoder
-            .decode(packet, &mut self.decode_buf, false)
+            .decode(packet, out, false)
             .context("opus decode failed")?;
-
-        Ok(&self.decode_buf[..n * self.config.channels as usize])
+        Ok(n * self.config.channels as usize)
     }
 
     /// Generate one frame of packet loss concealment samples using the
     /// decoder's internal state alone (no FEC data). Used when no
     /// lookahead packet is available at playout time.
-    pub fn decode_lost(&mut self) -> Result<&[i16]> {
+    pub fn decode_lost(&mut self, out: &mut [i16]) -> Result<usize> {
         let n = self
             .decoder
-            .decode(&[], &mut self.decode_buf, false)
+            .decode(&[], out, false)
             .context("opus PLC decode failed")?;
-
-        Ok(&self.decode_buf[..n * self.config.channels as usize])
+        Ok(n * self.config.channels as usize)
     }
 
     /// Reconstruct a lost frame from the FEC payload carried by the
     /// *next* in-sequence packet (Opus in-band FEC). Does not advance
     /// the decoder's primary state — the caller should still call
     /// [`Self::decode`] on the same packet at its scheduled slot.
-    pub fn decode_fec(&mut self, next_packet: &[u8]) -> Result<&[i16]> {
+    pub fn decode_fec(&mut self, next_packet: &[u8], out: &mut [i16]) -> Result<usize> {
         let n = self
             .decoder
-            .decode(next_packet, &mut self.decode_buf, true)
+            .decode(next_packet, out, true)
             .context("opus FEC decode failed")?;
-
-        Ok(&self.decode_buf[..n * self.config.channels as usize])
+        Ok(n * self.config.channels as usize)
     }
 
     pub fn config(&self) -> &AudioConfig {
@@ -144,7 +143,6 @@ mod tests {
         let mut encoder = OpusEncoder::new(&config).expect("encoder creation failed");
         let mut decoder = OpusDecoder::new(&config).expect("decoder creation failed");
 
-        // Generate a sine wave PCM buffer (one frame worth)
         let frame_size = config.frame_size() * config.channels as usize;
         let pcm: Vec<i16> = (0..frame_size)
             .map(|i| {
@@ -156,12 +154,8 @@ mod tests {
         let encoded = encoder.encode(&pcm).expect("encode failed");
         assert!(!encoded.is_empty(), "encoded packet should not be empty");
 
-        let decoded = decoder.decode(&encoded).expect("decode failed");
-        assert_eq!(
-            decoded.len(),
-            pcm.len(),
-            "decoded length should match input length"
-        );
-        // Don't compare exact values - Opus is lossy
+        let mut out = vec![0i16; frame_size];
+        let n = decoder.decode(&encoded, &mut out).expect("decode failed");
+        assert_eq!(n, pcm.len(), "decoded length should match input length");
     }
 }

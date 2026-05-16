@@ -6,8 +6,12 @@
 //! decoder/concealer that turns both delivered and missing packets into
 //! a coherent stream of decoded media units. The consumer pulls at the
 //! playout cadence and never sees the difference between a received
-//! frame and a concealed one — but [`Pulled`] preserves provenance so
-//! cross-fade and stats are possible downstream.
+//! frame and a concealed one — but [`PullStatus`] preserves provenance
+//! so cross-fade and stats are possible downstream.
+//!
+//! The pull surface writes decoded PCM into a caller-owned `&mut [i16]`
+//! slice. The buffer never allocates on the pull path; the backend
+//! ([`Recover`]) is contractually required not to allocate either.
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -17,35 +21,38 @@ use crate::recover::Recover;
 
 /// Outcome of [`SelfHealingBuffer::pull`].
 ///
-/// Distinct from [`Pull`] in that it carries the *decoded* unit, not the
-/// raw encoded payload, and distinguishes received vs concealed for
-/// downstream consumers (mixer stats, cross-fade transitions, debug logs).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Pulled<T> {
-    /// Buffer is warming up to its target depth; no unit produced.
+/// The decoded PCM is written into the caller's slice; `PullStatus`
+/// carries only the metadata about *what kind of frame* was produced,
+/// so the mixer can record stats and (in the future) cross-fade between
+/// concealed and decoded frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullStatus {
+    /// Buffer is warming up to its target depth; no samples were written.
+    /// The caller's slice is left untouched.
     Empty,
-    /// A received packet was decoded normally.
-    Decoded(T),
-    /// The expected packet was missing; the backend synthesised this
-    /// unit (codec PLC, FEC lookahead recovery, or neural prediction).
-    Concealed(T),
+    /// A received packet was decoded normally into the slice.
+    Decoded,
+    /// The expected packet was missing; the backend synthesised samples
+    /// into the slice. `fec_lookahead` is true when the next-in-sequence
+    /// packet was present and handed to the backend as a recovery hint
+    /// (codecs that support in-band FEC may have used it to reconstruct
+    /// the lost frame from real data rather than pure extrapolation).
+    Concealed { fec_lookahead: bool },
 }
 
-impl<T> Pulled<T> {
-    /// Convert to an `Option<T>`, discarding provenance.
-    pub fn into_unit(self) -> Option<T> {
-        match self {
-            Pulled::Empty => None,
-            Pulled::Decoded(t) | Pulled::Concealed(t) => Some(t),
-        }
-    }
-
+impl PullStatus {
     pub fn was_concealed(&self) -> bool {
-        matches!(self, Pulled::Concealed(_))
+        matches!(self, PullStatus::Concealed { .. })
     }
 
     pub fn is_empty(&self) -> bool {
-        matches!(self, Pulled::Empty)
+        matches!(self, PullStatus::Empty)
+    }
+
+    /// True if the buffer produced PCM into the slice (`Decoded` or
+    /// `Concealed`). False on `Empty` warm-up ticks.
+    pub fn produced(&self) -> bool {
+        !self.is_empty()
     }
 }
 
@@ -53,7 +60,7 @@ impl<T> Pulled<T> {
 /// observability without piping events out of the audio thread.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BufferStats {
-    /// Datagrams (or packets) the buffer accepted via [`SelfHealingBuffer::push`].
+    /// Packets the buffer accepted via [`SelfHealingBuffer::push`].
     /// Counts every push call regardless of [`PushOutcome`] — i.e. raw
     /// arrival count from the wire. Useful as a liveness signal even
     /// before any pulls have happened.
@@ -62,9 +69,10 @@ pub struct BufferStats {
     pub decoded: u64,
     /// Frames produced from concealment (codec PLC or FEC).
     pub concealed: u64,
-    /// Of `concealed`, the count recovered via FEC lookahead rather
-    /// than pure codec PLC. (Backends must report this themselves; the
-    /// buffer can't tell which mechanism the backend used.)
+    /// Of `concealed`, the count where the buffer had a lookahead
+    /// packet to hand to the backend's `decode_lost`. Whether the
+    /// backend actually used FEC vs codec-PLC is opaque here — this is
+    /// the *opportunity* count, not a usage guarantee.
     pub fec_recovered: u64,
     /// Backend errors during decode or conceal.
     pub errors: u64,
@@ -91,7 +99,7 @@ impl<R: Recover> SelfHealingBuffer<R> {
         self.jitter.push(seq, packet)
     }
 
-    /// Pull the next decoded unit.
+    /// Pull the next decoded frame into `out`.
     ///
     /// On a [`Pull::Gap`], the buffer peeks the next-in-sequence slot
     /// (non-destructively) and hands it to the backend's
@@ -99,12 +107,15 @@ impl<R: Recover> SelfHealingBuffer<R> {
     /// can recover the lost frame from the next packet's FEC payload;
     /// codecs that don't ignore the hint and fall back to codec-native
     /// concealment.
-    pub fn pull(&mut self) -> Result<Pulled<R::Output>> {
+    ///
+    /// On [`PullStatus::Empty`] the slice is left untouched. Otherwise
+    /// the backend writes exactly `out.len()` samples.
+    pub fn pull(&mut self, out: &mut [i16]) -> Result<PullStatus> {
         match self.jitter.pull() {
-            Pull::Frame(bytes) => match self.recover.decode(&bytes) {
-                Ok(out) => {
+            Pull::Frame(bytes) => match self.recover.decode(&bytes, out) {
+                Ok(()) => {
                     self.stats.decoded += 1;
-                    Ok(Pulled::Decoded(out))
+                    Ok(PullStatus::Decoded)
                 }
                 Err(e) => {
                     self.stats.errors += 1;
@@ -113,16 +124,16 @@ impl<R: Recover> SelfHealingBuffer<R> {
             },
             Pull::Gap => {
                 let lookahead = self.jitter.peek_next().map(|b| b.as_ref());
-                match self.recover.decode_lost(lookahead) {
-                    Ok(out) => {
+                let had_lookahead = lookahead.is_some();
+                match self.recover.decode_lost(lookahead, out) {
+                    Ok(()) => {
                         self.stats.concealed += 1;
-                        if lookahead.is_some() {
-                            // Backends MAY have used FEC; we record the
-                            // opportunity. Whether the backend actually
-                            // did FEC vs codec-PLC is opaque here.
+                        if had_lookahead {
                             self.stats.fec_recovered += 1;
                         }
-                        Ok(Pulled::Concealed(out))
+                        Ok(PullStatus::Concealed {
+                            fec_lookahead: had_lookahead,
+                        })
                     }
                     Err(e) => {
                         self.stats.errors += 1;
@@ -130,7 +141,7 @@ impl<R: Recover> SelfHealingBuffer<R> {
                     }
                 }
             }
-            Pull::Empty => Ok(Pulled::Empty),
+            Pull::Empty => Ok(PullStatus::Empty),
         }
     }
 
@@ -177,18 +188,36 @@ mod tests {
         decoded: u32,
         concealed: u32,
         last_lookahead: Option<Vec<u8>>,
+        marker: i16,
+    }
+
+    impl Counting {
+        fn new() -> Self {
+            Self {
+                decoded: 0,
+                concealed: 0,
+                last_lookahead: None,
+                marker: 0,
+            }
+        }
     }
 
     impl Recover for Counting {
-        type Output = (u32, bool);
-        fn decode(&mut self, _packet: &[u8]) -> Result<Self::Output> {
+        fn decode(&mut self, packet: &[u8], out: &mut [i16]) -> Result<()> {
             self.decoded += 1;
-            Ok((self.decoded, false))
+            self.marker = packet.first().copied().unwrap_or(0) as i16;
+            for s in out.iter_mut() {
+                *s = self.marker;
+            }
+            Ok(())
         }
-        fn decode_lost(&mut self, lookahead: Option<&[u8]>) -> Result<Self::Output> {
+        fn decode_lost(&mut self, lookahead: Option<&[u8]>, out: &mut [i16]) -> Result<()> {
             self.concealed += 1;
             self.last_lookahead = lookahead.map(|s| s.to_vec());
-            Ok((self.concealed, true))
+            for s in out.iter_mut() {
+                *s = -1;
+            }
+            Ok(())
         }
     }
 
@@ -198,69 +227,67 @@ mod tests {
 
     #[test]
     fn warmup_returns_empty_until_target_depth() {
-        let mut buf = SelfHealingBuffer::new(
-            2,
-            4,
-            Counting { decoded: 0, concealed: 0, last_lookahead: None },
-        );
-        assert!(buf.pull().unwrap().is_empty());
-        buf.push(0, pkt(0));
-        assert!(buf.pull().unwrap().is_empty());
-        buf.push(1, pkt(1));
-        let pulled = buf.pull().unwrap();
-        assert!(!pulled.was_concealed());
-        assert!(matches!(pulled, Pulled::Decoded(_)));
+        let mut buf = SelfHealingBuffer::new(2, 4, Counting::new());
+        let mut out = [0i16; 4];
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Empty);
+        buf.push(0, pkt(5));
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Empty);
+        buf.push(1, pkt(7));
+        let status = buf.pull(&mut out).unwrap();
+        assert_eq!(status, PullStatus::Decoded);
+        assert_eq!(&out, &[5, 5, 5, 5]);
     }
 
     #[test]
     fn gap_routes_through_decode_lost_with_lookahead() {
-        let mut buf = SelfHealingBuffer::new(
-            1,
-            4,
-            Counting { decoded: 0, concealed: 0, last_lookahead: None },
+        let mut buf = SelfHealingBuffer::new(1, 4, Counting::new());
+        let mut out = [0i16; 4];
+        buf.push(0, pkt(10));
+        buf.push(2, pkt(20)); // seq 1 skipped, seq 2 sits in the ring
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Decoded); // seq 0
+        let status = buf.pull(&mut out).unwrap();
+        assert_eq!(
+            status,
+            PullStatus::Concealed {
+                fec_lookahead: true
+            }
         );
-        buf.push(0, pkt(0));
-        buf.push(2, pkt(2)); // seq 1 skipped, seq 2 sits in the ring
-        assert!(matches!(buf.pull().unwrap(), Pulled::Decoded(_))); // seq 0
-        let pulled = buf.pull().unwrap();
-        assert!(pulled.was_concealed(), "seq 1 should be concealed");
-        // The lookahead handed to the backend should be the seq 2 bytes,
-        // because seq 2 is the next available slot after the gap.
-        assert_eq!(buf.recover().last_lookahead.as_deref(), Some(&[2u8][..]));
+        // The lookahead handed to the backend should be the seq 2 bytes.
+        assert_eq!(buf.recover().last_lookahead.as_deref(), Some(&[20u8][..]));
         // Seq 2 is still in the ring — should now decode normally.
-        assert!(matches!(buf.pull().unwrap(), Pulled::Decoded(_)));
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Decoded);
         assert_eq!(buf.recover().decoded, 2);
         assert_eq!(buf.recover().concealed, 1);
     }
 
     #[test]
     fn gap_without_lookahead_passes_none() {
-        let mut buf = SelfHealingBuffer::new(
-            1,
-            4,
-            Counting { decoded: 0, concealed: 0, last_lookahead: None },
-        );
-        buf.push(0, pkt(0));
-        assert!(matches!(buf.pull().unwrap(), Pulled::Decoded(_))); // seq 0
+        let mut buf = SelfHealingBuffer::new(1, 4, Counting::new());
+        let mut out = [0i16; 4];
+        buf.push(0, pkt(1));
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Decoded); // seq 0
         // Nothing else in the ring; pull at seq 1 → gap, no lookahead.
-        let pulled = buf.pull().unwrap();
-        assert!(pulled.was_concealed());
+        let status = buf.pull(&mut out).unwrap();
+        assert_eq!(
+            status,
+            PullStatus::Concealed {
+                fec_lookahead: false
+            }
+        );
         assert!(buf.recover().last_lookahead.is_none());
     }
 
     #[test]
     fn stats_accumulate() {
-        let mut buf = SelfHealingBuffer::new(
-            1,
-            4,
-            Counting { decoded: 0, concealed: 0, last_lookahead: None },
-        );
+        let mut buf = SelfHealingBuffer::new(1, 4, Counting::new());
+        let mut out = [0i16; 4];
         buf.push(0, pkt(0));
         buf.push(2, pkt(2));
-        let _ = buf.pull(); // decoded seq 0
-        let _ = buf.pull(); // concealed seq 1 (with lookahead)
-        let _ = buf.pull(); // decoded seq 2
+        let _ = buf.pull(&mut out); // decoded seq 0
+        let _ = buf.pull(&mut out); // concealed seq 1 (with lookahead)
+        let _ = buf.pull(&mut out); // decoded seq 2
         let stats = buf.stats();
+        assert_eq!(stats.received, 2);
         assert_eq!(stats.decoded, 2);
         assert_eq!(stats.concealed, 1);
         assert_eq!(stats.fec_recovered, 1, "lookahead was present");
@@ -269,14 +296,18 @@ mod tests {
 
     #[test]
     fn boxed_backend_satisfies_recover_via_blanket_impl() {
-        let mut buf: SelfHealingBuffer<Box<dyn Recover<Output = (u32, bool)>>> =
-            SelfHealingBuffer::new(
-                1,
-                4,
-                Box::new(Counting { decoded: 0, concealed: 0, last_lookahead: None }),
-            );
+        let mut buf: SelfHealingBuffer<Box<dyn Recover>> =
+            SelfHealingBuffer::new(1, 4, Box::new(Counting::new()));
+        let mut out = [0i16; 4];
         buf.push(0, pkt(0));
-        let pulled = buf.pull().unwrap();
-        assert!(!pulled.was_concealed());
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Decoded);
+    }
+
+    #[test]
+    fn empty_pull_leaves_slice_untouched() {
+        let mut buf = SelfHealingBuffer::new(2, 4, Counting::new());
+        let mut out = [42i16; 4];
+        assert_eq!(buf.pull(&mut out).unwrap(), PullStatus::Empty);
+        assert_eq!(&out, &[42, 42, 42, 42], "Empty must not mutate the slice");
     }
 }

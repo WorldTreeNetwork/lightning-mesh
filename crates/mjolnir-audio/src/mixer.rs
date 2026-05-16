@@ -1,83 +1,127 @@
 //! Multi-peer audio mixer.
 //!
-//! Each subscribed peer gets its own [`PeerInput`] which pushes encoded
-//! Opus frames into a per-peer jitter buffer. The cpal output callback
-//! polls every peer at the audio clock rate, decodes (or PLC on a gap),
-//! and sums the streams into the output device.
+//! ## Threading model
+//!
+//! Each peer has its own asynchronous inference task that owns the
+//! peer's [`SelfHealingBuffer`] and [`PlcBackend`]. The task ticks at
+//! the configured frame rate, drains any newly-arrived network packets
+//! into the jitter buffer, pulls one decoded (or concealed) frame into a
+//! scratch buffer, and pushes that frame into a single-producer /
+//! single-consumer ring shared with the cpal output callback.
+//!
+//! The cpal callback runs on the audio thread. It does *nothing* but
+//! drain the per-peer ring and sum-mix the samples into the output
+//! buffer. It never decodes, never allocates, never holds a contended
+//! lock, and never touches a [`PlcBackend`]. This isolation is the
+//! reason we can swap in heavier neural backends later without putting
+//! the audio thread at risk.
+//!
+//! ```text
+//! NETWORK ─► PeerInput.push_frame ─► mpsc<(seq, Bytes)>
+//!                                          │
+//!                                          ▼
+//!                                inference task (tokio)
+//!                                          │
+//!                              SelfHealingBuffer.pull(&mut scratch)
+//!                                          │
+//!                                          ▼
+//!                                  rtrb::Producer<i16>
+//!                                          │
+//!                                          ▼
+//!                                  rtrb::Consumer<i16>
+//!                                          │
+//!                                          ▼
+//!                                  cpal output callback
+//! ```
+//!
+//! ## Underrun policy
+//!
+//! If the inference task hasn't filled the ring (warming up, slow
+//! backend, transient CPU spike), the cpal callback consumes whatever
+//! is available and the remainder of the output is left at its current
+//! value (silence, since the mix bus is zeroed every callback). This is
+//! correct degradation — never a panic, never a glitch loop.
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use mjolnir_media::{BufferStats, Pulled, SelfHealingBuffer};
-use std::collections::{HashMap, VecDeque};
+use mjolnir_media::{BufferStats, PullStatus, SelfHealingBuffer};
+use rtrb::{Consumer, Producer, RingBuffer};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use crate::conceal::{default_plc_factory, PlcBackend, PlcFactory};
 use crate::device::{self, i16_to_f32, Direction};
 use crate::AudioConfig;
 
-/// Frames of warm-up depth (≈60ms at 20ms frames). Small enough for live
-/// voice, large enough to absorb typical LAN/WAN jitter.
+/// Frames of warm-up depth (≈60ms at 20ms frames). Small enough for
+/// live voice, large enough to absorb typical LAN/WAN jitter.
 const JITTER_TARGET_FRAMES: usize = 3;
 /// Ring capacity. Beyond this, the oldest pending frame is evicted.
 const JITTER_CAPACITY: usize = 16;
+/// Per-peer PCM ring capacity in frames. ~160 ms of headroom at 20 ms
+/// frames. The inference task skips a tick when the ring is full, so
+/// this caps the producer-vs-consumer drift.
+const PCM_RING_CAPACITY_FRAMES: usize = 8;
+/// Bounded queue depth for incoming network frames between ticks.
+/// At 50 frames/sec arrival, 32 deep is ~640 ms of arrival headroom.
+const FRAME_CHANNEL_CAPACITY: usize = 32;
+
+/// Stats snapshot for a single peer. Exposed via [`MixerHandle::peer_stats`].
+type StatsShared = Arc<Mutex<BufferStats>>;
+
+/// Aborts an associated [`tokio::task::JoinHandle`] when dropped.
+/// Prevents inference tasks from outliving their peer slot.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 /// State for a single peer's audio stream.
 ///
-/// Wraps a [`SelfHealingBuffer`] from `mjolnir-media`, which owns both
-/// the jitter ring and the [`PlcBackend`] decode-and-conceal backend.
-/// Swapping in a different backend (silence baseline, neural CPU,
-/// NPU-resident) requires no changes here — see
-/// [`Mixer::start_with_plc`].
+/// The cpal callback's only contact with this struct is `accumulate_into`,
+/// which drains the SPSC ring. Everything else lives on the inference task.
 struct PeerSlot {
-    buffer: SelfHealingBuffer<Box<PlcBackend>>,
-    /// Decoded samples pending playback. Drained by the output callback at
-    /// the device's sample-clock rate.
-    pcm_tail: VecDeque<i16>,
+    pcm_consumer: Consumer<i16>,
+    stats: StatsShared,
+    _task: AbortOnDrop,
 }
 
 impl PeerSlot {
-    fn new(config: &AudioConfig, plc: Box<PlcBackend>) -> Result<Self> {
-        let frame_size = config.frame_size() * config.channels as usize;
-        Ok(Self {
-            buffer: SelfHealingBuffer::new(JITTER_TARGET_FRAMES, JITTER_CAPACITY, plc),
-            pcm_tail: VecDeque::with_capacity(frame_size * 4),
-        })
-    }
-
-    fn push(&mut self, seq: u64, frame: Bytes) {
-        self.buffer.push(seq, frame);
-    }
-
-    /// Accumulate this peer's PCM into `mix`. Contributes silence (no add)
-    /// if the buffer is still warming up.
+    /// Accumulate up to `mix.len()` samples from this peer's ring into
+    /// `mix`. If the ring is short, the unsumamed portion of `mix`
+    /// stays at its current value (silence, since the bus is pre-zeroed).
     fn accumulate_into(&mut self, mix: &mut [i32]) {
+        let available = self.pcm_consumer.slots();
+        let want = mix.len().min(available);
+        if want == 0 {
+            return;
+        }
+        let chunk = match self.pcm_consumer.read_chunk(want) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let (a, b) = chunk.as_slices();
+        let mut iter = a.iter().chain(b.iter());
         for sample_out in mix.iter_mut() {
-            if self.pcm_tail.is_empty() {
-                self.fill_tail();
-            }
-            if let Some(s) = self.pcm_tail.pop_front() {
-                *sample_out = sample_out.saturating_add(s as i32);
+            match iter.next() {
+                Some(&s) => *sample_out = sample_out.saturating_add(s as i32),
+                None => break,
             }
         }
-    }
-
-    /// Pull one decoded frame (or a concealed one) from the buffer and
-    /// push its samples into `pcm_tail`. No-op while warming up.
-    fn fill_tail(&mut self) {
-        match self.buffer.pull() {
-            Ok(Pulled::Decoded(samples)) | Ok(Pulled::Concealed(samples)) => {
-                self.pcm_tail.extend(samples);
-            }
-            Ok(Pulled::Empty) => {} // warming up
-            Err(e) => debug!("decode error: {e}"),
-        }
+        chunk.commit_all();
     }
 
     fn stats(&self) -> BufferStats {
-        self.buffer.stats()
+        self.stats.lock().map(|s| *s).unwrap_or_default()
     }
 }
 
@@ -105,15 +149,18 @@ pub struct MixerHandle {
 /// a specific peer's jitter buffer.
 #[derive(Clone)]
 pub struct PeerInput {
-    slot: Arc<Mutex<PeerSlot>>,
+    frame_tx: mpsc::Sender<(u64, Bytes)>,
 }
 
 impl PeerInput {
     /// Push one Opus frame with the given monotonic sequence number.
+    ///
+    /// Non-blocking. If the inference task's queue is full (backend
+    /// stalled, peer being removed), the frame is dropped — this is a
+    /// liveness property, not a correctness one. The jitter buffer
+    /// downstream will treat it as a network loss and conceal.
     pub fn push_frame(&self, seq: u64, frame: Bytes) {
-        if let Ok(mut s) = self.slot.lock() {
-            s.push(seq, frame);
-        }
+        let _ = self.frame_tx.try_send((seq, frame));
     }
 }
 
@@ -127,7 +174,8 @@ impl Mixer {
     /// Open the default output device and start the mix callback. Each
     /// peer registered later receives a freshly-minted backend from
     /// `plc_factory`. This is the seam used to swap in alternative PLC
-    /// strategies (silence baseline, neural CPU, NPU-resident).
+    /// strategies (silence baseline, tract-hosted neural model,
+    /// NPU-resident).
     pub fn start_with_plc(config: AudioConfig, plc_factory: PlcFactory) -> Result<Self> {
         let host = cpal::default_host();
         let device = host
@@ -196,18 +244,46 @@ impl Mixer {
 }
 
 impl MixerHandle {
-    /// Register a new peer; returns a handle for the network task to push
-    /// frames with. A fresh PLC backend is minted from the mixer's factory.
+    /// Register a new peer.
+    ///
+    /// Mints a fresh [`PlcBackend`] from the factory, sets up the SPSC
+    /// ring + network-frame channel, and spawns the per-peer inference
+    /// task. Returns a [`PeerInput`] that the network thread uses to
+    /// push encoded frames.
+    ///
+    /// Must be called from within a Tokio runtime context.
     pub fn add_peer(&self, key: impl Into<String>) -> Result<PeerInput> {
         let backend = (self.plc_factory)(&self.config)?;
-        let slot = Arc::new(Mutex::new(PeerSlot::new(&self.config, backend)?));
+        let frame_samples = self.config.frame_size() * self.config.channels as usize;
+        let ring_samples = frame_samples * PCM_RING_CAPACITY_FRAMES;
+
+        let (producer, consumer) = RingBuffer::<i16>::new(ring_samples);
+        let (frame_tx, frame_rx) = mpsc::channel::<(u64, Bytes)>(FRAME_CHANNEL_CAPACITY);
+
+        let stats = Arc::new(Mutex::new(BufferStats::default()));
         let key = key.into();
+
+        let task = tokio::spawn(run_peer_inference(
+            self.config.clone(),
+            backend,
+            frame_rx,
+            producer,
+            stats.clone(),
+            key.clone(),
+        ));
+
+        let slot = Arc::new(Mutex::new(PeerSlot {
+            pcm_consumer: consumer,
+            stats,
+            _task: AbortOnDrop(task),
+        }));
+
         self.peers
             .lock()
             .expect("peers mutex poisoned")
-            .insert(key.clone(), slot.clone());
+            .insert(key.clone(), slot);
         info!(peer = %key, "mixer registered peer");
-        Ok(PeerInput { slot })
+        Ok(PeerInput { frame_tx })
     }
 
     /// Snapshot the decode/conceal stats for one peer. Returns `None`
@@ -232,7 +308,8 @@ impl MixerHandle {
             .collect()
     }
 
-    /// Deregister a peer. Any frames buffered in its jitter ring are dropped.
+    /// Deregister a peer. The inference task is aborted via the slot's
+    /// `Drop` impl; any frames buffered in its jitter ring are dropped.
     pub fn remove_peer(&self, key: &str) {
         if self
             .peers
@@ -242,6 +319,90 @@ impl MixerHandle {
             .is_some()
         {
             info!(peer = %key, "mixer removed peer");
+        }
+    }
+}
+
+/// Per-peer inference task. Owns the [`SelfHealingBuffer`] and the
+/// [`PlcBackend`]; produces one frame of PCM per tick into the SPSC
+/// ring shared with the cpal output callback.
+async fn run_peer_inference(
+    config: AudioConfig,
+    backend: Box<PlcBackend>,
+    mut frame_rx: mpsc::Receiver<(u64, Bytes)>,
+    mut pcm_producer: Producer<i16>,
+    stats_out: StatsShared,
+    peer_key: String,
+) {
+    let frame_samples = config.frame_size() * config.channels as usize;
+    let mut buffer = SelfHealingBuffer::new(JITTER_TARGET_FRAMES, JITTER_CAPACITY, backend);
+    let mut scratch = vec![0i16; frame_samples];
+
+    let period = Duration::from_millis(config.frame_duration_ms as u64);
+    let mut tick = tokio::time::interval(period);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tick.tick().await;
+
+        // Drain any network arrivals into the jitter buffer. If all
+        // senders have dropped, the peer is being removed — exit.
+        loop {
+            match frame_rx.try_recv() {
+                Ok((seq, bytes)) => {
+                    buffer.push(seq, bytes);
+                }
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    debug!(peer = %peer_key, "frame channel closed; inference task exiting");
+                    return;
+                }
+            }
+        }
+
+        // If the audio thread is behind, the ring is full. Don't burn a
+        // buffered packet on a frame we'd just drop — skip this tick.
+        if pcm_producer.slots() < frame_samples {
+            continue;
+        }
+
+        // Produce one frame.
+        let status = match buffer.pull(&mut scratch) {
+            Ok(s) => s,
+            Err(e) => {
+                debug!(peer = %peer_key, "inference error: {e}");
+                if let Ok(mut s) = stats_out.lock() {
+                    *s = buffer.stats();
+                }
+                continue;
+            }
+        };
+
+        match status {
+            PullStatus::Empty => {
+                // Warming up; ring stays empty, audio thread plays silence.
+                continue;
+            }
+            PullStatus::Decoded | PullStatus::Concealed { .. } => {
+                if let Ok(mut chunk) = pcm_producer.write_chunk(frame_samples) {
+                    let (a, b) = chunk.as_mut_slices();
+                    let alen = a.len();
+                    a.copy_from_slice(&scratch[..alen]);
+                    if !b.is_empty() {
+                        b.copy_from_slice(&scratch[alen..]);
+                    }
+                    chunk.commit_all();
+                } else {
+                    // Ring full (consumer behind) — drop this frame.
+                    // The next tick will try again.
+                    debug!(peer = %peer_key, "pcm ring full; dropping frame");
+                }
+            }
+        }
+
+        // Publish stats after each successful tick.
+        if let Ok(mut s) = stats_out.lock() {
+            *s = buffer.stats();
         }
     }
 }
@@ -286,98 +447,6 @@ fn build_output_i16(
     Ok(stream)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codec::OpusEncoder;
-    use crate::conceal::{OpusPlc, SilencePlc};
-
-    /// Encode a sine-like frame so the PCM we push isn't silent (otherwise
-    /// "non-silence" assertions would be vacuous).
-    fn synth_frame(encoder: &mut OpusEncoder, config: &AudioConfig, seed: i32) -> Bytes {
-        let n = config.frame_size() * config.channels as usize;
-        let pcm: Vec<i16> = (0..n)
-            .map(|i| {
-                let t = (i as f64) / config.sample_rate as f64;
-                let amp = (t * 440.0 * 2.0 * std::f64::consts::PI + seed as f64).sin() * 8_000.0;
-                amp as i16
-            })
-            .collect();
-        encoder.encode(&pcm).expect("encode")
-    }
-
-    fn build_slot_with_three_frames_and_gap_at_one(
-        plc: Box<PlcBackend>,
-    ) -> (PeerSlot, AudioConfig) {
-        let config = AudioConfig::default();
-        let mut encoder = OpusEncoder::new(&config).expect("encoder");
-        let mut slot = PeerSlot::new(&config, plc).expect("peer slot");
-        // Buffer is configured with target_depth = 3. Push seqs 0, 2, 3
-        // (skipping 1) so the buffer warms up and the gap at seq=1 is what
-        // the consumer actually pulls between two real frames.
-        slot.push(0, synth_frame(&mut encoder, &config, 1));
-        slot.push(2, synth_frame(&mut encoder, &config, 2));
-        slot.push(3, synth_frame(&mut encoder, &config, 3));
-        (slot, config)
-    }
-
-    /// SilencePlc smoke: the gap slot fires `decode_lost` and the backend
-    /// returns zeros, so the middle frame in the output is exactly silent.
-    /// Real frames either side decode normally and are not silent.
-    #[test]
-    fn mixer_fills_gap_with_silence_when_plc_is_silence() {
-        let plc: Box<PlcBackend> = Box::new(SilencePlc::new(&AudioConfig::default()).unwrap());
-        let (mut slot, config) = build_slot_with_three_frames_and_gap_at_one(plc);
-
-        let frame = config.frame_size() * config.channels as usize;
-        let mut mix = vec![0i32; frame * 3];
-        slot.accumulate_into(&mut mix);
-
-        let nonzero_first = mix[..frame].iter().filter(|&&s| s != 0).count();
-        let nonzero_gap = mix[frame..2 * frame].iter().filter(|&&s| s != 0).count();
-        let nonzero_third = mix[2 * frame..].iter().filter(|&&s| s != 0).count();
-
-        assert!(
-            nonzero_first > frame / 2,
-            "seq=0 should decode to non-silent audio, got {nonzero_first}/{frame} non-zero"
-        );
-        assert_eq!(
-            nonzero_gap, 0,
-            "gap at seq=1 with SilencePlc must produce exactly zero non-zero samples"
-        );
-        assert!(
-            nonzero_third > frame / 2,
-            "seq=2 should decode to non-silent audio, got {nonzero_third}/{frame} non-zero"
-        );
-    }
-
-    /// OpusPlc smoke: the gap slot still produces non-silent PCM because
-    /// libopus extrapolates from prior decoder state. We don't assert the
-    /// shape, just that PLC didn't crash and didn't emit silence.
-    #[test]
-    fn mixer_fills_gap_with_extrapolated_audio_when_plc_is_opus() {
-        let plc: Box<PlcBackend> = Box::new(OpusPlc::new(&AudioConfig::default()).unwrap());
-        let (mut slot, config) = build_slot_with_three_frames_and_gap_at_one(plc);
-
-        let frame = config.frame_size() * config.channels as usize;
-        let mut mix = vec![0i32; frame * 3];
-        slot.accumulate_into(&mut mix);
-
-        let nonzero_gap = mix[frame..2 * frame].iter().filter(|&&s| s != 0).count();
-        assert!(
-            nonzero_gap > 0,
-            "Opus PLC should extrapolate non-silent audio at a gap, got all-zero"
-        );
-
-        let stats = slot.stats();
-        assert!(
-            stats.concealed >= 1,
-            "BufferStats should record at least one concealment, got {}",
-            stats.concealed
-        );
-    }
-}
-
 fn build_output_f32(
     device: &cpal::Device,
     stream_config: &cpal::StreamConfig,
@@ -399,4 +468,118 @@ fn build_output_f32(
         None,
     )?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drain test: when the consumer ring contains samples, the cpal
+    /// path (`accumulate_into`) must sum-mix exactly those samples and
+    /// leave the rest of the bus unchanged.
+    #[test]
+    fn accumulate_into_drains_ring_and_saturates_mix() {
+        // Construct a slot directly (no inference task) by hand-building
+        // a ring and pre-loading the producer with known PCM.
+        let frame_samples = 16;
+        let (mut producer, consumer) = RingBuffer::<i16>::new(frame_samples * 2);
+
+        // Write a frame of known samples to the producer.
+        let pcm: Vec<i16> = (0..frame_samples as i16).map(|i| i * 100).collect();
+        let mut chunk = producer.write_chunk(frame_samples).expect("reserve");
+        let (a, b) = chunk.as_mut_slices();
+        a.copy_from_slice(&pcm[..a.len()]);
+        if !b.is_empty() {
+            b.copy_from_slice(&pcm[a.len()..]);
+        }
+        chunk.commit_all();
+
+        // We don't want to spawn an inference task in this unit test;
+        // build a PeerSlot manually with a no-op task placeholder.
+        // The `_task` field exists only to abort on drop.
+        let stats = Arc::new(Mutex::new(BufferStats::default()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let _g = runtime.enter();
+        let placeholder = AbortOnDrop(tokio::spawn(async { /* immediately exits */ }));
+
+        let mut slot = PeerSlot {
+            pcm_consumer: consumer,
+            stats,
+            _task: placeholder,
+        };
+
+        let mut mix = vec![0i32; frame_samples];
+        slot.accumulate_into(&mut mix);
+
+        for (i, &m) in mix.iter().enumerate() {
+            assert_eq!(m, pcm[i] as i32, "sample {i} should match");
+        }
+    }
+
+    /// Underrun: when the ring is empty, `accumulate_into` must leave
+    /// `mix` untouched (callback will then output silence).
+    #[test]
+    fn accumulate_into_is_noop_on_empty_ring() {
+        let (_producer, consumer) = RingBuffer::<i16>::new(16);
+        let stats = Arc::new(Mutex::new(BufferStats::default()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let _g = runtime.enter();
+        let placeholder = AbortOnDrop(tokio::spawn(async {}));
+        let mut slot = PeerSlot {
+            pcm_consumer: consumer,
+            stats,
+            _task: placeholder,
+        };
+
+        let mut mix = vec![7i32; 8];
+        slot.accumulate_into(&mut mix);
+        assert_eq!(mix, vec![7i32; 8], "empty ring must not mutate the bus");
+    }
+
+    /// Two peers: their samples must sum-mix saturating.
+    #[test]
+    fn two_peers_sum_mix() {
+        let frame_samples = 8;
+        let (mut p1, c1) = RingBuffer::<i16>::new(frame_samples * 2);
+        let (mut p2, c2) = RingBuffer::<i16>::new(frame_samples * 2);
+
+        let pcm1: Vec<i16> = vec![100; frame_samples];
+        let pcm2: Vec<i16> = vec![250; frame_samples];
+
+        let mut ch1 = p1.write_chunk(frame_samples).unwrap();
+        let (a, _b) = ch1.as_mut_slices();
+        a.copy_from_slice(&pcm1);
+        ch1.commit_all();
+
+        let mut ch2 = p2.write_chunk(frame_samples).unwrap();
+        let (a, _b) = ch2.as_mut_slices();
+        a.copy_from_slice(&pcm2);
+        ch2.commit_all();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let _g = runtime.enter();
+        let s1 = PeerSlot {
+            pcm_consumer: c1,
+            stats: Arc::new(Mutex::new(BufferStats::default())),
+            _task: AbortOnDrop(tokio::spawn(async {})),
+        };
+        let s2 = PeerSlot {
+            pcm_consumer: c2,
+            stats: Arc::new(Mutex::new(BufferStats::default())),
+            _task: AbortOnDrop(tokio::spawn(async {})),
+        };
+
+        let mut mix = vec![0i32; frame_samples];
+        let handles = vec![Arc::new(Mutex::new(s1)), Arc::new(Mutex::new(s2))];
+        mix_into(&handles, &mut mix);
+        for &m in mix.iter() {
+            assert_eq!(m, 350, "100 + 250 = 350, no saturation expected");
+        }
+    }
 }

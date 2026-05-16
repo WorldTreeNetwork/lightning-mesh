@@ -12,4 +12,4 @@ pub mod service;
 
 pub use jitter::{JitterBuffer, Pull, PushOutcome};
 pub use recover::Recover;
-pub use service::{BufferStats, Pulled, SelfHealingBuffer};
+pub use service::{BufferStats, PullStatus, SelfHealingBuffer};

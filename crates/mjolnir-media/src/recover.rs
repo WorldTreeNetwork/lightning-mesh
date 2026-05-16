@@ -1,26 +1,26 @@
-//! Decode-and-conceal seam shared by all media types.
+//! Decode-and-conceal seam for the audio PLC pipeline.
 //!
-//! `Recover` turns received wire bytes into decoded media units *and*
-//! synthesises a fill unit when a packet is missing. Both responsibilities
-//! live on one trait because codec-native PLC (audio: Opus's
-//! `decode(None, ..)`; video: hypothetical group-resync logic) depends on
-//! state that the same backend's `decode` populates; splitting them would
-//! force expensive state mirroring.
+//! `Recover` turns received wire bytes into decoded PCM *and* synthesises
+//! a fill frame when a packet is missing. Both responsibilities live on
+//! one trait because codec-native PLC (Opus's `decode(None, ..)`) depends
+//! on state that the same backend's `decode` populates; splitting them
+//! would force expensive state mirroring.
 //!
-//! Audio implements this with `Output = Vec<i16>`; future video would
-//! implement it with whatever frame type makes sense there.
+//! Output is written into a caller-owned `&mut [i16]` slice — backends
+//! must not allocate on the inference path. The slice is sized for one
+//! frame of PCM at the configured sample rate × channels × frame duration.
 
 use anyhow::Result;
 
 pub trait Recover: Send {
-    /// The decoded media unit type. PCM samples for audio; decoded frames
-    /// (NAL units, YUV planes, whatever) for video.
-    type Output;
+    /// Decode a freshly-arrived encoded packet, writing PCM into `out`.
+    ///
+    /// `out.len()` is the per-frame sample count (e.g. 960 at 48 kHz mono,
+    /// 20 ms). Backends must fill exactly that many samples; underfill or
+    /// overfill is a bug.
+    fn decode(&mut self, packet: &[u8], out: &mut [i16]) -> Result<()>;
 
-    /// Decode a freshly-arrived encoded packet.
-    fn decode(&mut self, packet: &[u8]) -> Result<Self::Output>;
-
-    /// Synthesise output for a missing packet.
+    /// Synthesise output for a missing packet into `out`.
     ///
     /// `lookahead`, when present, is the next-in-sequence packet that has
     /// already arrived. Codecs supporting forward error correction
@@ -30,8 +30,8 @@ pub trait Recover: Send {
     /// concealment.
     ///
     /// The hint is non-destructive: the lookahead packet is left in the
-    /// buffer and will be returned by the next [`Recover::decode`] call.
-    fn decode_lost(&mut self, lookahead: Option<&[u8]>) -> Result<Self::Output>;
+    /// buffer and will be returned by the next `decode` call.
+    fn decode_lost(&mut self, lookahead: Option<&[u8]>, out: &mut [i16]) -> Result<()>;
 
     /// Whether this backend benefits from pre-emptive prediction.
     ///
@@ -43,18 +43,16 @@ pub trait Recover: Send {
     }
 }
 
-/// Blanket impl so `Box<dyn Recover<Output = T>>` itself satisfies `Recover`,
-/// which lets [`SelfHealingBuffer`](crate::SelfHealingBuffer) be parameterised
-/// over a boxed trait object without an extra wrapper.
+/// Blanket impl so `Box<dyn Recover>` itself satisfies `Recover`,
+/// which lets [`SelfHealingBuffer`](crate::SelfHealingBuffer) be
+/// parameterised over a boxed trait object without an extra wrapper.
 impl<R: ?Sized + Recover> Recover for Box<R> {
-    type Output = R::Output;
-
-    fn decode(&mut self, packet: &[u8]) -> Result<Self::Output> {
-        (**self).decode(packet)
+    fn decode(&mut self, packet: &[u8], out: &mut [i16]) -> Result<()> {
+        (**self).decode(packet, out)
     }
 
-    fn decode_lost(&mut self, lookahead: Option<&[u8]>) -> Result<Self::Output> {
-        (**self).decode_lost(lookahead)
+    fn decode_lost(&mut self, lookahead: Option<&[u8]>, out: &mut [i16]) -> Result<()> {
+        (**self).decode_lost(lookahead, out)
     }
 
     fn supports_speculation(&self) -> bool {

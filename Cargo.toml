@@ -19,6 +19,7 @@ moq-lite = "0.15"
 # audio
 opus = "0.3"
 cpal = "0.17"
+rtrb = "0.3"
 
 # async runtime
 tokio = { version = "1", features = ["full"] }
