@@ -1,0 +1,141 @@
+{
+  "question": "How should a small, unfunded, cross-OS (Arch Linux + Windows) team set up version control and asset synchronization for an asset-heavy 3D pipeline that spans both web rendering (WebGL/WebGPU/Three.js/Babylon.js) and Unreal Engine 5 (Nanite, custom shaders, voxelized/quantized LOD), where GitHub LFS is cost-prohibitive, there is no always-on NAS, and they'd like to leverage their own Mjolnir Mesh (Iroh + MoQ) substrate for sync?",
+  "mode": "research",
+  "status": "complete",
+  "confidence": "high",
+  "executive_summary": "Adopt self-hosted Forgejo + Git LFS on an always-on dev box with an attached SSD, use the ProjectBorealis UEGitPlugin for Unreal-side locking, and defer Mjolnir Mesh integration to a measured Phase 3 triggered by concrete pain signals. Forgejo+LFS is a production-proven path for small indie Unreal teams and meets every hard constraint (free, cross-platform including Windows, Unreal-grade file locking, old-version retention without clone bloat). Perforce Helix Core free tier is a genuine viable fallback but the 5-user hard cap and two-VCS UX tax make it a worse default for a team already living in Git. The cleanest Mjolnir seam is a Git LFS custom transfer agent backed by iroh-blobs (~760 LoC, ~2 weeks); ship a ~1-afternoon gossip-based Forgejo host discovery inside Phase 1 now, and build the full transfer agent only if Phase 2 measurements confirm it matters.",
+  "key_findings": [
+    {
+      "finding": "Forgejo + Git LFS on an always-on dev box with ProjectBorealis UEGitPlugin is the right baseline — production-proven by Steve Streeting, rime.red, and Anchorpoint for small indie Unreal teams; provides full LFS Lock API independent of blob storage; works cross-platform including Windows.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h3-forgejo-lfs-baseline/findings.md",
+        "hypotheses/h2-forgejo-lfs-custom-transfer/findings.md",
+        "https://stevestreeting.com/2020/08/09/my-unreal-engine-vcs-setup-gitea-git-lfs-locking/",
+        "https://blog.rime.red/git-lfs-or-perforce-for-unreal-in-2024/",
+        "https://www.anchorpoint.app/blog/install-and-configure-gitea-for-lfs",
+        "https://github.com/ProjectBorealis/UEGitPlugin"
+      ]
+    },
+    {
+      "finding": "Perforce Helix Core Free Tier (5 users / 20 workspaces, permanent) is a legitimate fallback and Epic's reference workflow for Unreal, but the hard 5-user cap, opaque upgrade pricing, and two-VCS UX tax for a Git-native team make it the second-best default here.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h4-perforce-free-tier/findings.md",
+        "https://www.perforce.com/products/helix-core/free-version-control",
+        "https://docs.unrealengine.com/5.0/en-US/using-perforce-as-source-control-for-unreal-engine/"
+      ]
+    },
+    {
+      "finding": "OpenWRT cannot directly host Forgejo (Gitea issue #5674 closed wontfix; one community case ran with instability). Host Forgejo on a dev laptop, Raspberry Pi 4 (4 GB), or small Intel NUC; attach the SSD to the Forgejo host and serve LFS over HTTP — NOT over SMB (git-lfs issue #4902 documents read-only network-mount failures).",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h3-forgejo-lfs-baseline/findings.md",
+        "https://github.com/go-gitea/gitea/issues/5674",
+        "https://github.com/git-lfs/git-lfs/issues/4902",
+        "https://goozenlab.github.io/blog/2020/05/openwrt-gitea/"
+      ]
+    },
+    {
+      "finding": "The cleanest Mjolnir Mesh integration is a Git LFS custom transfer agent (JSON-over-stdio, `lfs.standalonetransferagent`, ~760 LoC Rust binary) backed by iroh-blobs — with a SHA256→BLAKE3 side-index (~10 MB for 100k assets). Opt-in is a single committed `.lfsconfig`; rollback is one `git revert`.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h2-forgejo-lfs-custom-transfer/findings.md",
+        "https://github.com/git-lfs/git-lfs/blob/main/docs/custom-transfers.md",
+        "https://docs.rs/iroh-blobs/latest/iroh_blobs/"
+      ]
+    },
+    {
+      "finding": "The git-annex 10.20251103 'native iroh transport' is a dumbpipe QUIC tunnel, NOT an iroh-blobs integration. Content is addressed by SHA256 git-annex keys over a socket; no BLAKE3 / iroh-blobs involvement. An actual iroh-blobs special remote would still be ~540 LoC of separate work.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h1-git-annex-iroh/sub/h1a-iroh-transport-internals/findings.md",
+        "https://git-annex.branchable.com/special_remotes/p2p/git-annex-p2p-iroh",
+        "https://github.com/n0-computer/dumbpipe"
+      ]
+    },
+    {
+      "finding": "git-annex is structurally unsuitable for this team: Windows has no symlink support in the annex code path (pointer+hardlink mode with manual `smudge --update` footgun); Unreal-grade exclusive locking is architecturally impossible per the maintainer; no Unreal editor plugin exists; no evidence of game-studio adoption.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h1-git-annex-iroh/findings.md",
+        "https://git-annex.branchable.com/bugs/Windows__58___support_NTFS_symlinks/",
+        "https://git-annex.branchable.com/forum/Git_LFS_lock_feature/"
+      ]
+    },
+    {
+      "finding": "LFS retention for art teams: set `lfs.fetchrecentrefsdays = 14`, `lfs.fetchrecentcommitsdays = 3`, `lfs.pruneoffsetdays = 7`, `pruneverifyremotealways = true`. Warm peer = the Forgejo host itself (skip prune, run `git lfs fetch origin --all` after each push). Avoid `--filter=blob:none` + LFS (open bug #4335); use `GIT_LFS_SKIP_SMUDGE=1` for lazy hydration instead.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h2-forgejo-lfs-custom-transfer/findings.md",
+        "hypotheses/h3-forgejo-lfs-baseline/findings.md",
+        "https://manpages.debian.org/testing/git-lfs/git-lfs-prune.1.en.html"
+      ]
+    },
+    {
+      "finding": "Phase the adoption: Phase 1 (this week, 2–4 hours) = Forgejo+LFS + UEGitPlugin + canonical `.gitattributes`. Phase 1.5 = ~50-LoC gossip-based Forgejo host discovery on existing mjolnir-mesh p2p-resilience substrate (one afternoon). Phase 2 = 2-week measurement window. Phase 3 = iroh-blobs custom transfer agent ONLY if triggers fire AND a second always-on peer exists.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h10-phase-the-integration/findings.md",
+        "docs/architecture/p2p-resilience.md"
+      ]
+    },
+    {
+      "finding": "Phase 3 triggers: Forgejo host unreachable >1x/week blocking commits; LFS store >150 GB on the SSD; fresh clone >15 min on LAN; dogfooding/paper opportunity; or the structural signal that the dev box is not always-on (skip directly to Phase 3). The real risk is Phase 1 becoming permanent due to the 'good enough' trap — mitigate with a pre-push size meter, a pre-written Phase 2 assessment doc, and a 6-month timebox spike.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h10-phase-the-integration/findings.md"
+      ]
+    },
+    {
+      "finding": "ProjectBorealis UEGitPlugin is the right editor integration (multi-threaded lock/unlock, local lock cache, auto-checkout, visual indicators, folder-level lock); AVOID Unreal's built-in Git plugin (perf degrades from post-save file scanning per Anchorpoint). Set `r.Editor.SkipSourceControlCheckForEditablePackages = 1` in DefaultEngine.ini. UE 5.3/5.4/5.5 compatibility is medium-confidence and needs direct team verification.",
+      "confidence": "medium",
+      "sources": [
+        "hypotheses/h2-forgejo-lfs-custom-transfer/findings.md",
+        "hypotheses/h3-forgejo-lfs-baseline/findings.md",
+        "https://github.com/ProjectBorealis/UEGitPlugin",
+        "https://www.anchorpoint.app/blog/install-and-configure-gitea-for-lfs"
+      ]
+    },
+    {
+      "finding": "Canonical `.gitattributes` pattern (ProjectBorealis/PBCore production reference): `*.uasset` and `*.umap` get `lock` (lockable); audio/texture/binary assets use plain `lfs` without mandatory locking — locking everything causes unnecessary contention. Web-pipeline formats (glTF/KTX2/basis/bin) should be added alongside Unreal types; locking is typically not needed for regeneration-from-DCC assets.",
+      "confidence": "high",
+      "sources": [
+        "hypotheses/h3-forgejo-lfs-baseline/findings.md",
+        "https://github.com/ProjectBorealis/PBCore/blob/main/.gitattributes"
+      ]
+    },
+    {
+      "finding": "LFS lock scale ceiling: 8,000+ locks took 12–24h to clear on GitHub (rime.red, 'completely unacceptable'); the same source reports 'I've never encountered this issue' on personal Gitea. UEGitPlugin issue #54 documents poor `lfs locks` CLI perf on Windows. Together these imply Forgejo+LFS scaling beyond low-thousands of concurrent locks is unproven — mitigate by locking only `.uasset`/`.umap`, not textures/audio.",
+      "confidence": "medium",
+      "sources": [
+        "hypotheses/h3-forgejo-lfs-baseline/findings.md",
+        "hypotheses/h2-forgejo-lfs-custom-transfer/findings.md",
+        "https://blog.rime.red/git-lfs-or-perforce-for-unreal-in-2024/",
+        "https://github.com/SRombauts/UEGitPlugin"
+      ]
+    }
+  ],
+  "open_questions": [
+    "Is the chosen Forgejo host actually always-on? If it's a sleeping laptop, the Phase 3 trigger fires immediately and the plan re-sequences.",
+    "UE 5.3/5.4/5.5 compatibility for ProjectBorealis UEGitPlugin (or the getnamo fork) — needs a single afternoon of direct verification against the team's target UE version.",
+    "Does this team have a second always-on peer today? Hard prerequisite for Phase 3 to be worth building.",
+    "Forgejo behavior when `lfs.standalonetransferagent` is set and no blob is POSTed to the server — graceful or broken on fallback pulls? Needs a test-instance dry run.",
+    "iroh-blobs 0.96 API churn risk across patch releases — the crate docs warn 'not yet production quality' but the 'stable' 0.35 predates the 0.96 API.",
+    "Dual-hash (SHA256 + BLAKE3) cost on representative assets — e.g. a 4 GB texture benchmark on the team's actual hardware.",
+    "Pi 5 (8 GB) benchmark for Forgejo + LFS + Postgres + CI for 3 concurrent users pushing 500 MB LFS objects.",
+    "Does Forgejo's 'Git Repositories GC' prune unreferenced LFS server-side, or does storage grow unboundedly?",
+    "Perforce upgrade pricing in 2026 (not public), and whether a CI bot consumes a Perforce user seat — only material if Forgejo+LFS fails and Perforce becomes the fallback.",
+    "Paper or demo planned for Mjolnir Mesh? If yes, the 'integrate sooner' argument for Phase 3 strengthens significantly — the iroh-blobs LFS agent is a compelling interop demo."
+  ],
+  "contradictions": [
+    "Lock performance at scale: rime.red observed 8,000+ GitHub LFS locks taking 12–24h to clear ('completely unacceptable'), vs 'I've never encountered this issue' on personal Gitea. Not strictly contradictory (different backends/scales) but together define an unproven ceiling for Forgejo+LFS beyond low-thousands of concurrent locks.",
+    "H1 (git-annex) hypothesis framing claimed 'first-class cross-platform support including Windows' while the same document's evidence shows a structurally degraded Windows story (no symlinks, manual `smudge --update` after stash/reset, no hardlink dedup). Investigation correctly down-weighted its own prior.",
+    "H1 summary initially treats the 10.20251103 'native iroh transport' as significant support for the hypothesis; H1a's deeper reading clarifies it is a QUIC tunnel only with no iroh-blobs involvement. H1a governs the architecture decision.",
+    "WebGPU/web-pipeline + Unreal cross-ecosystem claim (that both coexist cleanly in a single Forgejo repo) is compositional — drawn from broader LFS findings but not directly investigated by any hypothesis. Flagged as medium confidence."
+  ],
+  "hypotheses_explored": 5,
+  "hypotheses_total": 5,
+  "verification_status": "PASS_WITH_WARNINGS",
+  "output_dir": "/Users/dukejones/work/Mjolnir/mjolnir-mesh/docs/research/asset-pipeline-version-control"
+}
