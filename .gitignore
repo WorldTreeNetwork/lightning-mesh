@@ -43,3 +43,8 @@ package-lock.json
 .omc
 /target/
 .omx
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "mjolnir_mesh",
+  "project_id": "2180c922-4a1b-46f1-b48e-c98a88d7fd33"
+}
