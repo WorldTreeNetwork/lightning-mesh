@@ -504,9 +504,11 @@ pub struct SubnetClaim {
 }
 ```
 
-Keyed by CIDR with `/` escaped to `_` (`/subnets/10.42.1.0_24`). Records which mesh node has claimed a given subnet range so other routers don't claim the same range. **Not a routing table** — has no `via_node_id`, no metric, no expiry. Babel (see [babel-routing.md](babel-routing.md)) handles route computation and installation. The CRDT entry exists only to coordinate first-boot subnet claims and survive partition/heal scenarios where two routers may have picked the same /24 independently.
+Keyed by CIDR with `/` escaped to `_` (e.g., `/subnets/10.42.1.0_24` or `/subnets/10.42.0.0_22`). Records which mesh node has claimed a given subnet range so other routers don't claim an overlapping range. **Not a routing table** — has no `via_node_id`, no metric, no expiry. Babel (see [babel-routing.md](babel-routing.md)) handles route computation and installation. The CRDT entry exists only to coordinate first-boot subnet claims and survive partition/heal scenarios where two routers may have picked overlapping ranges independently.
 
-Conflicts (two routers write the same `/subnets/{cidr}`) resolve FWW on `claimed_at` HLC. The loser picks the next free /24 and rewrites its claim.
+The CIDR's prefix length is configurable per router — operators pick the size their site needs (/24 for ≤254 devices, /22 for ~1 000, /20 for ~4 000, /16 for the whole base). See [network-architecture.md](network-architecture.md) "Subnet Allocation for Remote Sites" and the `mjolnir_mesh::alloc` module.
+
+Conflicts (two routers write overlapping `/subnets/{cidr}` entries — at the same prefix or with one containing the other) resolve FWW on `claimed_at` HLC. The loser picks the next free slot at its configured prefix length and rewrites its claim.
 
 ### 10.6 Gossip Message Enum
 

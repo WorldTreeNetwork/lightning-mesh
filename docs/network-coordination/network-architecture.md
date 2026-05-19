@@ -114,29 +114,46 @@ No heartbeat gossip, no route-TTL refresh, no daemon-side stale-route reaping. B
 ## Subnet Allocation for Remote Sites
 
 When a router determines it is starting a new isolated site (no local peers detected within the
-detection window), it claims a /24 from the mesh address space:
+detection window), it claims a subnet from the mesh address space. The operator picks the subnet
+**size**; the allocator picks the **slot**. Larger requests (smaller prefix lengths) are for
+larger sites — a /24 fits 254 devices, /22 fits ~1 000, /20 fits ~4 000, /16 fits ~65 000.
 
-1. Read the CRDT `/subnets/` prefix to enumerate already-claimed subnets
-2. Derive a preferred /24 from a deterministic hash of the router's Iroh NodeId — this reduces
-   collisions without requiring coordination
-3. If the preferred /24 is already claimed, increment until a free one is found
-4. Write to CRDT: `/subnets/{cidr} → { owner_node_id, site_name, claimed_at }`
-5. Configure dnsmasq with that range and begin issuing leases
-6. Add a `redistribute ip {cidr} ge 24 le 24 allow` line to babeld config; SIGHUP babeld
-7. If another router later joins the same physical site, it detects the local peer (see below),
-   abandons its own subnet claim, and joins the existing /24 in Mode 1 instead
+The size is configurable per router. The expected UX is a TUI selector where arrow keys step
+the prefix one bump at a time (`/24 ↔ /23 ↔ /22 ↔ …`), with a label showing the resulting IP
+count. Backed by `mjolnir_mesh::alloc::{pick_subnet, bump_larger_subnet, bump_smaller_subnet,
+usable_hosts}`.
+
+1. Read the CRDT `/subnets/` prefix to enumerate already-claimed subnets (at any size).
+2. Operator chooses a target prefix length (default /24 if unconfigured).
+3. Compute the preferred slot from a deterministic hash of the router's Iroh NodeId. Hash bytes
+   modulo `2^(target_prefix - base_prefix)` index into the candidate slots at the chosen size.
+4. Walk slots from the preferred index. Reject any candidate that **overlaps** an existing claim
+   of any size — a candidate /22 is rejected if it contains a claimed /24, and a candidate /24 is
+   rejected if a containing /22 is already claimed. (CIDR blocks form a tree: overlap reduces to
+   `a.contains(b) || b.contains(a)`.)
+5. Write to CRDT: `/subnets/{cidr} → { owner_node_id, site_name, claimed_at }`.
+6. Configure dnsmasq with that range and begin issuing leases.
+7. Add a `redistribute ip {cidr} ge {prefix} le {prefix} allow` line to babeld config; SIGHUP babeld.
+8. If another router later joins the same physical site, it detects the local peer (see below),
+   abandons its own subnet claim, and joins the existing subnet in Mode 1 instead.
 
 The two-phase approach (derive then check) is optimistic: hash-based derivation makes collisions
-rare, and the CRDT resolves the uncommon case where two routers happen to prefer the same /24.
+rare, and the CRDT resolves the uncommon case where two routers happen to prefer the same slot.
 
 ### Claim Cooldown
 
 A router that determines it needs a new subnet waits 10 seconds before writing the claim to the CRDT. This aligns with the local peer detection window — if a local peer is found during the cooldown, the router abandons the claim and joins the existing subnet instead.
 
-If two routers at different sites claim the same /24 (rare — hash derivation makes collision probability ~1/256):
+If two routers at different sites claim overlapping subnets (rare — hash derivation across the
+slot count at the chosen prefix makes collision probability `~1/N` where N is the slot count):
 - FWW resolves: lower HLC wins the `/subnets/` entry
-- The loser has zero or very few devices (it just started) — it picks the next free /24, rewrites its claim, and updates babeld redistribute config
-- If the loser has already assigned IPs from the contested range, those devices are deauthed and re-DHCP on the new range
+- The loser has zero or very few devices (it just started) — it picks the next free slot at its
+  configured prefix length, rewrites its claim, and updates babeld redistribute config
+- If the loser has already assigned IPs from the contested range, those devices are deauthed and
+  re-DHCP on the new range
+- If no free slot exists at the loser's chosen prefix length, the allocator returns `None` and
+  the daemon must escalate (operator widens the mesh space, picks a smaller subnet size, or fails
+  loud — the library does not silently shrink the request)
 
 ### Late Local Peer Discovery
 
