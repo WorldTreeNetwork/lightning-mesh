@@ -57,71 +57,57 @@ When routers are at different physical locations, they connect through Iroh QUIC
 Alice (10.42.1.50, Router-1 at Site A) → Bob's server (10.42.2.30, Router-5 at Site B)
 
 1. Alice sends to 10.42.2.30 (or bob-server.mesh resolved via DNS)
-2. Router-1 kernel: 10.42.2.0/24 is not local, route table says: dev mj-tun0
-3. Daemon reads packet from mj-tun0 → encapsulates → sends via Iroh to Router-5
-4. Router-5 daemon: decapsulates → writes to its mj-tun0 → kernel delivers to 10.42.2.30
+2. Router-1 kernel: 10.42.2.0/24 is in babeld-installed route table: dev mj-peer-<router5_id>
+3. Daemon reads packet from mj-peer-<router5_id> → encapsulates → sends via Iroh to Router-5
+4. Router-5 daemon: decapsulates → writes to its mj-peer-<router1_id> → kernel delivers to 10.42.2.30
 5. Return traffic follows the same path in reverse
 ```
 
 ### Linux routing setup
 
-Each router runs a TUN device managed by the mjolnir-mesh daemon. Routes are installed as remote
-subnets are discovered via the CRDT:
+Each router exposes one TUN interface **per active Iroh peer**, managed by the mjolnir-mesh daemon. Babel (`babeld`) runs on each router, peers over those TUN interfaces, and installs/withdraws Linux routes as remote subnets become reachable.
 
 ```bash
-# Iroh tunnel interface created by the daemon at startup
-ip link add mj-tun0 type tun
-ip addr add 10.42.0.1/32 dev mj-tun0
-ip link set mj-tun0 up
+# Per-peer Iroh tunnel interface, created on Iroh connect
+ip link add mj-peer-aabbccdd type tun
+ip addr add 10.255.0.1/31 dev mj-peer-aabbccdd  # link-local /31 from reserved 10.255.0.0/16
+ip link set mj-peer-aabbccdd up
 
-# Route to Site B's subnet, installed when Router-5 appears in CRDT
-ip route add 10.42.2.0/24 dev mj-tun0
+# babeld peers on this interface and learns 10.42.2.0/24 from Router-5
+# babeld installs the route directly:
+# ip route add 10.42.2.0/24 dev mj-peer-aabbccdd  ← done by babeld via netlink
 
 # iptables: only forward traffic between known mesh subnets
-iptables -A FORWARD -i mj-tun0 -o br-lan -m set --match-set mesh-subnets dst -j ACCEPT
-iptables -A FORWARD -i br-lan -o mj-tun0 -m set --match-set mesh-subnets dst -j ACCEPT
-iptables -A FORWARD -i mj-tun0 -j DROP
+iptables -A FORWARD -i mj-peer-+ -o br-lan -m set --match-set mesh-subnets dst -j ACCEPT
+iptables -A FORWARD -i br-lan -o mj-peer-+ -m set --match-set mesh-subnets dst -j ACCEPT
+iptables -A FORWARD -i mj-peer-+ -j DROP
 ```
 
-The daemon owns the read-side of `mj-tun0`. Packets read from the TUN are matched against the
-route table CRDT to select the correct Iroh connection, then written into the QUIC stream.
-Incoming packets from Iroh are written back to `mj-tun0` for kernel delivery.
+The daemon owns the read-side of each `mj-peer-<id>` TUN. Packets read from a TUN are encapsulated and sent into the corresponding Iroh QUIC stream; incoming packets from Iroh are written back to the matching TUN for kernel delivery. Forwarding decisions are made by the kernel from babeld-installed routes — the daemon does not maintain its own forwarding table.
+
+See [babel-routing.md](babel-routing.md) for the full Babel integration spec, including babeld config, failure modes, and the rationale for delegating routing to a battle-tested protocol.
 
 ---
 
-## Route Table CRDT
+## Subnet Claim Coordination (CRDT)
 
-Remote subnets are announced via the shared CRDT document:
+The CRDT no longer holds a routing table. It holds a **subnet ownership ledger** used only to prevent two routers from claiming the same /24 at first boot:
 
 ```
-/routes/10.42.1.0_24  → { node_id: "router1_nodeid", via_node_id: "router1_nodeid", site: "site-a", expires: <timestamp> }
-/routes/10.42.2.0_24  → { node_id: "router5_nodeid", via_node_id: "router5_nodeid", site: "site-b", expires: <timestamp> }
+/subnets/10.42.1.0_24  → { owner_node_id: "router1_nodeid", site_name: "site-a", claimed_at: <hlc> }
+/subnets/10.42.2.0_24  → { owner_node_id: "router5_nodeid", site_name: "site-b", claimed_at: <hlc> }
 ```
 
-When a new route appears in the CRDT, the daemon:
-1. Opens (or reuses) an Iroh connection to the announcing `node_id`
-2. Installs the Linux route: `ip route add {subnet} dev mj-tun0`
-3. Updates the internal forwarding table with the Iroh stream for that subnet
+When a router claims a subnet, it writes one entry and reconfigures babeld to redistribute that subnet. Babel handles announcement, propagation, and route installation to all peers. The CRDT is *not* consulted for forwarding decisions.
 
-When a route disappears (router offline or TTL expired), the daemon:
-1. Removes the Linux route: `ip route del {subnet} dev mj-tun0`
-2. Closes the Iroh connection if no remaining routes reference it
-3. DNS entries for that subnet's devices are retained in the CRDT but the hosts may be unreachable
+Conflicts on `/subnets/` (two routers claim the same /24) resolve via HLC first-writer-wins, same rule as IP-lease conflicts. The loser picks the next free /24 and rewrites its claim.
 
-### Stale route prevention
+When a router goes offline:
+- Iroh disconnect tears down the per-peer TUN
+- Babel marks the route unreachable within its hello interval and withdraws it
+- The `/subnets/` entry persists (the subnet is still *claimed*, just not reachable). On the owner's reboot, Babel re-announces; on a graceful permanent departure, the daemon tombstones the entry.
 
-Routes go stale when a remote router dies without a clean disconnect. The daemon defends against
-this through three overlapping mechanisms:
-
-- **Iroh connection state**: The QUIC transport detects peer loss within seconds. When the
-  connection drops, the daemon removes all routes associated with that `node_id` immediately.
-- **Heartbeat gossip**: Routers publish a liveness announcement every 30 seconds. No heartbeat
-  for 90 seconds causes the daemon to mark routes stale and remove them from the Linux table.
-- **Route TTL**: Each CRDT route entry carries an expiry timestamp. The announcing router refreshes
-  the TTL on each heartbeat. Expired entries are removed by any daemon that notices them, a
-  last-write-wins CRDT tombstone handles concurrent deletions cleanly.
-- **Daemon restart**: On startup the daemon rebuilds the route table from the current CRDT state
-  filtered by active Iroh connections, discarding any routes whose gateway is unreachable.
+No heartbeat gossip, no route-TTL refresh, no daemon-side stale-route reaping. Babel handles all of that.
 
 ---
 
@@ -130,13 +116,14 @@ this through three overlapping mechanisms:
 When a router determines it is starting a new isolated site (no local peers detected within the
 detection window), it claims a /24 from the mesh address space:
 
-1. Read the CRDT `/routes/` prefix to enumerate already-claimed subnets
+1. Read the CRDT `/subnets/` prefix to enumerate already-claimed subnets
 2. Derive a preferred /24 from a deterministic hash of the router's Iroh NodeId — this reduces
    collisions without requiring coordination
 3. If the preferred /24 is already claimed, increment until a free one is found
-4. Write to CRDT: `/routes/{subnet} → { node_id, via_node_id, site, expires }`
+4. Write to CRDT: `/subnets/{cidr} → { owner_node_id, site_name, claimed_at }`
 5. Configure dnsmasq with that range and begin issuing leases
-6. If another router later joins the same physical site, it detects the local peer (see below),
+6. Add a `redistribute ip {cidr} ge 24 le 24 allow` line to babeld config; SIGHUP babeld
+7. If another router later joins the same physical site, it detects the local peer (see below),
    abandons its own subnet claim, and joins the existing /24 in Mode 1 instead
 
 The two-phase approach (derive then check) is optimistic: hash-based derivation makes collisions
@@ -147,17 +134,18 @@ rare, and the CRDT resolves the uncommon case where two routers happen to prefer
 A router that determines it needs a new subnet waits 10 seconds before writing the claim to the CRDT. This aligns with the local peer detection window — if a local peer is found during the cooldown, the router abandons the claim and joins the existing subnet instead.
 
 If two routers at different sites claim the same /24 (rare — hash derivation makes collision probability ~1/256):
-- FWW resolves: lower HLC wins the route entry
-- The loser has zero or very few devices (it just started) — it picks the next free /24
+- FWW resolves: lower HLC wins the `/subnets/` entry
+- The loser has zero or very few devices (it just started) — it picks the next free /24, rewrites its claim, and updates babeld redistribute config
 - If the loser has already assigned IPs from the contested range, those devices are deauthed and re-DHCP on the new range
 
 ### Late Local Peer Discovery
 
 If a router claims a subnet and then discovers (via delayed mDNS or gossip) that its site already has one:
-1. Relinquish its route claim (remove `/routes/{subnet}` from CRDT)
-2. Reconfigure dnsmasq to the existing site subnet
-3. Deauth any devices already assigned IPs from the abandoned range
-4. Those devices reconnect and get IPs from the correct subnet
+1. Relinquish its subnet claim (tombstone `/subnets/{cidr}` in CRDT)
+2. Remove the corresponding `redistribute` line from babeld config; SIGHUP babeld
+3. Reconfigure dnsmasq to the existing site subnet
+4. Deauth any devices already assigned IPs from the abandoned range
+5. Those devices reconnect and get IPs from the correct subnet
 
 ---
 
@@ -224,13 +212,12 @@ A device physically moving from Site A to Site B:
 3. Router-5's dnsmasq checks the CRDT hostsfile
 4a. [MVP] Device's MAC has a binding at 10.42.1.x — offer a new IP from Site B's range (10.42.2.x)
     DNS entry updated via CRDT. TCP sessions break; new sessions work immediately.
-4b. [Future] Offer the same IP (10.42.1.50) — Router-5 updates the CRDT route to claim
-    that /32 host route, Router-1 withdraws it. TCP sessions survive.
+4b. [Future] Offer the same IP (10.42.1.50) — Router-5 redistributes a /32 host route
+    via babeld, Router-1 withdraws its /32 advertisement. TCP sessions survive.
 ```
 
 Option (a) is the MVP behavior: simpler implementation, no host-route management, but TCP
-sessions break on roam. Option (b) enables seamless cross-site roaming at the cost of per-device
-route table churn and is deferred to a later milestone.
+sessions break on roam. Option (b) enables seamless cross-site roaming by letting Babel carry per-device /32 routes — natively supported but deferred to a later milestone for operational simplicity.
 
 ---
 
@@ -282,6 +269,7 @@ the underlying transport.
 
 ## References
 
-- CRDT design and hostsfile synchronization: `docs/architecture/dhcp-crdt.md`
-- dnsmasq configuration and lease management: `docs/architecture/dnsmasq-integration.md`
-- Top-level mesh coordination overview: `docs/mesh-network-coordination.md`
+- CRDT design and hostsfile synchronization: `dhcp-crdt.md`
+- dnsmasq configuration and lease management: `dnsmasq-integration.md`
+- Babel routing integration: `babel-routing.md`
+- Top-level mesh coordination overview: `mesh-network-coordination.md`

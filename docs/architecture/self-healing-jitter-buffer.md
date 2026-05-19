@@ -265,7 +265,7 @@ Steps 5–6 are downstream of parakeet-aie progress.
   former: the backend knows whether speculation is cheap for it.
 
 - **Multi-track buffering.** When mjolnir-mesh grows to video and screen-share tracks
-  (see assessment in `mesh-network-coordination.md` and the moq-lite group story), the
+  (see assessment in `../network-coordination/mesh-network-coordination.md` and the moq-lite group story), the
   jitter buffer abstraction probably wants to be generalized — different deadlines,
   different concealment strategies, but the same Redis-style service shape.
 

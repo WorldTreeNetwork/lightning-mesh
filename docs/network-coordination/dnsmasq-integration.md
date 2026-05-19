@@ -316,6 +316,6 @@ The 9 non-selected routers simply discard their tentative allocation per RFC 213
 
 ## References
 
-- CRDT design: `docs/architecture/dhcp-crdt.md`
-- Network architecture: `docs/architecture/network-architecture.md`
-- Top-level overview: `docs/mesh-network-coordination.md`
+- CRDT design: `dhcp-crdt.md`
+- Network architecture: `network-architecture.md`
+- Top-level overview: `mesh-network-coordination.md`

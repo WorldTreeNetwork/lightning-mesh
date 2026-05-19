@@ -4,7 +4,7 @@
 
 This document specifies the design and implementation of the DHCP CRDT layer for mjolnir-mesh. The CRDT is the coordination layer that lets every router in the mesh assign DHCP leases independently while maintaining a consistent, mesh-wide view of device reservations, DNS names, services, and routes — with no central authority.
 
-See [../mesh-network-coordination.md](../mesh-network-coordination.md) for the high-level mesh vision.
+See [mesh-network-coordination.md](mesh-network-coordination.md) for the high-level mesh vision.
 
 ---
 
@@ -53,10 +53,12 @@ The CRDT is a key/value store with a structured namespace:
 /devices/{mac}          — one entry per device, keyed by MAC
 /dns/{hostname}         — hostname → IP mapping for mesh-wide DNS
 /services/{name}        — mDNS-style service announcements
-/routes/{subnet}        — routing table entries
+/subnets/{cidr}         — subnet ownership ledger (claim coordination only, not routing)
 ```
 
-Where `{mac}` is the lowercase colon-separated MAC address (e.g., `aa:bb:cc:dd:ee:ff`), `{hostname}` is lowercase and DNS-safe, `{name}` is the service name, and `{subnet}` is CIDR notation.
+Where `{mac}` is the lowercase colon-separated MAC address (e.g., `aa:bb:cc:dd:ee:ff`), `{hostname}` is lowercase and DNS-safe, `{name}` is the service name, and `{cidr}` is CIDR notation with `/` escaped to `_` (e.g., `10.42.1.0_24`).
+
+**Note:** the `/subnets/` namespace is *not* a routing table — it records which router owns which subnet range so two routers don't claim the same /24 at first boot. Actual route computation, propagation, and installation is delegated to Babel (`babeld`). See [babel-routing.md](babel-routing.md) for the rationale and integration.
 
 ### 2.2 Schema Summary
 
@@ -65,7 +67,7 @@ Where `{mac}` is the lowercase colon-separated MAC address (e.g., `aa:bb:cc:dd:e
 | `/devices/{mac}` | `LeaseEntry`    | MAC      | FWW on IP conflict |
 | `/dns/{hostname}`| `DnsEntry`      | hostname | Last-writer-wins |
 | `/services/{name}` | `ServiceEntry` | name    | Last-writer-wins |
-| `/routes/{subnet}` | `RouteEntry`  | subnet   | Last-writer-wins |
+| `/subnets/{cidr}` | `SubnetClaim`  | CIDR     | FWW (first-writer claims the subnet) |
 
 ### 2.3 Serialization
 
@@ -90,7 +92,7 @@ On receiving an entry from gossip or anti-entropy:
 3. If the key exists and the incoming HLC is **equal or less**, discard (already seen or stale).
 4. If the incoming entry claims an IP already assigned to a **different MAC**, invoke conflict resolution (§5).
 
-This is last-writer-wins for DNS/services/routes, and first-writer-wins (FWW) for the specific case of an IP collision across two different MAC entries.
+This is last-writer-wins for DNS/services, first-writer-wins (FWW) for the specific case of an IP collision across two different MAC entries, and FWW for subnet claims.
 
 ### 3.3 Gossip Replication
 
@@ -341,7 +343,8 @@ enum GossipMessage {
     LeaseRelease { mac: [u8; 6], hlc: HLC },
     DnsUpdate { hostname: String, entry: DnsEntry },
     ServiceUpdate { name: String, entry: ServiceEntry },
-    RouteUpdate { subnet: String, entry: RouteEntry },
+    SubnetClaimUpdate { cidr: String, entry: SubnetClaim },
+    SubnetClaimRelease { cidr: String, hlc: HLC },
 }
 ```
 
@@ -444,10 +447,12 @@ Entries with `wall_clock` more than `MAX_CLOCK_SKEW` (60 seconds) in the future 
 ### 10.2 Lease Entry
 
 ```rust
+use std::net::IpAddr;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaseEntry {
     pub mac: [u8; 6],
-    pub ip: Ipv4Addr,
+    pub ip: IpAddr,            // IpAddr::V4 today; IpAddr::V6 forward-compatible
     pub hostname: Option<String>,
     pub router_id: String,
     pub expiry: u64,
@@ -455,14 +460,14 @@ pub struct LeaseEntry {
 }
 ```
 
-Keyed by MAC (`/devices/aa:bb:cc:dd:ee:ff`). One entry per device. The `ip` field is what dnsmasq will reserve for this MAC. `expiry` is Unix timestamp in seconds; the daemon periodically reaps expired entries and broadcasts `LeaseRelease`.
+Keyed by MAC (`/devices/aa:bb:cc:dd:ee:ff`). One entry per device. The `ip` field uses `std::net::IpAddr` (an enum over `Ipv4Addr` and `Ipv6Addr`) so the data model is IP-version-agnostic. The MVP only writes `IpAddr::V4` values; v6 codepaths in dnsmasq integration are not yet wired up but the schema does not need to change when they are. `expiry` is Unix timestamp in seconds; the daemon periodically reaps expired entries and broadcasts `LeaseRelease`.
 
 ### 10.3 DNS Entry
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsEntry {
-    pub ip: Ipv4Addr,
+    pub ip: IpAddr,
     pub mac: [u8; 6],
 }
 ```
@@ -475,7 +480,7 @@ Keyed by hostname (`/dns/laptop`). Derived from the corresponding `LeaseEntry` w
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceEntry {
     pub hostname: String,
-    pub ip: Ipv4Addr,
+    pub ip: IpAddr,
     pub port: u16,
     pub protocol: String,
     pub txt: HashMap<String, String>,
@@ -485,19 +490,21 @@ pub struct ServiceEntry {
 
 Keyed by service name (`/services/printer._ipp._tcp`). Used for mDNS-style service discovery across the mesh. Written by the daemon when a service is announced; gossipped to all routers.
 
-### 10.5 Route Entry
+### 10.5 Subnet Claim
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RouteEntry {
-    pub node_id: String,
-    pub via_node_id: String,
-    pub site: Option<String>,
-    pub expires: u64,
+pub struct SubnetClaim {
+    pub cidr: IpNet,             // e.g. 10.42.1.0/24
+    pub owner_node_id: String,
+    pub site_name: Option<String>,
+    pub claimed_at: HLC,
 }
 ```
 
-Keyed by subnet (`/routes/192.168.2.0/24`). Records which mesh node owns a subnet and via which next-hop node it is reachable. Updated by the routing layer; gossipped alongside lease updates.
+Keyed by CIDR with `/` escaped to `_` (`/subnets/10.42.1.0_24`). Records which mesh node has claimed a given subnet range so other routers don't claim the same range. **Not a routing table** — has no `via_node_id`, no metric, no expiry. Babel (see [babel-routing.md](babel-routing.md)) handles route computation and installation. The CRDT entry exists only to coordinate first-boot subnet claims and survive partition/heal scenarios where two routers may have picked the same /24 independently.
+
+Conflicts (two routers write the same `/subnets/{cidr}`) resolve FWW on `claimed_at` HLC. The loser picks the next free /24 and rewrites its claim.
 
 ### 10.6 Gossip Message Enum
 
@@ -508,7 +515,8 @@ enum GossipMessage {
     LeaseRelease { mac: [u8; 6], hlc: HLC },
     DnsUpdate { hostname: String, entry: DnsEntry },
     ServiceUpdate { name: String, entry: ServiceEntry },
-    RouteUpdate { subnet: String, entry: RouteEntry },
+    SubnetClaimUpdate { cidr: String, entry: SubnetClaim },
+    SubnetClaimRelease { cidr: String, hlc: HLC },
 }
 ```
 
@@ -667,6 +675,7 @@ If two devices present the same MAC (rare but possible with MAC randomization bu
 - **dnsmasq addn-hosts**: `man 8 dnsmasq`, `--addn-hosts` option.
 - **Hybrid Logical Clocks**: Kulkarni et al., "Logical Physical Clocks and Consistent Snapshots in Globally Distributed Databases", HotDeps 2014.
 - **Related docs**:
-  - `../mesh-network-coordination.md` — high-level mesh vision
+  - `mesh-network-coordination.md` — high-level mesh vision
   - [§8 Gossip Protocol](#8-gossip-protocol) — iroh gossip transport details (this document)
-  - `network-architecture.md` — route entry lifecycle and cross-site routing
+  - `network-architecture.md` — subnet claim lifecycle and cross-site packet flow
+  - `babel-routing.md` — Babel integration; rationale for delegating routing

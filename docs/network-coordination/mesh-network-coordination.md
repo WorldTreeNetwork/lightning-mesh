@@ -64,8 +64,8 @@ Each site has its own subnet. Routers connect via Iroh QUIC tunnels.
           [devices]                              [devices]
 ```
 
-- Each site has its own subnet; cross-site routing via Iroh tunnels
-- Route table synced via CRDT (`/routes/{subnet}`)
+- Each site has its own subnet; cross-site routing via **Babel** over Iroh tunnels
+- Subnet ownership coordinated via CRDT (`/subnets/{cidr}`); routes computed and installed by `babeld`
 - DNS synced mesh-wide — any device resolves any hostname on any site
 - mDNS forwarded via avahi reflector for `.local` names
 
@@ -125,15 +125,15 @@ which is not available as a shipped crate):
 | Local state | In-memory HashMap + optional disk persistence (SD card) |
 | Hot path | iroh-gossip broadcast to all peers |
 | Catch-up | Anti-entropy full state exchange on reconnect |
-| Conflict rule | FWW + HLC for leases; last-write-wins for DNS/services/routes |
+| Conflict rule | FWW + HLC for leases and subnet claims; last-write-wins for DNS/services |
 
 **Schema:**
 
 ```
-/devices/{mac}       →  { ip, hostname, router_id, expiry }
+/devices/{mac}       →  { ip, hostname, router_id, expiry }       # ip: IpAddr (v4 today, v6-ready)
 /dns/{hostname}      →  { ip, mac }
 /services/{name}     →  { hostname, ip, port, protocol, txt }
-/routes/{subnet}     →  { node_id, via_node_id, site, expires }
+/subnets/{cidr}      →  { owner_node_id, site_name, claimed_at }  # claim ledger, NOT a routing table
 ```
 
 **Anti-entropy**: When a router rejoins after a partition, it performs a full
@@ -228,7 +228,7 @@ The mesh becomes a unified namespace spanning infrastructure and clients.
 **Phase 2 — Multi-router local mesh**: L2 bridging, multi-dnsmasq coordination,
 conflict resolution via deauth, roaming.
 
-**Phase 3 — Remote sites**: Iroh tunnel routing, cross-site DNS, route table CRDT.
+**Phase 3 — Remote sites**: per-peer Iroh tunnel interfaces, Babel for cross-site route computation, subnet claim CRDT, cross-site DNS.
 
 **Phase 4 — Services and discovery**: Service registration, mDNS forwarding,
 avahi integration.
@@ -257,9 +257,10 @@ dependencies align.
 
 ## Architecture Details
 
-- **CRDT design**: `docs/architecture/dhcp-crdt.md`
-- **Network topology**: `docs/architecture/network-architecture.md`
-- **dnsmasq integration**: `docs/architecture/dnsmasq-integration.md`
+- **CRDT design**: `dhcp-crdt.md`
+- **Network topology**: `network-architecture.md`
+- **dnsmasq integration**: `dnsmasq-integration.md`
+- **Babel routing integration**: `babel-routing.md`
 - **Vision**: `docs/vision/why-decentralized-mesh.md`
 
 ## Crate Architecture
@@ -298,6 +299,6 @@ For newcomers to the project:
 1. [Why Decentralized Mesh](vision/why-decentralized-mesh.md) — motivation and big picture
 2. [This document](mesh-network-coordination.md) — architecture overview
 3. [Network Architecture](architecture/network-architecture.md) — local vs remote modes, routing
-4. [DHCP CRDT](architecture/dhcp-crdt.md) — distributed state design and Rust types
-5. [dnsmasq Integration](architecture/dnsmasq-integration.md) — practical integration reference
+4. [DHCP CRDT](dhcp-crdt.md) — distributed state design and Rust types
+5. [dnsmasq Integration](dnsmasq-integration.md) — practical integration reference
 6. [Mjolnir Integration](vision/mjolnir-integration.md) — how the mesh ties into Mjolnir's microVM platform

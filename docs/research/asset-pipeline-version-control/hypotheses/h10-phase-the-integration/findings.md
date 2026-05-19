@@ -134,7 +134,7 @@ If "was Forgejo the bottleneck more than once?" = yes after 2 weeks, Phase 3 mov
 
 The spectrum between "do nothing mesh-related" and "write a full LFS custom transfer agent" has cheap, immediately useful middle ground.
 
-**Option A — Gossip the Forgejo host's address via existing Mjolnir gossip (~50 LoC).** Existing gossip layer (see `docs/architecture/p2p-resilience.md`). Add `ForgejoAnnounce { url: String, host_id: NodeId }`. Host broadcasts once/minute; peers update local `.lfsconfig` override. Artists never update config when LAN IP changes. **One afternoon.**
+**Option A — Gossip the Forgejo host's address via existing Mjolnir gossip (~50 LoC).** Existing gossip layer (see `docs/network-coordination/p2p-resilience.md`). Add `ForgejoAnnounce { url: String, host_id: NodeId }`. Host broadcasts once/minute; peers update local `.lfsconfig` override. Artists never update config when LAN IP changes. **One afternoon.**
 
 **Option B — Fallback mirror via `git remote` + LFS URL override (0 LoC, config only).** Second git remote pointing at cloud backup. `git lfs fetch --all` nightly pushes LFS to mirror. Down-Forgejo fallback via pure Git config. Costs cloud storage; cold backup only.
 
@@ -150,7 +150,7 @@ The spectrum between "do nothing mesh-related" and "write a full LFS custom tran
 
 ## Sources
 
-- [1] `docs/architecture/p2p-resilience.md` — structured gossip layer; Option A feasible on existing substrate
+- [1] `docs/network-coordination/p2p-resilience.md` — structured gossip layer; Option A feasible on existing substrate
 - [2] `docs/plans/initiatives/dual-layer-architecture.md` — Iroh + MoQ primary focus; supports opportunity-cost argument
 - [3] Hypothesis context (H10 brief) — team constraints, artist profile, Windows requirement
 - [4] https://forgejo.org/docs/latest/admin/config-cheat-sheet/

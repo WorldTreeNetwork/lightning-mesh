@@ -117,10 +117,10 @@ When Mjolnir spawns a VM with `enable_iroh: true`, the host registers it in the 
 
 ### Route Advertisement
 
-The Mjolnir host advertises its VM subnet range (10.200.0.0/10 or a narrower range) in the CRDT route table:
+The Mjolnir host advertises its VM subnet range (10.200.0.0/10 or a narrower range) in the CRDT subnet claim ledger (Babel handles actual route propagation):
 
 ```
-/routes/10.200.0.0_10  → { node_id: host_node_id, via_node_id: host_node_id, expires: <timestamp> }
+/subnets/10.200.0.0_10  → { owner_node_id: host_node_id, site_name: "vm-host", claimed_at: <hlc> }
 ```
 
 Other routers read this and install routes via Iroh tunnels to reach VMs. Devices on any router can then reach any VM by IP (or hostname via DNS).
@@ -238,6 +238,6 @@ The gateway is for reach. The mesh is for performance and sovereignty.
 ## References
 
 - [Why Decentralized Mesh Networking](why-decentralized-mesh.md) — Motivation and vision for mjolnir-mesh
-- [Network Architecture](../architecture/network-architecture.md) — CRDT, routing, subnet allocation
-- [CRDT Design](../architecture/dhcp-crdt.md) — Conflict-free replicated data for mesh state
+- [Network Architecture](../network-coordination/network-architecture.md) — CRDT, routing, subnet allocation
+- [CRDT Design](../network-coordination/dhcp-crdt.md) — Conflict-free replicated data for mesh state
 - [Mjolnir Documentation](https://mjolnir.local) — VM orchestration, snapshots, MCP tools

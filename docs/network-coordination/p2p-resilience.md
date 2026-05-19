@@ -5,7 +5,7 @@ DNS, routing, and service discovery are all CRDT-synchronized across mesh nodes.
 doc analyzes where centralization still exists, what the failure modes are, and what
 the roadmap looks like for improving resilience.
 
-See [mesh-network-coordination.md](../../mesh-network-coordination.md) for the full
+See [mesh-network-coordination.md](mesh-network-coordination.md) for the full
 architecture and [mesh-network-crdt.md](mesh-network-crdt.md) for the CRDT data model.
 
 ---
@@ -54,8 +54,7 @@ may not be visible on all nodes immediately (eventual consistency).
 
 ### Routing
 
-The route table is CRDT-synced. Each router advertises its own subnet; all routers
-learn all routes. A node going offline does not break routing for other subnets.
+Subnet ownership is CRDT-synced (`/subnets/{cidr}` claim ledger). Each router redistributes its own subnet via Babel (`babeld`), and Babel computes loop-free cross-site routes over per-peer Iroh tunnels. A node going offline causes Babel to withdraw its routes within seconds; other subnets are unaffected. See `babel-routing.md`.
 
 **Centralization:** None. Routes are additive CRDTs — removal requires tombstoning,
 which is propagated on rejoin.
@@ -171,7 +170,7 @@ requirement entirely for well-known mesh names.
 | Ticket bootstrap | Any peer can mint; multi-addr fallback | Done |
 | DHCP coordination | CRDT, no single server | Planned |
 | DNS | CRDT-replicated | Planned |
-| Routing | CRDT-synced route table | Planned |
+| Routing | Babel over per-peer Iroh tunnels; CRDT for subnet claims only | Planned |
 | Service discovery | CRDT, tied to leases | Planned |
 | Gossip | iroh-gossip, fully P2P | Done |
 | NAT traversal | n0 relay (external dep) | Accepted / self-hostable |

@@ -191,7 +191,7 @@ Five hypotheses explored (H1, H2, H3, H4, H10) plus one sub-hypothesis (H1a) for
 - [15] `hypotheses/h4-perforce-free-tier/findings.md` §5 The "Two VCSes" Problem — option table; recommendation for ≤5 people to keep everything in Perforce, not split.
 - [16] `hypotheses/h4-perforce-free-tier/findings.md` §8 Mjolnir Mesh + Perforce — TCP-over-QUIC feasibility with WireGuard as simpler alternative; Helix Proxy (`p4p`) caching; residential-NAT use case.
 - [17] `hypotheses/h10-phase-the-integration/findings.md` §Evidence — steel-man for both "adopt now" and "integrate now," phase-triggers table, risk inventory (Phase 1 becoming permanent trap), minimal Phase 1 setup script, Phase 2 assessment plan, low-hanging Mjolnir integrations (gossip-based Forgejo discovery as Option A). External sources:
-    - `docs/architecture/p2p-resilience.md`
+    - `docs/network-coordination/p2p-resilience.md`
     - `docs/plans/initiatives/dual-layer-architecture.md`
     - `https://forgejo.org/docs/latest/admin/config-cheat-sheet/`
     - `https://git-lfs.com`

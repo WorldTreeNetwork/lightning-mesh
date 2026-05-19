@@ -115,7 +115,7 @@ The mesh layer means VMs can be spawned on any node and be instantly reachable b
 mjolnir-mesh is in active development. The Iroh-based mesh node exists (`crates/mjolnir-node`), the MoQ media layer is scaffolded (`crates/mjolnir-moq`), and the CRDT/DHCP/DNS coordination layer is designed and documented. Next: implementation of the CRDT store and dnsmasq integration.
 
 ## References
-- Technical overview: docs/mesh-network-coordination.md
-- CRDT design: docs/architecture/dhcp-crdt.md
-- Network architecture: docs/architecture/network-architecture.md
-- dnsmasq integration: docs/architecture/dnsmasq-integration.md
+- Technical overview: docs/network-coordination/mesh-network-coordination.md
+- CRDT design: docs/network-coordination/dhcp-crdt.md
+- Network architecture: docs/network-coordination/network-architecture.md
+- dnsmasq integration: docs/network-coordination/dnsmasq-integration.md
