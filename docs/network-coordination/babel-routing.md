@@ -120,8 +120,8 @@ Alice (10.42.1.50, Site A, Router-1) → wiki.mesh (10.42.2.30, Site B, Router-5
 1. Alice resolves wiki.mesh → 10.42.2.30 via local dnsmasq (CRDT-synced DNS)
 2. Alice sends to 10.42.2.30
 3. Router-1 kernel: 10.42.2.0/24 is in Babel's installed route table → mj-peer-eeff0011
-4. Daemon reads packet from mj-peer-eeff0011 → encapsulates in Iroh QUIC stream → Router-5
-5. Router-5 daemon: decapsulates → writes to its mj-peer-aabbccdd → kernel delivers to 10.42.2.30
+4. Daemon reads packet from mj-peer-eeff0011 → wraps in an Iroh QUIC datagram (one IP packet per datagram, unreliable, no retransmit — TCP/app layer handles loss) → Router-5
+5. Router-5 daemon: receives datagram → writes payload to its mj-peer-aabbccdd → kernel delivers to 10.42.2.30
 6. Return path symmetric, Babel having advertised 10.42.1.0/24 from Router-1
 ```
 

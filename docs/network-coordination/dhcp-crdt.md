@@ -411,6 +411,8 @@ Even without reconnects, routers run a periodic anti-entropy sweep every 30 seco
 
 ## 10. Rust Types
 
+> **Implementation status note.** Types in this section marked ✅ exist in `crates/mjolnir-mesh/src/crdt/` today (HLC, LeaseEntry, DnsEntry, ServiceEntry, SubnetClaim, GossipMessage, plus the merge helpers). The `CrdtStore` trait (§10.8), the `DhcpScriptHandler` (§10.9), and the lease-conflict path described in §5.4 are designed but not yet implemented — they belong to the next epic (daemon wiring: iroh-gossip ↔ store ↔ dnsmasq ↔ hostapd ↔ babeld supervisor). Existing implementation is library-shaped (pure data + pure functions); the daemon glue is the lane that hasn't shipped yet.
+
 ### 10.1 HLC
 
 ```rust

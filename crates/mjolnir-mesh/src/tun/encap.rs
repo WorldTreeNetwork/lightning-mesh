@@ -35,6 +35,14 @@ pub enum EncapError {
 ///
 /// `tun_read` reads IP frames; `tun_write` writes IP frames. They are typically
 /// the read/write halves of the same TUN device.
+///
+/// **Important invariant:** each call to `tun_read.read()` must return exactly
+/// one complete IP packet — this is the TUN device guarantee from the Linux
+/// kernel and is preserved by the `tun` crate. The loop translates one read
+/// into one Iroh datagram. Byte-stream readers (e.g. `tokio::io::duplex`) do
+/// **not** preserve packet boundaries and will coalesce small writes into
+/// large reads, producing oversized datagrams and lost framing. Such readers
+/// are fine for single-packet unit tests but must not be used in production.
 pub fn spawn_encap_pair<R, W, C>(
     mut tun_read: R,
     mut tun_write: W,

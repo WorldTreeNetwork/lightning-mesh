@@ -28,6 +28,9 @@ pub fn pick_subnet(
         16,
         "pick_subnet currently requires a /16 base"
     );
+    // u16 widening: `preferred + offset` stays ≤ 510, so the `% 256 as u8`
+    // truncation is well-defined. Do not narrow this back to u8 — it would
+    // wrap silently mid-walk.
     let preferred = blake3::hash(node_id.as_bytes()).as_bytes()[0] as u16;
     let base_octets = base.network().octets();
     for offset in 0u16..256 {
