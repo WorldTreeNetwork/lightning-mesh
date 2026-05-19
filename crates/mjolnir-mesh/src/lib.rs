@@ -1,3 +1,5 @@
+pub mod alloc;
+pub mod claim_cooldown;
 pub mod crdt;
 pub mod tun;
 

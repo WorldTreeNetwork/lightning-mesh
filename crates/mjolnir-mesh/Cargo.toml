@@ -11,11 +11,12 @@ postcard.workspace = true
 ipnet = { workspace = true }
 blake3.workspace = true
 thiserror.workspace = true
+async-trait = "0.1"
+bytes.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.21"
 tun = "0.8"
-tokio.workspace = true
