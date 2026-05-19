@@ -44,6 +44,7 @@ ipnet = { version = "2", features = ["serde"] }
 
 # utilities
 blake3 = "1"
+thiserror = "2"
 futures-lite = "2"
 anyhow = "1"
 tracing = "0.1"
