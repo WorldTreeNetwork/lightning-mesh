@@ -1739,6 +1739,9 @@ name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "iri-string"
@@ -2364,6 +2367,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+]
+
+[[package]]
+name = "mjolnir-mesh"
+version = "0.1.0"
+dependencies = [
+ "ipnet",
+ "postcard",
+ "serde",
 ]
 
 [[package]]

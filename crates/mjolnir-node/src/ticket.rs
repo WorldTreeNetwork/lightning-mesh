@@ -22,6 +22,7 @@ pub struct MeshTicket {
     pub topic_id: [u8; 32],
 }
 
+#[allow(dead_code)]
 impl MeshTicket {
     /// Create a ticket with a single bootstrap address.
     pub fn new(name: String, addr: EndpointAddr) -> Self {

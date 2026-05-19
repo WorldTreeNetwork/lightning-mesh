@@ -1,0 +1,11 @@
+[package]
+name = "mjolnir-mesh"
+description = "mjolnir-mesh: networking library for the mesh substrate (CRDT, gossip, Babel integration)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+postcard.workspace = true
+ipnet = { workspace = true }

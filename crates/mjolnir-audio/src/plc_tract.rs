@@ -135,8 +135,7 @@ mod tests {
         let mut out = vec![0i16; cfg.frame_size() * cfg.channels as usize];
         let err = plc
             .decode_lost(None, &mut out)
-            .err()
-            .expect("decode_lost is intentionally not wired yet");
+            .expect_err("decode_lost is intentionally not wired yet");
         assert!(
             format!("{err}").contains("no PLC model architecture wired"),
             "error must clearly say the impl is not wired"

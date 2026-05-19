@@ -39,6 +39,9 @@ serde = { version = "1", features = ["derive"] }
 data-encoding = "2"
 rand = "0.9"
 
+# network types
+ipnet = { version = "2", features = ["serde"] }
+
 # utilities
 blake3 = "1"
 futures-lite = "2"

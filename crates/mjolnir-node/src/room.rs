@@ -250,10 +250,10 @@ async fn handle_peer_discovered(
     // Share our full peer list with the mesh so the new peer (and others)
     // can discover all existing peers transitively.
     let peer_list: Vec<EndpointAddr> = peers.values().cloned().collect();
-    if let Ok(msg) = GossipMessage::PeerList(peer_list).serialize() {
-        if let Err(e) = sender.broadcast(msg).await {
-            warn!("failed to broadcast peer list: {e}");
-        }
+    if let Ok(msg) = GossipMessage::PeerList(peer_list).serialize()
+        && let Err(e) = sender.broadcast(msg).await
+    {
+        warn!("failed to broadcast peer list: {e}");
     }
 
     // Deterministic dial tiebreak. With a single bidi stream per pair we

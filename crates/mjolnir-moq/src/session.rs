@@ -63,6 +63,12 @@ pub struct MoqBridge {
     origin: OriginProducer,
 }
 
+impl Default for MoqBridge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MoqBridge {
     /// Create a new MoQ bridge with a fresh Origin.
     pub fn new() -> Self {
