@@ -98,6 +98,42 @@ pub fn pick_subnet(
     None
 }
 
+/// Pick a free subnet of `target_prefix_len`, automatically falling back to
+/// progressively smaller subnets (toward [`SMALLEST_DEVICE_PREFIX`]) when the
+/// requested size cannot be placed.
+///
+/// This is the graceful-degradation wrapper around [`pick_subnet`]. Because the
+/// address space fragments, a request can fail even with plenty of free
+/// addresses (no contiguous, aligned slot of that size remains). Rather than
+/// hard-failing, this hands back the largest subnet that *does* fit at or below
+/// the request. Inspect the returned [`Ipv4Net`]'s `prefix_len()` to see the
+/// size actually granted: it is always `>= target_prefix_len`, i.e. never
+/// larger than requested.
+///
+/// Returns `None` only when nothing fits all the way down to the `/30` floor.
+///
+/// `target_prefix_len` must satisfy `base.prefix_len() <= target_prefix_len <= 32`
+/// (same contract as [`pick_subnet`]).
+pub fn pick_subnet_or_smaller(
+    node_id: &str,
+    claimed: &HashSet<Ipv4Net>,
+    base: Ipv4Net,
+    target_prefix_len: u8,
+) -> Option<Ipv4Net> {
+    let mut prefix = target_prefix_len;
+    loop {
+        if let Some(net) = pick_subnet(node_id, claimed, base, prefix) {
+            return Some(net);
+        }
+        // Step toward a smaller subnet; `None` means we've hit the /30 floor
+        // and nothing fits.
+        match bump_smaller_subnet(prefix) {
+            Some(next) => prefix = next,
+            None => return None,
+        }
+    }
+}
+
 /// True if `candidate` overlaps any subnet in `claimed`. Because CIDR blocks
 /// nest cleanly, "overlap" reduces to "one contains the other".
 fn overlaps_any(candidate: &Ipv4Net, claimed: &HashSet<Ipv4Net>) -> bool {
@@ -297,6 +333,50 @@ mod tests {
         let n = pick_subnet("tiny-site", &empty(), DEFAULT_MESH_SPACE, 30).unwrap();
         assert_eq!(n.prefix_len(), 30);
         assert_eq!(usable_hosts(30), 2);
+    }
+
+    // --- pick_subnet_or_smaller (auto-downgrade) ---
+
+    #[test]
+    fn or_smaller_returns_requested_when_it_fits() {
+        let n = pick_subnet_or_smaller("node-a", &empty(), DEFAULT_MESH_SPACE, 24).unwrap();
+        assert_eq!(n.prefix_len(), 24, "should grant the requested size when free");
+    }
+
+    #[test]
+    fn or_smaller_downgrades_to_largest_that_fits() {
+        // One /24 claimed makes a /16 impossible, but the other /17 half is
+        // free — so the request for /16 should degrade to a /17, the largest
+        // size that still fits.
+        let mut claimed = HashSet::new();
+        claimed.insert(Ipv4Net::new(Ipv4Addr::new(10, 42, 7, 0), 24).unwrap());
+        let n = pick_subnet_or_smaller("only-site", &claimed, DEFAULT_MESH_SPACE, 16).unwrap();
+        assert_eq!(n.prefix_len(), 17, "should degrade /16 -> /17");
+        assert!(!overlaps_any(&n, &claimed), "downgraded subnet must not overlap");
+    }
+
+    #[test]
+    fn or_smaller_never_returns_larger_than_requested() {
+        // Empty space could fit a /16, but a /28 request must stay /28.
+        let n = pick_subnet_or_smaller("node-b", &empty(), DEFAULT_MESH_SPACE, 28).unwrap();
+        assert_eq!(n.prefix_len(), 28);
+        assert!(n.prefix_len() >= 28, "never larger (smaller prefix number) than requested");
+    }
+
+    #[test]
+    fn or_smaller_returns_none_when_nothing_fits() {
+        // Claim every /24 in the /16: no slot of any size down to /30 is free.
+        let mut claimed = HashSet::new();
+        let base_octets = DEFAULT_MESH_SPACE.network().octets();
+        for idx in 0u8..=255 {
+            claimed.insert(
+                Ipv4Net::new(Ipv4Addr::new(base_octets[0], base_octets[1], idx, 0), 24).unwrap(),
+            );
+        }
+        assert_eq!(
+            pick_subnet_or_smaller("any-node", &claimed, DEFAULT_MESH_SPACE, 24),
+            None
+        );
     }
 
     // --- usable_hosts / total_addresses ---
