@@ -1,0 +1,12 @@
+# Keep the build context small and the cross-build reproducible.
+# Cargo rebuilds inside the container, so host build artifacts must not leak in.
+target/
+node_modules/
+.git/
+.beads/
+.omc/
+.omx/
+.claude/
+docs/
+deploy/mikrotik/*.tar
+*.key

@@ -14,29 +14,36 @@ set -euo pipefail
 BIN="${1:-mjolnir-meshd}"
 IMAGE="mjolnir-meshd:armv7"
 OUT_TAR="deploy/mikrotik/${BIN}-armv7.tar"
+# RouterOS-ready tar (classic docker-save layout, uncompressed layers).
+ROS_TAR="deploy/mikrotik/${BIN}-ros.tar"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 FEATURES="${FEATURES:-daemon}"
 
-echo ">> building ${IMAGE} (linux/arm/v7, bin=${BIN}, features=${FEATURES})"
+echo ">> building ${IMAGE} -> ${OUT_TAR} (linux/arm/v7, bin=${BIN}, features=${FEATURES})"
 # buildx is required to force the arm/v7 platform on a non-arm host.
+#
+# Output via the buildkit `docker` exporter (type=docker) — this writes a
+# legacy docker-archive tarball (root manifest.json referencing Config+Layers),
+# which RouterOS /container can import. Do NOT use `--load` + `docker save`:
+# on Docker with the containerd image store that emits an OCI-layout tar, which
+# RouterOS rejects with "no config found in manifest".
 docker buildx build \
   --platform linux/arm/v7 \
   --build-arg "BIN=${BIN}" \
   --build-arg "FEATURES=${FEATURES}" \
   -f deploy/mikrotik/Dockerfile \
   -t "${IMAGE}" \
-  --load \
+  --output "type=docker,dest=${OUT_TAR}" \
   .
 
-echo ">> exporting image to ${OUT_TAR}"
-# RouterOS /container imports a 'docker save' tar via file=. If your RouterOS
-# version expects a flattened root-fs tar instead, swap to:
-#   docker create --platform linux/arm/v7 "${IMAGE}" | xargs -I{} docker export {} -o "${OUT_TAR}"
-# (verify against your RouterOS version's container docs — see the runbook).
-docker save "${IMAGE}" -o "${OUT_TAR}"
+echo ">> repacking to RouterOS-ready format -> ${ROS_TAR}"
+# buildkit emits gzip layers in blobs/sha256/ which RouterOS rejects
+# ("could not load next layer"). Repack to classic uncompressed docker-save.
+bash "$(dirname "${BASH_SOURCE[0]}")/repack-docker-archive.sh" "${OUT_TAR}" "${ROS_TAR}" "${IMAGE}"
 
-echo ">> done: ${OUT_TAR}"
-echo "   size: $(du -h "${OUT_TAR}" | cut -f1)"
+echo ">> done."
+echo "   build tar : ${OUT_TAR}  ($(du -h "${OUT_TAR}" | cut -f1))"
+echo "   UPLOAD THIS -> ${ROS_TAR}  ($(du -h "${ROS_TAR}" | cut -f1))"

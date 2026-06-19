@@ -67,6 +67,10 @@ enum Command {
         /// Address blob printed by the peer's `id` or `listen`.
         addr: String,
     },
+    /// Probe whether a TUN device can be created in this environment (e.g.
+    /// inside a RouterOS container). Creates a throwaway /31 link and tears it
+    /// down. This is the gating check for the L3 data plane (P1).
+    TunTest,
 }
 
 #[tokio::main]
@@ -78,6 +82,12 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // tun-test needs no iroh endpoint — handle it before binding one.
+    if let Command::TunTest = cli.command {
+        return run_tun_test().await;
+    }
+
     let endpoint = build_endpoint(cli.secret_file.as_deref(), cli.no_relay, cli.bind).await?;
 
     match cli.command {
@@ -87,8 +97,41 @@ async fn main() -> Result<()> {
         }
         Command::Listen => run_listen(endpoint, cli.no_relay).await?,
         Command::Connect { addr } => run_connect(endpoint, &addr).await?,
+        Command::TunTest => unreachable!("handled above"),
     }
     Ok(())
+}
+
+/// Probe TUN-device creation — the gating check for running the L3 data plane
+/// inside a RouterOS container (needs /dev/net/tun + CAP_NET_ADMIN).
+async fn run_tun_test() -> Result<()> {
+    use mjolnir_mesh::tun::PeerInterface;
+    use std::net::Ipv4Addr;
+
+    // Throwaway /31 in the reserved link block.
+    let self_addr = Ipv4Addr::new(10, 255, 0, 0);
+    let peer_addr = Ipv4Addr::new(10, 255, 0, 1);
+
+    info!("tun-test: attempting to create a TUN device…");
+    match PeerInterface::create("tuntest0", self_addr, peer_addr).await {
+        Ok(iface) => {
+            println!(
+                "TUN OK: created {} ({} <-> {})",
+                iface.name(),
+                iface.self_addr(),
+                iface.peer_addr()
+            );
+            match iface.close().await {
+                Ok(()) => println!("TUN teardown OK — the L3 data plane is viable here"),
+                Err(e) => println!("TUN created but teardown failed: {e}"),
+            }
+            Ok(())
+        }
+        Err(e) => {
+            println!("TUN FAILED: {e}");
+            anyhow::bail!("tun-test failed: {e}")
+        }
+    }
 }
 
 /// Build an iroh endpoint with a persisted (or ephemeral) identity. Relays are

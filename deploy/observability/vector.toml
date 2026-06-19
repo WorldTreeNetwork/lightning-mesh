@@ -1,0 +1,50 @@
+# Vector config for the fleet log-aggregation box (beads mjolnir-mesh-4eo).
+#
+# Architecture:
+#   daemon stdout (12-factor) -> RouterOS in-memory log
+#     -> RouterOS remote-syslog action (UDP/TCP 514) -> THIS Vector instance
+#
+# This is a STARTER config: a syslog source + a console/file sink so you can
+# see logs land the moment the box is up. Swap/extend the sink (Loki, S3,
+# Elasticsearch, etc.) once the flow is verified.
+#
+# RouterOS side (per router), pointing at this box's IP:
+#   /system/logging/action/add name=remote target=remote remote=<box-ip> remote-port=514
+#   /system/logging/add topics=container action=remote
+#   # add more topics as needed: info,error,warning,critical
+
+# --- source: receive RouterOS remote syslog ---
+[sources.routeros]
+type = "syslog"
+address = "0.0.0.0:514"
+mode = "udp"          # RouterOS remote syslog defaults to UDP; use "tcp" if you switch it
+
+# --- transform: tag by source host so multiple routers are distinguishable ---
+[transforms.tag]
+type = "remap"
+inputs = ["routeros"]
+source = '''
+.fleet = "mjolnir-mesh"
+# .hostname is populated by the syslog source from the sending router
+'''
+
+# --- sink: start simple. Console for live tailing... ---
+[sinks.console]
+type = "console"
+inputs = ["tag"]
+encoding.codec = "json"
+
+# --- ...and a per-host file on the box for retention. ---
+[sinks.files]
+type = "file"
+inputs = ["tag"]
+path = "/var/log/mjolnir/{{ host }}.log"
+encoding.codec = "json"
+
+# TODO when the flow is verified, add a real backend, e.g.:
+# [sinks.loki]
+# type = "loki"
+# inputs = ["tag"]
+# endpoint = "http://localhost:3100"
+# labels.host = "{{ host }}"
+# labels.fleet = "mjolnir-mesh"

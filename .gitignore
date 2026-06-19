@@ -48,3 +48,6 @@ package-lock.json
 .dolt/
 *.db
 .beads-credential-key
+
+# MikroTik container build artifacts
+deploy/mikrotik/*.tar

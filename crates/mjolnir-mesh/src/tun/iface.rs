@@ -35,7 +35,8 @@ impl PeerInterface {
         // We create the device but don't need the handle for this bead
         // (US-005 will use it for packet I/O). The device persists in the
         // kernel as long as we hold the tun::Device handle, so we keep it.
-        let _device = tun::create(&config)?;
+        let _device = tun::create(&config)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
         // 2. Use rtnetlink to assign the /31 address.
         let (connection, handle, _) = new_connection()?;

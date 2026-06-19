@@ -2450,6 +2450,7 @@ dependencies = [
  "bytes",
  "clap",
  "data-encoding",
+ "futures-util",
  "ipnet",
  "iroh",
  "nix 0.31.2",

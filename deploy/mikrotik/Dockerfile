@@ -18,7 +18,10 @@ ARG RUST_TARGET=armv7-unknown-linux-musleabihf
 ARG FEATURES=daemon
 
 # --- build stage: bundles the armv7 musl cross toolchain ---
-FROM messense/rust-musl-cross:armv7-musleabihf AS build
+# Pinned to $BUILDPLATFORM so the cross toolchain runs NATIVELY on the build
+# host (it cross-compiles to armv7); without this, `--platform linux/arm/v7`
+# would force the toolchain itself to run under slow qemu emulation.
+FROM --platform=$BUILDPLATFORM messense/rust-musl-cross:armv7-musleabihf AS build
 ARG BIN
 ARG RUST_TARGET
 ARG FEATURES
