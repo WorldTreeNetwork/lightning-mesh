@@ -101,18 +101,26 @@ hands on the device for this step.
 
 The formatted disk gives you a mount point (e.g. `usb1`) for `root-dir`.
 
-## Step 5 — Network the container (veth + bridge)
+## Step 5 — Network the container (veth + bridge + NAT)
 
-The container attaches to RouterOS via a **veth** placed on a bridge. RouterOS
-keeps doing L2/L3 and DHCP on the LAN; the daemon runs as the P2P/mesh overlay.
+The container attaches to RouterOS via a **veth** placed on a bridge, and **NAT
+(masquerade)** gives it internet egress so iroh can reach relays/peers. See
+[`container-networking.md`](container-networking.md) for *why* each piece exists.
 
 ```routeros
 /interface/veth/add name=veth-mesh address=172.20.0.2/24 gateway=172.20.0.1
 /interface/bridge/add name=br-mesh
 /interface/bridge/port/add bridge=br-mesh interface=veth-mesh
 /ip/address/add address=172.20.0.1/24 interface=br-mesh
-# NAT/route to the WAN/LAN as your topology requires
+/ip/firewall/nat/add chain=srcnat action=masquerade src-address=172.20.0.0/24
 ```
+
+> **The NAT rule is not optional.** Without it the container can reach the router
+> but not the internet — DNS times out, no iroh relay is acquired, and the
+> daemon's address blob contains only the internal `172.20.0.2`, which is
+> unroutable from other routers. Symptom in the container log:
+> `Failed to publish to pkarr … Resolve failed … deadline has elapsed` and an
+> `addr` with no `Relay(...)`. If you see that, check `/ip/firewall/nat/print`.
 
 > **Addressing decision:** to let the mesh own addressing on a segment, disable
 > the RouterOS DHCP server on that interface and let the daemon hand out leases
