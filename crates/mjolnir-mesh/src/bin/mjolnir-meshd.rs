@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use iroh::address_lookup::MdnsAddressLookup;
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
-use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey};
 use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -58,6 +59,12 @@ struct Cli {
     /// test). Default is iroh's wildcard bind.
     #[arg(long, global = true)]
     bind: Option<SocketAddr>,
+
+    /// LAN-direct mode: discover peers via mDNS on the local network, no relay,
+    /// no pkarr/DNS, no internet. Connect by bare node id; addresses are found
+    /// over the LAN. Implies --no-relay. For same-switch swarms.
+    #[arg(long, global = true)]
+    lan: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -104,16 +111,18 @@ async fn main() -> Result<()> {
         return run_tun_test().await;
     }
 
-    let endpoint = build_endpoint(cli.secret_file.as_deref(), cli.no_relay, cli.bind).await?;
+    // --lan implies no relay (LAN discovery only).
+    let no_relay = cli.no_relay || cli.lan;
+    let endpoint = build_endpoint(cli.secret_file.as_deref(), no_relay, cli.bind, cli.lan).await?;
 
     match cli.command {
         Command::Id => {
-            wait_until_addressable(&endpoint, cli.no_relay).await;
+            wait_until_addressable(&endpoint, no_relay).await;
             print_identity(&endpoint)?;
         }
-        Command::Listen => run_listen(endpoint, cli.no_relay).await?,
+        Command::Listen => run_listen(endpoint, no_relay).await?,
         Command::Connect { addr } => run_connect(endpoint, &addr).await?,
-        Command::TunListen => run_tun_listen(endpoint, cli.no_relay).await?,
+        Command::TunListen => run_tun_listen(endpoint, no_relay).await?,
         Command::TunConnect { addr } => run_tun_connect(endpoint, &addr).await?,
         Command::TunTest => unreachable!("handled above"),
     }
@@ -168,7 +177,7 @@ async fn run_tun_listen(endpoint: Endpoint, no_relay: bool) -> Result<()> {
 
 /// P1 connector: dial a peer, bring up the tunnel, probe reachability across it.
 async fn run_tun_connect(endpoint: Endpoint, addr_blob: &str) -> Result<()> {
-    let addr = decode_addr(addr_blob).context("decoding peer address blob")?;
+    let addr = parse_peer(addr_blob).context("parsing peer")?;
     let peer = addr.id;
     let self_id = endpoint.id().to_string();
 
@@ -340,8 +349,23 @@ async fn build_endpoint(
     secret_file: Option<&Path>,
     no_relay: bool,
     bind: Option<SocketAddr>,
+    lan: bool,
 ) -> Result<Endpoint> {
     let secret = load_or_create_secret(secret_file)?;
+
+    if lan {
+        // LAN-direct: start from an empty builder (no pkarr/n0-DNS publishing,
+        // so no internet dependency and no DNS spam), relays off, and add ONLY
+        // mDNS address lookup for same-network peer discovery.
+        let mut builder = Endpoint::empty_builder(RelayMode::Disabled)
+            .secret_key(secret)
+            .address_lookup(MdnsAddressLookup::builder());
+        if let Some(addr) = bind {
+            builder = builder.bind_addr(addr).context("invalid --bind address")?;
+        }
+        return builder.bind().await.context("failed to bind iroh endpoint");
+    }
+
     let mut builder = Endpoint::builder().secret_key(secret);
     if no_relay {
         builder = builder.relay_mode(RelayMode::Disabled);
@@ -434,7 +458,7 @@ async fn run_listen(endpoint: Endpoint, no_relay: bool) -> Result<()> {
 }
 
 async fn run_connect(endpoint: Endpoint, addr_blob: &str) -> Result<()> {
-    let addr = decode_addr(addr_blob).context("decoding peer address blob")?;
+    let addr = parse_peer(addr_blob).context("parsing peer")?;
     let peer = addr.id;
     info!(%peer, "dialing");
 
@@ -539,4 +563,15 @@ fn decode_addr(blob: &str) -> Result<EndpointAddr> {
         .decode(blob.to_uppercase().as_bytes())
         .context("address blob is not valid base32")?;
     postcard::from_bytes(&bytes).context("deserializing address")
+}
+
+/// Accept either a full address blob, or a bare 64-hex node id (whose address
+/// is resolved via discovery — e.g. mDNS in `--lan` mode).
+fn parse_peer(arg: &str) -> Result<EndpointAddr> {
+    if arg.len() == 64 && arg.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let id: EndpointId = arg.parse().context("parsing node id")?;
+        Ok(EndpointAddr::new(id))
+    } else {
+        decode_addr(arg)
+    }
 }

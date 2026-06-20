@@ -20,7 +20,9 @@ nix = { version = "0.31", features = ["signal", "process"] }
 # Daemon-only deps. Kept optional so the substrate library and its tests stay
 # iroh-free (the DatagramConn seam is what decouples them); enabled by the
 # `daemon` feature for the mjolnir-meshd binary. See beads mjolnir-mesh-tr6/02g.
-iroh = { workspace = true, optional = true }
+# address-lookup-mdns: LAN peer discovery (swarm-discovery/mDNS) — no relay or
+# internet needed, for the `--lan` mode.
+iroh = { workspace = true, optional = true, features = ["address-lookup-mdns"] }
 clap = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
 data-encoding = { workspace = true, optional = true }
