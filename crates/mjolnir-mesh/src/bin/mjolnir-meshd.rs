@@ -11,7 +11,7 @@
 //!   listen             accept inbound connections, echo ping datagrams
 //!   connect <addr>     dial a peer by address blob, measure a datagram round-trip
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,7 @@ use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey};
 use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// ALPN for the P0 mesh connectivity probe. Bumped per protocol revision.
@@ -365,6 +365,48 @@ async fn wait_until_addressable(endpoint: &Endpoint, no_relay: bool) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     info!(addr = ?endpoint.addr(), "endpoint addressable");
+    check_reachability(endpoint, no_relay);
+}
+
+/// One loud, actionable line about whether this node is reachable by peers —
+/// instead of leaving the operator to infer it from buried pkarr/DNS spam.
+/// A node with no relay and only private/loopback addresses has an unroutable
+/// address blob (the classic "container has no internet egress" failure).
+fn check_reachability(endpoint: &Endpoint, no_relay: bool) {
+    let addr = endpoint.addr();
+    let has_relay = addr.relay_urls().next().is_some();
+    let ips: Vec<IpAddr> = addr.ip_addrs().map(|sa| sa.ip()).collect();
+    let has_public = ips.iter().any(|ip| is_globally_reachable(*ip));
+    let has_nonloopback = ips.iter().any(|ip| !ip.is_loopback());
+
+    if has_relay || has_public {
+        info!(relay = has_relay, public_ip = has_public, "reachability OK — peers can connect");
+    } else if no_relay && has_nonloopback {
+        warn!(
+            "--no-relay: only private/LAN addresses — reachable on the LOCAL network only, \
+             not across NATs. Fine for a same-LAN test; useless for a real swarm peer."
+        );
+    } else {
+        error!(
+            "NOT REACHABLE: no iroh relay and no public address. Peers on other networks \
+             CANNOT connect to this node and its address blob is UNROUTABLE. Almost always the \
+             container has no internet egress — check, in order: (1) veth `gateway=` / default \
+             route, (2) NAT masquerade for the container subnet, (3) a firewall forward 'accept' \
+             rule for that subnet, (4) the container `dns=` setting. The router itself having \
+             internet is not enough — the *container's* forwarded traffic must reach the internet."
+        );
+    }
+}
+
+/// Is `ip` routable from outside the local network (i.e. usable in a blob a
+/// remote peer could dial)?
+fn is_globally_reachable(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified())
+        }
+        IpAddr::V6(v6) => !(v6.is_loopback() || v6.is_unspecified()),
+    }
 }
 
 fn print_identity(endpoint: &Endpoint) -> Result<()> {
