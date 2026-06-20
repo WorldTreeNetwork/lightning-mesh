@@ -21,7 +21,7 @@ use clap::{Parser, Subcommand};
 use iroh::address_lookup::MdnsAddressLookup;
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -65,6 +65,12 @@ struct Cli {
     /// over the LAN. Implies --no-relay. For same-switch swarms.
     #[arg(long, global = true)]
     lan: bool,
+
+    /// Relay server URL(s) to use (repeatable), e.g. a self-hosted relay. If
+    /// omitted, uses n0's staging relays. NOTE: iroh 0.96's "Default" points at
+    /// the flaky canary network, so we never use it.
+    #[arg(long, global = true)]
+    relay: Vec<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -113,7 +119,14 @@ async fn main() -> Result<()> {
 
     // --lan implies no relay (LAN discovery only).
     let no_relay = cli.no_relay || cli.lan;
-    let endpoint = build_endpoint(cli.secret_file.as_deref(), no_relay, cli.bind, cli.lan).await?;
+    let endpoint = build_endpoint(
+        cli.secret_file.as_deref(),
+        no_relay,
+        cli.bind,
+        cli.lan,
+        &cli.relay,
+    )
+    .await?;
 
     match cli.command {
         Command::Id => {
@@ -350,6 +363,7 @@ async fn build_endpoint(
     no_relay: bool,
     bind: Option<SocketAddr>,
     lan: bool,
+    relays: &[String],
 ) -> Result<Endpoint> {
     let secret = load_or_create_secret(secret_file)?;
 
@@ -366,10 +380,22 @@ async fn build_endpoint(
         return builder.bind().await.context("failed to bind iroh endpoint");
     }
 
-    let mut builder = Endpoint::builder().secret_key(secret);
-    if no_relay {
-        builder = builder.relay_mode(RelayMode::Disabled);
-    }
+    let relay_mode = if no_relay {
+        RelayMode::Disabled
+    } else if !relays.is_empty() {
+        let urls = relays
+            .iter()
+            .map(|s| s.parse::<RelayUrl>())
+            .collect::<Result<Vec<_>, _>>()
+            .context("invalid --relay URL")?;
+        RelayMode::custom(urls)
+    } else {
+        // iroh 0.96's RelayMode::Default points at the flaky `iroh-canary` test
+        // network; Staging uses real n0 relays on relay.iroh.network.
+        RelayMode::Staging
+    };
+
+    let mut builder = Endpoint::builder().secret_key(secret).relay_mode(relay_mode);
     if let Some(addr) = bind {
         builder = builder.bind_addr(addr).context("invalid --bind address")?;
     }
