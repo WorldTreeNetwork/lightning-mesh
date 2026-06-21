@@ -9,9 +9,9 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # iroh networking
-iroh = "0.96"
-iroh-gossip = "0.96"
-web-transport-iroh = "0.2"
+iroh = "1.0"
+iroh-gossip = "0.101"
+web-transport-iroh = "0.6"
 
 # MoQ protocol
 moq-lite = "0.15"

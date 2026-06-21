@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn ticket_roundtrip_single_addr() {
-        let id = iroh::SecretKey::generate(&mut rand::rng()).public();
+        let id = iroh::SecretKey::generate().public();
         let ticket = MeshTicket::new("test-room".into(), EndpointAddr::new(id));
 
         let s = ticket.to_string();
@@ -122,8 +122,8 @@ mod tests {
 
     #[test]
     fn ticket_roundtrip_multi_addr() {
-        let id_a = iroh::SecretKey::generate(&mut rand::rng()).public();
-        let id_b = iroh::SecretKey::generate(&mut rand::rng()).public();
+        let id_a = iroh::SecretKey::generate().public();
+        let id_b = iroh::SecretKey::generate().public();
         let addrs = vec![EndpointAddr::new(id_a), EndpointAddr::new(id_b)];
         let ticket = MeshTicket::with_peers("multi-room".into(), addrs);
 
@@ -147,8 +147,8 @@ mod tests {
 
     #[test]
     fn bootstrap_peer_ids() {
-        let id_a = iroh::SecretKey::generate(&mut rand::rng()).public();
-        let id_b = iroh::SecretKey::generate(&mut rand::rng()).public();
+        let id_a = iroh::SecretKey::generate().public();
+        let id_b = iroh::SecretKey::generate().public();
         let ticket = MeshTicket::with_peers(
             "room".into(),
             vec![EndpointAddr::new(id_a), EndpointAddr::new(id_b)],

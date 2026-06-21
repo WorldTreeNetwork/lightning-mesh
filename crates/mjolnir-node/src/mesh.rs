@@ -1,5 +1,6 @@
 use anyhow::Result;
 use iroh::address_lookup::memory::MemoryLookup;
+use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointId, SecretKey};
 use iroh_gossip::net::Gossip;
@@ -32,11 +33,14 @@ impl MeshNode {
         // Use IROH_SECRET env var if set, otherwise generate a new key
         let secret_key = match std::env::var("IROH_SECRET") {
             Ok(s) => s.parse::<SecretKey>()?,
-            Err(_) => SecretKey::generate(&mut rand::rng()),
+            Err(_) => SecretKey::generate(),
         };
 
         let address_lookup = MemoryLookup::new();
-        let endpoint = Endpoint::builder()
+        // iroh 1.0 requires an explicit preset; `N0` keeps the previous default
+        // behaviour (n0 relay + pkarr/DNS discovery) that the address-book
+        // seeding below complements for direct LAN dials.
+        let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret_key)
             .address_lookup(address_lookup.clone())
             .bind()

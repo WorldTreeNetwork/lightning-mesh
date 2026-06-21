@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use iroh::address_lookup::MdnsAddressLookup;
+use iroh::endpoint::presets;
 use iroh::endpoint::Connection;
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError};
@@ -368,10 +369,11 @@ async fn build_endpoint(
     let secret = load_or_create_secret(secret_file)?;
 
     if lan {
-        // LAN-direct: start from an empty builder (no pkarr/n0-DNS publishing,
-        // so no internet dependency and no DNS spam), relays off, and add ONLY
-        // mDNS address lookup for same-network peer discovery.
-        let mut builder = Endpoint::empty_builder(RelayMode::Disabled)
+        // LAN-direct: start from the Minimal preset (crypto provider only, no
+        // pkarr/n0-DNS publishing, so no internet dependency and no DNS spam),
+        // relays off, and add ONLY mDNS address lookup for same-network peers.
+        let mut builder = Endpoint::builder(presets::Minimal)
+            .relay_mode(RelayMode::Disabled)
             .secret_key(secret)
             .address_lookup(MdnsAddressLookup::builder());
         if let Some(addr) = bind {
@@ -395,7 +397,11 @@ async fn build_endpoint(
         RelayMode::Staging
     };
 
-    let mut builder = Endpoint::builder().secret_key(secret).relay_mode(relay_mode);
+    // N0 preset: publish to pkarr + resolve via n0 DNS (the internet path);
+    // relay_mode below overrides the preset's default relay choice.
+    let mut builder = Endpoint::builder(presets::N0)
+        .secret_key(secret)
+        .relay_mode(relay_mode);
     if let Some(addr) = bind {
         builder = builder.bind_addr(addr).context("invalid --bind address")?;
     }
@@ -547,7 +553,7 @@ fn load_or_create_secret(path: Option<&Path>) -> Result<SecretKey> {
                 .with_context(|| format!("reading secret file {}", p.display()))?;
             return parse_secret_hex(hex.trim());
         }
-        let secret = SecretKey::generate(&mut rand::rng());
+        let secret = SecretKey::generate();
         std::fs::write(p, encode_secret_hex(&secret))
             .with_context(|| format!("writing secret file {}", p.display()))?;
         info!(path = %p.display(), id = %secret.public(), "generated new node identity");
@@ -559,7 +565,7 @@ fn load_or_create_secret(path: Option<&Path>) -> Result<SecretKey> {
     }
 
     warn!("no --secret-file or IROH_SECRET set; using an ephemeral identity");
-    Ok(SecretKey::generate(&mut rand::rng()))
+    Ok(SecretKey::generate())
 }
 
 fn encode_secret_hex(secret: &SecretKey) -> String {

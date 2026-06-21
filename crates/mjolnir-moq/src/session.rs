@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 // Re-export iroh types from web-transport-iroh to ensure version consistency.
-// web-transport-iroh 0.2.2 uses iroh 0.96, and Session::raw() requires that version's Connection.
+// web-transport-iroh 0.6 uses iroh 1.0, and Session::raw() requires that version's Connection.
 pub use web_transport_iroh::iroh;
 
 use iroh::endpoint::Connection;
@@ -54,9 +54,10 @@ impl MoqSession {
 /// shares the same session map and origin for accepting incoming connections.
 ///
 /// **Note on iroh versions:** This crate uses iroh types re-exported from
-/// `web_transport_iroh::iroh` (currently iroh 0.96) to ensure type compatibility
-/// with `web_transport_iroh::Session::raw()`. If your application uses iroh 0.97,
-/// use the re-exported types from `mjolnir_moq::iroh` for MoQ-related operations.
+/// `web_transport_iroh::iroh` (currently iroh 1.0) to ensure type compatibility
+/// with `web_transport_iroh::Session::raw()`. If your application uses a different
+/// iroh version, use the re-exported types from `mjolnir_moq::iroh` for MoQ-related
+/// operations.
 #[derive(Clone)]
 pub struct MoqBridge {
     sessions: SharedSessionMap,
@@ -79,7 +80,7 @@ impl MoqBridge {
 
     /// Connect to a peer and establish a MoQ session (outgoing).
     ///
-    /// Uses the iroh 0.96 Endpoint re-exported from `web_transport_iroh::iroh`.
+    /// Uses the iroh 1.0 Endpoint re-exported from `web_transport_iroh::iroh`.
     pub async fn connect(
         &self,
         endpoint: &iroh::Endpoint,
