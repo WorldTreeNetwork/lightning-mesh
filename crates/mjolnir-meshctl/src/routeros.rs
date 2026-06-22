@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::ssh::Ssh;
 
@@ -30,6 +30,11 @@ use crate::ssh::Ssh;
 const REC_PREFIX: &str = "MCTL>";
 /// Field separator within a record line.
 const FIELD_SEP: &str = "~|~";
+/// Sentinel printed *after* the loop completes. RouterOS prints script errors
+/// (e.g. "syntax error (line 1 column 10)") to stdout and still exits 0, so a
+/// broken query would otherwise parse as a silent "0 records". If this marker
+/// is absent from the output, the script aborted partway and we error loudly.
+const END_MARKER: &str = "MCTL-END";
 
 /// One observed RouterOS record: field name → value (ordered for stable
 /// display + deterministic tests).
@@ -46,8 +51,10 @@ pub fn build_query_script(path: &str, find_filter: Option<&str>, fields: &[&str]
         None => format!("[{path}/find]"),
     };
 
-    // `"<field>=" . [:tostr [<path>/get $_i <field>]]` for each field, joined by
-    // the field separator, with the record prefix in front.
+    // `"<field>=" . [:tostr [<path>/get $i <field>]]` for each field, joined by
+    // the field separator, with the record prefix in front. The loop variable is
+    // `i` (letter-led): RouterOS rejects underscore-led names (`_i` → syntax
+    // error at the variable). After the loop, print the completion sentinel.
     let mut expr = format!("{:?}", REC_PREFIX); // quoted "MCTL>"
     for (i, field) in fields.iter().enumerate() {
         if i == 0 {
@@ -56,12 +63,12 @@ pub fn build_query_script(path: &str, find_filter: Option<&str>, fields: &[&str]
             expr.push_str(&format!(" . {:?} . ", FIELD_SEP));
         }
         expr.push_str(&format!(
-            "{:?} . [:tostr [{path}/get $_i {field}]]",
+            "{:?} . [:tostr [{path}/get $i {field}]]",
             format!("{field}=")
         ));
     }
 
-    format!(":foreach _i in={find} do={{:put ({expr})}}")
+    format!(":foreach i in={find} do={{:put ({expr})}}; :put {:?}", END_MARKER)
 }
 
 /// Parse the stdout of a query script into records. Non-`MCTL>` lines (banners,
@@ -87,6 +94,22 @@ pub fn parse_records(stdout: &str) -> Vec<Record> {
     records
 }
 
+/// Verify the query ran to completion. RouterOS exits 0 even on a script error,
+/// so the only reliable signal is whether the trailing sentinel was printed.
+/// Returns the output (sans control lines) on success; on failure, an error
+/// carrying the raw output — which contains RouterOS's own error message.
+fn ensure_complete(stdout: &str) -> Result<()> {
+    if stdout.lines().any(|l| l.trim_end_matches('\r') == END_MARKER) {
+        Ok(())
+    } else {
+        bail!(
+            "RouterOS query did not complete (no {END_MARKER} sentinel) — the \
+             script likely errored. Router output:\n{}",
+            stdout.trim()
+        )
+    }
+}
+
 /// Observe: run the generated query over SSH and parse the result.
 pub async fn query(
     ssh: &Ssh,
@@ -96,6 +119,7 @@ pub async fn query(
 ) -> Result<Vec<Record>> {
     let script = build_query_script(path, find_filter, fields);
     let out = ssh.run(&script).await?;
+    ensure_complete(&out)?;
     Ok(parse_records(&out))
 }
 
@@ -108,8 +132,17 @@ mod tests {
         let s = build_query_script("/interface/veth", None, &["name", "address"]);
         assert_eq!(
             s,
-            r#":foreach _i in=[/interface/veth/find] do={:put ("MCTL>" . "name=" . [:tostr [/interface/veth/get $_i name]] . "~|~" . "address=" . [:tostr [/interface/veth/get $_i address]])}"#
+            r#":foreach i in=[/interface/veth/find] do={:put ("MCTL>" . "name=" . [:tostr [/interface/veth/get $i name]] . "~|~" . "address=" . [:tostr [/interface/veth/get $i address]])}; :put "MCTL-END""#
         );
+    }
+
+    #[test]
+    fn script_uses_letter_led_loop_var() {
+        // RouterOS rejects underscore-led variable names — must never emit `_i`.
+        let s = build_query_script("/interface/veth", None, &["name"]);
+        assert!(!s.contains("$_i"));
+        assert!(!s.contains(":foreach _i"));
+        assert!(s.ends_with(r#"; :put "MCTL-END""#));
     }
 
     #[test]
@@ -120,7 +153,7 @@ mod tests {
             &["action", "comment"],
         );
         assert!(s.contains(r#"in=[/ip/firewall/nat/find where comment~"mjolnir"]"#));
-        assert!(s.contains(r#""action=" . [:tostr [/ip/firewall/nat/get $_i action]]"#));
+        assert!(s.contains(r#""action=" . [:tostr [/ip/firewall/nat/get $i action]]"#));
     }
 
     #[test]
@@ -128,8 +161,23 @@ mod tests {
         let s = build_query_script("/interface/bridge", None, &[]);
         assert_eq!(
             s,
-            r#":foreach _i in=[/interface/bridge/find] do={:put ("MCTL>")}"#
+            r#":foreach i in=[/interface/bridge/find] do={:put ("MCTL>")}; :put "MCTL-END""#
         );
+    }
+
+    #[test]
+    fn ensure_complete_accepts_sentinel() {
+        assert!(ensure_complete("MCTL>name=br-mesh\r\nMCTL-END\r\n").is_ok());
+        assert!(ensure_complete("MCTL-END").is_ok());
+    }
+
+    #[test]
+    fn ensure_complete_rejects_missing_sentinel() {
+        // A RouterOS error with no sentinel must surface as an error carrying
+        // the router's message — not a silent empty result.
+        let err = ensure_complete("syntax error (line 1 column 10)").unwrap_err();
+        assert!(err.to_string().contains("did not complete"));
+        assert!(err.to_string().contains("syntax error"));
     }
 
     #[test]

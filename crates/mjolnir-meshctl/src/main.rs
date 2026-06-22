@@ -61,6 +61,22 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Run a RouterOS query and print the parsed records — the observe layer's
+    /// introspection primitive. Exercises the exact script-gen + parse path the
+    /// reconciler uses. E.g. `meshctl query router-1 /interface/veth`.
+    Query {
+        /// Router name.
+        name: String,
+        /// Menu path, e.g. `/interface/veth` or `/ip/firewall/nat`.
+        path: String,
+        /// Comma-separated fields to fetch (default: name,comment). NOTE: a
+        /// field that doesn't exist on the menu makes RouterOS abort the loop.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
+        /// Optional `where` filter, e.g. `comment~"mjolnir"`.
+        #[arg(long)]
+        filter: Option<String>,
+    },
     /// One-time: install the operator SSH public key on the router for
     /// passwordless auth. Prompts for the router password once (the only
     /// interactive step in the whole workflow).
@@ -119,6 +135,12 @@ async fn run() -> Result<()> {
     match cli.command {
         Command::List => cmd_list(&inv),
         Command::Ping { name, all } => cmd_ping(&inv, name.as_deref(), all).await,
+        Command::Query {
+            name,
+            path,
+            fields,
+            filter,
+        } => cmd_query(&inv, &name, &path, fields, filter.as_deref()).await,
         Command::Bootstrap { name, all, pubkey } => {
             cmd_bootstrap(&inv, name.as_deref(), all, pubkey.as_deref()).await
         }
@@ -227,6 +249,34 @@ async fn cmd_ping(inv: &Inventory, name: Option<&str>, all: bool) -> Result<()> 
     }
     if failures > 0 {
         bail!("{failures} router(s) unreachable over SSH");
+    }
+    Ok(())
+}
+
+async fn cmd_query(
+    inv: &Inventory,
+    name: &str,
+    path: &str,
+    fields: Option<Vec<String>>,
+    filter: Option<&str>,
+) -> Result<()> {
+    let r = inv
+        .get(name)
+        .with_context(|| format!("no router named {name:?} in the inventory"))?;
+    let fields = fields.unwrap_or_else(|| vec!["name".into(), "comment".into()]);
+    let field_refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+
+    let ssh = Ssh::new(r.ssh_target(inv));
+    let records = routeros::query(&ssh, path, filter, &field_refs).await?;
+
+    println!("{} {} record(s) under {path}", r.name, records.len());
+    for (i, rec) in records.iter().enumerate() {
+        let line = field_refs
+            .iter()
+            .map(|f| format!("{f}={}", rec.get(*f).map(String::as_str).unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("  [{i}] {line}");
     }
     Ok(())
 }
