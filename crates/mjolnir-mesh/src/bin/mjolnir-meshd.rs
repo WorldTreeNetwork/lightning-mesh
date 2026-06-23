@@ -29,6 +29,9 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use iroh_gossip::api::{Event, GossipReceiver, GossipSender};
 use iroh_gossip::{Gossip, TopicId};
 use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError, Tunnel};
+use mjolnir_mesh::babel::{
+    render_babeld_conf, write_atomic_if_changed, BabelConfigInputs, BabelSupervisor,
+};
 use mjolnir_mesh::{
     alloc, merge_subnet_claim, GossipError, GossipSync, GossipTransport, MergeResult, PeerRoster,
     SubnetClaim, HLC,
@@ -120,6 +123,13 @@ enum Command {
         /// per line; `#` comments and blank lines ignored. See `PeerRoster`.
         #[arg(long)]
         roster: PathBuf,
+        /// Where to write the generated babeld config. Its parent dir is created
+        /// if missing. babeld is started once there's a live tunnel to route over.
+        #[arg(long, default_value = "/etc/mjolnir/babeld.conf")]
+        babel_config: PathBuf,
+        /// babeld binary to supervise (PATH name or absolute path).
+        #[arg(long, default_value = "babeld")]
+        babeld: PathBuf,
     },
 }
 
@@ -158,7 +168,11 @@ async fn main() -> Result<()> {
         Command::Connect { addr } => run_connect(endpoint, &addr).await?,
         Command::TunListen => run_tun_listen(endpoint, no_relay).await?,
         Command::TunConnect { addr } => run_tun_connect(endpoint, &addr).await?,
-        Command::Mesh { roster } => run_mesh(endpoint, no_relay, &roster).await?,
+        Command::Mesh {
+            roster,
+            babel_config,
+            babeld,
+        } => run_mesh(endpoint, no_relay, &roster, babel_config, babeld).await?,
         Command::TunTest => unreachable!("handled above"),
     }
     Ok(())
@@ -313,7 +327,13 @@ async fn run_tun_connect(endpoint: Endpoint, addr_blob: &str) -> Result<()> {
 /// P2 multi-peer mesh: accept inbound tunnels and dial every roster peer for
 /// which this node is the initiator, maintaining one /31 TUN per peer with
 /// redial-on-drop. Holds until Ctrl-C.
-async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Result<()> {
+async fn run_mesh(
+    endpoint: Endpoint,
+    no_relay: bool,
+    roster_path: &Path,
+    babel_config: PathBuf,
+    babeld: PathBuf,
+) -> Result<()> {
     wait_until_addressable(&endpoint, no_relay).await;
     print_identity(&endpoint)?;
 
@@ -409,6 +429,20 @@ async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Res
         }
     };
 
+    // babeld supervision (mjolnir-mesh-83k): a reconciler regenerates babeld.conf
+    // from the live tunnel set (TunnelRegistry) plus our subnet claim (ClaimStore)
+    // and starts/SIGHUPs babeld as they change. babeld absence is non-fatal.
+    let babel_sup = Arc::new(BabelSupervisor::new(babel_config.clone(), babeld));
+    let babel_task = {
+        let sup = babel_sup.clone();
+        let registry = registry.clone();
+        let claims = claims.clone();
+        let me = self_id_str.clone();
+        tokio::spawn(
+            async move { babel_reconciler(sup, registry, claims, me, babel_config).await },
+        )
+    };
+
     // Spawn one dialer task per peer we initiate to. Tie-break by node id so
     // exactly one side of each pair dials (the lexicographically-lower id) and
     // the other accepts — otherwise both ends would race to create the same
@@ -450,6 +484,10 @@ async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Res
     }
     if let Some(t) = &claim_task {
         t.abort();
+    }
+    babel_task.abort();
+    if let Err(e) = babel_sup.shutdown().await {
+        warn!("babeld shutdown error: {e}");
     }
     router.shutdown().await.context("router shutdown")?;
     Ok(())
@@ -636,6 +674,77 @@ fn enable_ip_forwarding() {
 
 #[cfg(not(target_os = "linux"))]
 fn enable_ip_forwarding() {}
+
+// --- babeld supervision (mjolnir-mesh-83k) -------------------------------
+
+/// Reconcile babeld against live mesh state. Every few seconds it renders
+/// babeld.conf from the current tunnel interfaces ([`TunnelRegistry`]) and our
+/// local subnet claim ([`ClaimStore`]); it starts babeld once there's a tunnel
+/// to route over and SIGHUPs it whenever the rendered config changes. babeld
+/// being absent or unstartable is non-fatal — routing is disabled but the TUN
+/// data plane keeps running.
+async fn babel_reconciler(
+    sup: Arc<BabelSupervisor>,
+    registry: TunnelRegistry,
+    claims: ClaimStore,
+    self_id: String,
+    config_path: PathBuf,
+) {
+    if let Some(parent) = config_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!("could not create babeld config dir {}: {e}", parent.display());
+    }
+
+    let mut spawned = false;
+    let mut babeld_unavailable = false;
+    loop {
+        // Snapshot the live tunnel interfaces and our own claimed subnet.
+        let mut ifaces: Vec<String> = {
+            let r = registry.lock().expect("registry poisoned");
+            r.values().filter(|s| !s.is_empty()).cloned().collect()
+        };
+        ifaces.sort();
+        let local_subnet: Option<Ipv4Net> = {
+            let c = claims.lock().expect("claim store poisoned");
+            c.values()
+                .find(|claim| claim.owner_node_id == self_id)
+                .and_then(|claim| match claim.cidr {
+                    IpNet::V4(n) => Some(n),
+                    IpNet::V6(_) => None,
+                })
+        };
+
+        let iface_refs: Vec<&str> = ifaces.iter().map(String::as_str).collect();
+        let inputs = BabelConfigInputs::new(local_subnet, &iface_refs);
+        let conf = render_babeld_conf(&inputs);
+
+        match write_atomic_if_changed(&config_path, &conf) {
+            Ok(changed) => {
+                if !spawned && !babeld_unavailable && !ifaces.is_empty() {
+                    // Start babeld once there's at least one tunnel to route over.
+                    match sup.spawn().await {
+                        Ok(()) => {
+                            spawned = true;
+                            info!(config = %config_path.display(), ifaces = ifaces.len(), "babeld started");
+                        }
+                        Err(e) => {
+                            babeld_unavailable = true;
+                            warn!("could not start babeld (cross-site routing disabled): {e}");
+                        }
+                    }
+                } else if spawned && changed {
+                    let _ = sup.sighup().await;
+                    info!("babeld config changed — reloaded via SIGHUP");
+                }
+            }
+            Err(e) => warn!("failed to write babeld config {}: {e}", config_path.display()),
+        }
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
 
 /// Live per-peer tunnel registry: maps each connected peer to its TUN interface
 /// name. Shared between the accept handler and the per-peer dialer tasks. The
