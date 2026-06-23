@@ -885,6 +885,7 @@ async fn serve_tunnel(conn: Connection, self_id: &str, registry: &TunnelRegistry
         .expect("registry poisoned")
         .insert(peer, iface.clone());
     info!(%iface, %self_addr, %peer_addr, %peer, "tunnel up");
+    spawn_path_logger(conn.clone(), peer);
     spawn_udp_echo(self_addr);
 
     // Hold the tunnel open until the connection closes, then deregister.
@@ -893,6 +894,47 @@ async fn serve_tunnel(conn: Connection, self_id: &str, registry: &TunnelRegistry
     registry.lock().expect("registry poisoned").remove(&peer);
     drop_tunnel(tunnel);
     Ok(())
+}
+
+/// Log this connection's selected transmission path whenever it changes —
+/// `DIRECT` (hole-punched / same-LAN) vs `RELAY` (n0 relay fallback) — plus the
+/// remote address, RTT, path count, and the negotiated max datagram size.
+///
+/// This is the observability that mjolnir-mesh-67h was missing. A relay-only or
+/// half-open path manifests downstream as asymmetric babeld costs (one side's
+/// IHUs never arrive → txcost 65535), forcing the operator to *infer* the
+/// transport from routing metrics. With this, the path type is a single log
+/// line per peer: a tunnel still on `RELAY` after warmup is the smoking gun
+/// (relay-only loss / a peer that never published a direct addr), and a flip to
+/// `DIRECT` confirms a healthy hole-punched path. `max_datagram=None` means
+/// datagrams can't flow on this path at all — an even earlier failure signal.
+/// The task ends when the connection closes.
+fn spawn_path_logger(conn: Connection, peer: EndpointId) {
+    use futures_lite::StreamExt;
+    tokio::spawn(async move {
+        let mut stream = conn.paths_stream();
+        while let Some(paths) = stream.next().await {
+            match paths.iter().find(|p| p.is_selected()) {
+                Some(p) => {
+                    let kind = if p.is_relay() { "RELAY" } else { "DIRECT" };
+                    info!(
+                        %peer,
+                        kind,
+                        remote = ?p.remote_addr(),
+                        rtt = ?p.rtt(),
+                        paths = paths.len(),
+                        max_datagram = ?conn.max_datagram_size(),
+                        "tunnel path",
+                    );
+                }
+                None => warn!(
+                    %peer,
+                    paths = paths.len(),
+                    "tunnel has no selected path — datagrams cannot flow",
+                ),
+            }
+        }
+    });
 }
 
 /// Explicit drop helper — makes the teardown point obvious at call sites and
@@ -1108,8 +1150,20 @@ async fn build_endpoint(
 
     // N0 preset: publish to pkarr + resolve via n0 DNS (the internet path);
     // relay_mode below overrides the preset's default relay choice.
+    //
+    // ALSO add mDNS address lookup (the same swarm discovery used by `--lan`).
+    // The N0 preset only knows pkarr+DNS, so a node whose pkarr publish fails —
+    // e.g. a RouterOS container with no/limited internet egress — advertises NO
+    // direct address and is reachable only over the lossy n0 relay, even when
+    // its peer sits on the same physical LAN. That relay-only path is what made
+    // the two-router tunnel asymmetric (mjolnir-mesh-67h): one side's IHUs never
+    // arrived, so babeld saw txcost=65535 and routed nothing. mDNS advertises +
+    // resolves direct LAN socket addresses with no relay or internet, so same-LAN
+    // peers form a direct path regardless of pkarr — relay stays as the off-LAN
+    // fallback, pkarr/DNS as global discovery. Best of all worlds, additive only.
     let mut builder = Endpoint::builder(presets::N0)
         .secret_key(secret)
+        .address_lookup(MdnsAddressLookup::builder())
         .relay_mode(relay_mode);
     if let Some(addr) = bind {
         builder = builder.bind_addr(addr).context("invalid --bind address")?;
