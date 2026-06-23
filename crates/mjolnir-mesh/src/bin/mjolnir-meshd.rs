@@ -153,14 +153,16 @@ struct IrohDatagramConn {
 #[async_trait::async_trait]
 impl DatagramConn for IrohDatagramConn {
     async fn send_datagram(&self, packet: Bytes) -> Result<(), EncapError> {
-        // Use the *waiting* send: under congestion (notably right after connect,
-        // when the congestion window is tiny and we may still be relay-only), the
-        // non-waiting `send_datagram` silently drops datagrams oldest-first. That
-        // is the wrong policy for an L3 data plane — it turns transient backpressure
-        // into packet loss the upper layers must recover from. `send_datagram_wait`
-        // instead applies backpressure to the TUN reader until buffer space frees.
+        // Fire-and-forget into iroh's bounded outgoing datagram buffer. When that
+        // buffer is full (e.g. a transient congestion/cwnd dip), iroh drops the
+        // OLDEST datagram and returns immediately. For an L3 packet tunnel that is
+        // the right policy: bounded latency with occasional loss, which TCP (and
+        // friends) recover from — far better than backpressuring the single TUN
+        // reader, which would head-of-line-block every other flow and balloon
+        // latency (bufferbloat). In-flight loss on a relay-only path is not a
+        // buffer problem and is not fixable here; a direct path is the lever.
         let len = packet.len();
-        self.conn.send_datagram_wait(packet).await.map_err(|e| {
+        self.conn.send_datagram(packet).map_err(|e| {
             use iroh::endpoint::SendDatagramError;
             match e {
                 SendDatagramError::TooLarge => EncapError::DatagramTooLarge(len),
