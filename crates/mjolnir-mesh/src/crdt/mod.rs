@@ -5,3 +5,4 @@ pub mod lease;
 pub mod merge;
 pub mod service;
 pub mod subnet;
+pub mod sync;

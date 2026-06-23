@@ -17,6 +17,7 @@ pub mod alloc;
 pub mod babel;
 pub mod claim_cooldown;
 pub mod crdt;
+pub mod roster;
 pub mod tun;
 
 pub use crdt::{
@@ -27,4 +28,6 @@ pub use crdt::{
     merge::{merge_subnet_claim, resolve_subnet_conflict, MergeResult},
     service::ServiceEntry,
     subnet::SubnetClaim,
+    sync::{GossipError, GossipSync, GossipTransport},
 };
+pub use roster::{PeerEntry, PeerRoster, RosterError};
