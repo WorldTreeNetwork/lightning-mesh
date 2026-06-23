@@ -22,6 +22,7 @@
 #![allow(dead_code)]
 
 mod apply;
+mod deploy;
 mod inventory;
 mod plan;
 mod routeros;
@@ -35,7 +36,8 @@ use clap::{Parser, Subcommand};
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
-use inventory::{Inventory, Router};
+use deploy::DeployOpts;
+use inventory::{Inventory, Role, Router};
 use ssh::Ssh;
 
 #[derive(Parser)]
@@ -108,11 +110,19 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// [M4] Apply + upload tar + add/start the container + reachability check.
+    /// Full deploy: converge network + upload tar + add/start the mesh
+    /// container + reachability check. Connectors resolve their listener's live
+    /// address blob automatically. Mutating; requires device-mode containers.
     Deploy {
         name: Option<String>,
         #[arg(long)]
         all: bool,
+        /// Container DNS resolver (default 1.1.1.1).
+        #[arg(long)]
+        dns: Option<String>,
+        /// Container root-dir on the router (default "mjolnir").
+        #[arg(long)]
+        root_dir: Option<String>,
     },
 }
 
@@ -154,7 +164,12 @@ async fn run() -> Result<()> {
         Command::Apply { name, all, dry_run } => {
             cmd_apply(&inv, name.as_deref(), all, dry_run).await
         }
-        Command::Deploy { .. } => not_yet("deploy", "M4 (mjolnir-mesh-2p1)"),
+        Command::Deploy {
+            name,
+            all,
+            dns,
+            root_dir,
+        } => cmd_deploy(&inv, &inv_path, name.as_deref(), all, dns, root_dir).await,
     }
 }
 
@@ -396,6 +411,110 @@ async fn cmd_apply(inv: &Inventory, name: Option<&str>, all: bool, dry_run: bool
     }
     if failures > 0 {
         bail!("{failures} router(s) did not fully converge");
+    }
+    Ok(())
+}
+
+/// Resolve a connector's target: an explicit `peer_blob` from the inventory,
+/// else the peer listener's current address blob — found race-free by matching
+/// the node id derived from the peer's stable secret. Falls back to the bare
+/// node id (dialable via discovery) if the blob hasn't been logged yet.
+async fn resolve_peer_blob(inv: &Inventory, secrets_dir: &Path, r: &Router) -> Result<String> {
+    if let Some(b) = &r.peer_blob {
+        return Ok(b.clone());
+    }
+    let peer = inv.peer_of(r).with_context(|| {
+        format!("connector {} has no peer / peer_blob to connect to", r.name)
+    })?;
+    let peer_secret = deploy::ensure_secret(secrets_dir, &peer.name)?;
+    let peer_id = deploy::node_id(&peer_secret)?;
+    let peer_ssh = Ssh::new(peer.ssh_target(inv));
+    match deploy::read_blob_for_id(&peer_ssh, &peer_id, std::time::Duration::from_secs(30)).await? {
+        Some(blob) => Ok(blob),
+        None => {
+            warn!(
+                "no fresh blob for {} (id {peer_id}) in its log yet — using bare node id",
+                peer.name
+            );
+            Ok(peer_id)
+        }
+    }
+}
+
+async fn cmd_deploy(
+    inv: &Inventory,
+    inv_path: &Path,
+    name: Option<&str>,
+    all: bool,
+    dns: Option<String>,
+    root_dir: Option<String>,
+) -> Result<()> {
+    let mut opts = DeployOpts::default();
+    if let Some(d) = dns {
+        opts.dns = d;
+    }
+    if let Some(rd) = root_dir {
+        opts.root_dir = rd;
+    }
+    // Per-router node secrets live in a gitignored dir beside the inventory.
+    let secrets_dir = inv_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("secrets");
+
+    // Deploy listeners before connectors, so a connector can read its peer's
+    // live address blob.
+    let mut targets = select(inv, name, all)?;
+    targets.sort_by_key(|r| match r.role {
+        Role::Listener => 0u8,
+        Role::Connector => 1u8,
+    });
+
+    let mut failures = 0;
+    for r in targets {
+        println!("\n=== deploy {} ({}) ===", r.name, r.role);
+        let ssh = Ssh::new(r.ssh_target(inv));
+
+        let cmd = match r.role {
+            Role::Listener => deploy::container_cmd(Role::Listener, None),
+            Role::Connector => match resolve_peer_blob(inv, &secrets_dir, r).await {
+                Ok(blob) => deploy::container_cmd(Role::Connector, Some(&blob)),
+                Err(e) => Err(e),
+            },
+        };
+        let cmd = match cmd {
+            Ok(c) => c,
+            Err(e) => {
+                println!("  {} SKIPPED: {e:#}", r.name);
+                failures += 1;
+                continue;
+            }
+        };
+
+        match deploy::deploy_one(&ssh, inv, r, &cmd, &opts, &secrets_dir).await {
+            Ok(()) => {
+                let _ = deploy::report_reachability(&ssh, &r.name, opts.timeout).await;
+                // Surface a listener's blob (race-free, tied to its stable id)
+                // so connectors or a human can use it.
+                if r.role == Role::Listener {
+                    if let Ok(secret) = deploy::ensure_secret(&secrets_dir, &r.name) {
+                        if let Ok(id) = deploy::node_id(&secret) {
+                            match deploy::read_blob_for_id(&ssh, &id, std::time::Duration::from_secs(30)).await {
+                                Ok(Some(b)) => println!("  {} address blob:\n    {b}", r.name),
+                                _ => println!("  {} node id: {id}", r.name),
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  {} DEPLOY FAILED: {e:#}", r.name);
+                failures += 1;
+            }
+        }
+    }
+    if failures > 0 {
+        bail!("{failures} router(s) failed to deploy");
     }
     Ok(())
 }

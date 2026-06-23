@@ -147,7 +147,9 @@ The container attaches to RouterOS via a **veth** placed on a bridge, and **NAT
 # /container/add remote-image=<your-registry>/mjolnir-meshd:armv7 \
 #     interface=veth-mesh root-dir=usb1/mjolnir logging=yes
 
-/container/envs/add name=mesh-env key=RUST_LOG value=info
+# NB: the envs list field is `list=` (NOT `name=`) on RouterOS 7.23+; it is
+# referenced from /container/add as `envlist=`.
+/container/envs/add list=mesh-env key=RUST_LOG value=info
 
 /container/print                              # note the container number
 /container/start 0

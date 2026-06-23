@@ -51,3 +51,6 @@ package-lock.json
 
 # MikroTik container build artifacts
 deploy/mikrotik/*.tar
+
+# meshctl per-router node secrets (IROH_SECRET) — never commit
+deploy/mikrotik/secrets/
