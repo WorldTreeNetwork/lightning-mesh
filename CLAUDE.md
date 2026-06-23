@@ -34,10 +34,11 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
+   (Beads sync via the git-committed `.beads/issues.jsonl`; dolt is embedded with no
+   remote, so do NOT run `bd dolt push`.)
 5. **Clean up** - Clear stashes, prune remote branches
 6. **Verify** - All changes committed AND pushed
 7. **Hand off** - Provide context for next session

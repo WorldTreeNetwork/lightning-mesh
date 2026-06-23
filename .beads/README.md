@@ -26,8 +26,8 @@ bd show <issue-id>
 bd update <issue-id> --claim
 bd update <issue-id> --status done
 
-# Sync with Dolt remote
-bd dolt push
+# Sync: this repo replicates beads via the git-committed .beads/issues.jsonl.
+# Dolt is embedded with no remote, so do NOT run `bd dolt push`; `git push` carries it.
 ```
 
 ### Working with Issues
