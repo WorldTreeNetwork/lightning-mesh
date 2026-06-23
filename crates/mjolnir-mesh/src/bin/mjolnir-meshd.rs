@@ -11,15 +11,16 @@
 //!   listen             accept inbound connections, echo ping datagrams
 //!   connect <addr>     dial a peer by address blob, measure a datagram round-trip
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use ipnet::{IpNet, Ipv4Net};
 use iroh::endpoint::presets;
 use iroh::endpoint::Connection;
 use iroh_mdns_address_lookup::MdnsAddressLookup;
@@ -28,7 +29,11 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use iroh_gossip::api::{Event, GossipReceiver, GossipSender};
 use iroh_gossip::{Gossip, TopicId};
 use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError, Tunnel};
-use mjolnir_mesh::{GossipError, GossipSync, GossipTransport, PeerRoster};
+use mjolnir_mesh::{
+    alloc, merge_subnet_claim, GossipError, GossipSync, GossipTransport, MergeResult, PeerRoster,
+    SubnetClaim, HLC,
+};
+use mjolnir_mesh::GossipMessage;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -319,7 +324,14 @@ async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Res
         .with_context(|| format!("loading roster {}", roster_path.display()))?;
     info!(peers = roster.len(), path = %roster_path.display(), "roster loaded");
 
+    // Forward client traffic between the TUN tunnels and the veth/bridge.
+    enable_ip_forwarding();
+
     let registry: TunnelRegistry = Arc::new(Mutex::new(HashMap::new()));
+    // Shared CRDT subnet-claim store (mjolnir-mesh-chn): cidr -> claim. Written
+    // by the gossip apply loop and the local claim routine; babeld (83k) reads
+    // it for the local subnet to redistribute.
+    let claims: ClaimStore = Arc::new(Mutex::new(HashMap::new()));
 
     // CRDT gossip overlay (mjolnir-mesh-k8c): all mesh nodes join one fixed
     // topic and exchange CRDT updates best-effort, as a second protocol on the
@@ -339,10 +351,10 @@ async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Res
         .spawn();
 
     // Subscribe to the mesh CRDT topic, bootstrapping the gossip swarm with the
-    // roster peers, then spawn the dispatch loop. Decoded CRDT messages are
-    // logged for now — wiring them into the per-type merge is the subnet-claim
-    // work (mjolnir-mesh-chn), which plugs into this same handler. A subscribe
-    // failure is non-fatal: the data plane still runs without the overlay.
+    // roster peers. On success, spawn two tasks: a dispatch loop that applies
+    // inbound subnet claims to the store (merge/conflict), and a claim manager
+    // that claims a /24 after a warmup and re-claims on conflict. A subscribe
+    // failure is non-fatal: the TUN data plane still runs without the overlay.
     let bootstrap: Vec<EndpointId> = roster
         .peers()
         .iter()
@@ -350,26 +362,50 @@ async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Res
         .map(|a| a.id)
         .filter(|id| *id != self_id)
         .collect();
-    let gossip_task = match gossip.subscribe(mesh_topic_id(), bootstrap).await {
+    let (gossip_dispatch, claim_task) = match gossip.subscribe(mesh_topic_id(), bootstrap).await {
         Ok(topic) => {
             let (sender, receiver) = topic.split();
-            let sync = GossipSync::new(IrohGossipTransport {
+            let sync = Arc::new(GossipSync::new(IrohGossipTransport {
                 sender,
                 receiver: tokio::sync::Mutex::new(receiver),
-            });
+            }));
             info!("gossip overlay joined (mesh CRDT topic)");
-            Some(tokio::spawn(async move {
-                if let Err(e) = sync
-                    .run(|msg| info!(?msg, "gossip: received CRDT update"))
-                    .await
-                {
-                    warn!("gossip dispatch loop ended: {e}");
-                }
-            }))
+
+            // Signalled by the apply loop when a conflict costs us our claim.
+            let (reclaim_tx, reclaim_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+
+            let dispatch = {
+                let sync = sync.clone();
+                let store = claims.clone();
+                let me = self_id_str.clone();
+                tokio::spawn(async move {
+                    let result = sync
+                        .run(move |msg| {
+                            let mut s = store.lock().expect("claim store poisoned");
+                            if apply_subnet_message(&mut s, &msg, &me) {
+                                drop(s);
+                                let _ = reclaim_tx.send(());
+                            }
+                        })
+                        .await;
+                    if let Err(e) = result {
+                        warn!("gossip dispatch loop ended: {e}");
+                    }
+                })
+            };
+
+            let claim = {
+                let sync = sync.clone();
+                let store = claims.clone();
+                let me = self_id_str.clone();
+                tokio::spawn(async move { claim_manager(sync, store, me, reclaim_rx).await })
+            };
+
+            (Some(dispatch), Some(claim))
         }
         Err(e) => {
             warn!("gossip subscribe failed: {e}; continuing without CRDT overlay");
-            None
+            (None, None)
         }
     };
 
@@ -409,7 +445,10 @@ async fn run_mesh(endpoint: Endpoint, no_relay: bool, roster_path: &Path) -> Res
     for d in &dialers {
         d.abort();
     }
-    if let Some(t) = &gossip_task {
+    if let Some(t) = &gossip_dispatch {
+        t.abort();
+    }
+    if let Some(t) = &claim_task {
         t.abort();
     }
     router.shutdown().await.context("router shutdown")?;
@@ -447,6 +486,156 @@ async fn connector_loop(
         }
     }
 }
+
+// --- subnet claim (mjolnir-mesh-chn) -------------------------------------
+
+/// Subnet-claim warmup: after joining gossip, wait this long to learn existing
+/// claims before publishing our own, so a fresh node doesn't stomp an
+/// established claim. (Same-site local-peer detection — claim_cooldown — is a
+/// separate, future concern.)
+const CLAIM_WARMUP: Duration = Duration::from_secs(8);
+
+/// Client-subnet size each router claims from the mesh space (10.42.0.0/16).
+const CLIENT_PREFIX_LEN: u8 = 24;
+
+/// Shared CRDT subnet-claim store: cidr string -> claim. Written by the gossip
+/// apply loop and the local claim routine; babeld (mjolnir-mesh-83k) will read
+/// it for the local subnet to redistribute.
+type ClaimStore = Arc<Mutex<HashMap<String, SubnetClaim>>>;
+
+/// Build an HLC stamped with the current wall clock for `node_id`.
+fn now_hlc(node_id: &str) -> HLC {
+    let wall_clock = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    HLC {
+        wall_clock,
+        counter: 0,
+        node_id: node_id.to_string(),
+    }
+}
+
+/// Apply an inbound subnet CRDT message to the claim store. Returns `true` if
+/// THIS node lost its own claim in a conflict and must re-claim. Pure over the
+/// map (no I/O) so it's unit-tested below.
+fn apply_subnet_message(
+    store: &mut HashMap<String, SubnetClaim>,
+    msg: &GossipMessage,
+    self_id: &str,
+) -> bool {
+    match msg {
+        GossipMessage::SubnetClaimUpdate { cidr, entry } => {
+            match merge_subnet_claim(store.get(cidr), entry) {
+                MergeResult::Inserted | MergeResult::Updated => {
+                    store.insert(cidr.clone(), entry.clone());
+                    false
+                }
+                MergeResult::Unchanged => false,
+                MergeResult::Conflict { winner, loser } => {
+                    let we_lost =
+                        loser.owner_node_id == self_id && winner.owner_node_id != self_id;
+                    store.insert(cidr.clone(), winner);
+                    we_lost
+                }
+            }
+        }
+        GossipMessage::SubnetClaimRelease { cidr, hlc } => {
+            if store
+                .get(cidr)
+                .is_some_and(|existing| *hlc >= existing.claimed_at)
+            {
+                store.remove(cidr);
+            }
+            false
+        }
+        // Lease/DNS/Service CRDT messages are out of scope for the subnet claim.
+        _ => false,
+    }
+}
+
+/// Manage this node's subnet claim: after a warmup to learn existing claims,
+/// pick a free /24 and publish it; re-claim whenever a conflict costs us ours.
+async fn claim_manager<T: GossipTransport>(
+    sync: Arc<GossipSync<T>>,
+    store: ClaimStore,
+    self_id: String,
+    mut reclaim_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+) {
+    tokio::time::sleep(CLAIM_WARMUP).await;
+    claim_and_publish(&sync, &store, &self_id).await;
+    while reclaim_rx.recv().await.is_some() {
+        // Brief pause so a conflict storm settles before we re-pick.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        info!("lost our subnet claim in a conflict — re-claiming");
+        claim_and_publish(&sync, &store, &self_id).await;
+    }
+}
+
+/// Pick a free /24 (avoiding known claims), record it, and gossip the claim.
+async fn claim_and_publish<T: GossipTransport>(
+    sync: &GossipSync<T>,
+    store: &ClaimStore,
+    self_id: &str,
+) {
+    let claimed: HashSet<Ipv4Net> = {
+        let s = store.lock().expect("claim store poisoned");
+        s.values()
+            .filter_map(|c| match c.cidr {
+                IpNet::V4(n) => Some(n),
+                IpNet::V6(_) => None,
+            })
+            .collect()
+    };
+    let net = match alloc::pick_subnet_or_smaller(
+        self_id,
+        &claimed,
+        alloc::DEFAULT_MESH_SPACE,
+        CLIENT_PREFIX_LEN,
+    ) {
+        Some(n) => n,
+        None => {
+            warn!("no free subnet available in the mesh space to claim");
+            return;
+        }
+    };
+    let cidr_key = net.to_string();
+    let claim = SubnetClaim {
+        cidr: IpNet::V4(net),
+        owner_node_id: self_id.to_string(),
+        site_name: None,
+        claimed_at: now_hlc(self_id),
+    };
+    store
+        .lock()
+        .expect("claim store poisoned")
+        .insert(cidr_key.clone(), claim.clone());
+    match sync
+        .publish(GossipMessage::SubnetClaimUpdate {
+            cidr: cidr_key,
+            entry: claim,
+        })
+        .await
+    {
+        Ok(()) => info!(subnet = %net, "claimed client subnet and published it"),
+        Err(e) => warn!(subnet = %net, "claimed subnet but gossip publish failed: {e}"),
+    }
+}
+
+/// Enable IPv4 forwarding in this (container) network namespace so the kernel
+/// routes client traffic between the TUN tunnels and the veth/bridge. Required
+/// for cross-mesh client transit (the container half of mjolnir-mesh-ag3); the
+/// RouterOS-side routes live in deploy/mikrotik/client-routing.rsc.
+#[cfg(target_os = "linux")]
+fn enable_ip_forwarding() {
+    match std::fs::write("/proc/sys/net/ipv4/ip_forward", "1") {
+        Ok(()) => info!("enabled net.ipv4.ip_forward (client transit)"),
+        Err(e) => warn!("could not enable ip_forward — cross-mesh client transit needs it: {e}"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enable_ip_forwarding() {}
 
 /// Live per-peer tunnel registry: maps each connected peer to its TUN interface
 /// name. Shared between the accept handler and the per-peer dialer tasks. The
@@ -930,5 +1119,116 @@ fn parse_peer(arg: &str) -> Result<EndpointAddr> {
         Ok(EndpointAddr::new(id))
     } else {
         decode_addr(arg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claim(cidr: &str, owner: &str, wall: u64) -> SubnetClaim {
+        SubnetClaim {
+            cidr: cidr.parse().expect("valid cidr"),
+            owner_node_id: owner.to_string(),
+            site_name: None,
+            claimed_at: HLC {
+                wall_clock: wall,
+                counter: 0,
+                node_id: owner.to_string(),
+            },
+        }
+    }
+
+    fn update(c: &SubnetClaim) -> GossipMessage {
+        GossipMessage::SubnetClaimUpdate {
+            cidr: c.cidr.to_string(),
+            entry: c.clone(),
+        }
+    }
+
+    #[test]
+    fn applies_new_claim() {
+        let mut store = HashMap::new();
+        let incoming = claim("10.42.1.0/24", "peer-b", 100);
+        let reclaim = apply_subnet_message(&mut store, &update(&incoming), "self");
+        assert!(!reclaim);
+        assert_eq!(store["10.42.1.0/24"].owner_node_id, "peer-b");
+    }
+
+    #[test]
+    fn same_owner_newer_updates_no_reclaim() {
+        let mut store = HashMap::new();
+        store.insert("10.42.1.0/24".to_string(), claim("10.42.1.0/24", "peer-b", 100));
+        let newer = claim("10.42.1.0/24", "peer-b", 200);
+        let reclaim = apply_subnet_message(&mut store, &update(&newer), "self");
+        assert!(!reclaim);
+        assert_eq!(store["10.42.1.0/24"].claimed_at.wall_clock, 200);
+    }
+
+    #[test]
+    fn older_claim_is_unchanged() {
+        let mut store = HashMap::new();
+        store.insert("10.42.1.0/24".to_string(), claim("10.42.1.0/24", "peer-b", 200));
+        let older = claim("10.42.1.0/24", "peer-b", 100);
+        let reclaim = apply_subnet_message(&mut store, &update(&older), "self");
+        assert!(!reclaim);
+        assert_eq!(store["10.42.1.0/24"].claimed_at.wall_clock, 200);
+    }
+
+    #[test]
+    fn conflict_we_lose_triggers_reclaim() {
+        // We hold the /24 (wall 200); a peer's earlier claim (wall 100) wins by
+        // first-writer-wins, so we lose and must re-claim.
+        let mut store = HashMap::new();
+        store.insert("10.42.1.0/24".to_string(), claim("10.42.1.0/24", "self", 200));
+        let earlier_peer = claim("10.42.1.0/24", "peer-b", 100);
+        let reclaim = apply_subnet_message(&mut store, &update(&earlier_peer), "self");
+        assert!(reclaim, "we should re-claim after losing our subnet");
+        assert_eq!(store["10.42.1.0/24"].owner_node_id, "peer-b");
+    }
+
+    #[test]
+    fn conflict_we_win_no_reclaim() {
+        // We hold the /24 with the earlier claim (wall 100); a peer's later
+        // claim (wall 200) loses, so we keep it and do NOT re-claim.
+        let mut store = HashMap::new();
+        store.insert("10.42.1.0/24".to_string(), claim("10.42.1.0/24", "self", 100));
+        let later_peer = claim("10.42.1.0/24", "peer-b", 200);
+        let reclaim = apply_subnet_message(&mut store, &update(&later_peer), "self");
+        assert!(!reclaim);
+        assert_eq!(store["10.42.1.0/24"].owner_node_id, "self");
+    }
+
+    #[test]
+    fn release_removes_when_newer() {
+        let mut store = HashMap::new();
+        store.insert("10.42.1.0/24".to_string(), claim("10.42.1.0/24", "peer-b", 100));
+        let release = GossipMessage::SubnetClaimRelease {
+            cidr: "10.42.1.0/24".to_string(),
+            hlc: HLC {
+                wall_clock: 200,
+                counter: 0,
+                node_id: "peer-b".to_string(),
+            },
+        };
+        let reclaim = apply_subnet_message(&mut store, &release, "self");
+        assert!(!reclaim);
+        assert!(!store.contains_key("10.42.1.0/24"), "newer release should remove the claim");
+    }
+
+    #[test]
+    fn release_ignored_when_older() {
+        let mut store = HashMap::new();
+        store.insert("10.42.1.0/24".to_string(), claim("10.42.1.0/24", "peer-b", 200));
+        let stale_release = GossipMessage::SubnetClaimRelease {
+            cidr: "10.42.1.0/24".to_string(),
+            hlc: HLC {
+                wall_clock: 100,
+                counter: 0,
+                node_id: "peer-b".to_string(),
+            },
+        };
+        apply_subnet_message(&mut store, &stale_release, "self");
+        assert!(store.contains_key("10.42.1.0/24"), "stale release must not remove a newer claim");
     }
 }
