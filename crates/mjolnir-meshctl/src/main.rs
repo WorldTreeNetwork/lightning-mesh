@@ -21,6 +21,7 @@
 // wire them in, those items read as dead code. Remove this once M4 lands.
 #![allow(dead_code)]
 
+mod apply;
 mod inventory;
 mod plan;
 mod routeros;
@@ -97,11 +98,15 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// [M3] Converge the router to its declared config.
+    /// Converge the router to its declared config (add/set missing or drifted
+    /// resources, remove mjolnir-tagged leftovers). Mutating.
     Apply {
         name: Option<String>,
         #[arg(long)]
         all: bool,
+        /// Print the RouterOS commands that would run, without executing them.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// [M4] Apply + upload tar + add/start the container + reachability check.
     Deploy {
@@ -146,7 +151,9 @@ async fn run() -> Result<()> {
             cmd_bootstrap(&inv, name.as_deref(), all, pubkey.as_deref()).await
         }
         Command::Plan { name, all } => cmd_plan(&inv, name.as_deref(), all).await,
-        Command::Apply { .. } => not_yet("apply", "M3 (mjolnir-mesh-65e)"),
+        Command::Apply { name, all, dry_run } => {
+            cmd_apply(&inv, name.as_deref(), all, dry_run).await
+        }
         Command::Deploy { .. } => not_yet("deploy", "M4 (mjolnir-mesh-2p1)"),
     }
 }
@@ -287,11 +294,11 @@ async fn cmd_plan(inv: &Inventory, name: Option<&str>, all: bool) -> Result<()> 
     let targets = select(inv, name, all)?;
     for r in targets {
         let ssh = Ssh::new(r.ssh_target(inv));
-        let (entries, prunes) = plan::plan_router(&ssh, inv, r).await?;
+        let (observed, prunes) = plan::observe_router(&ssh, inv, r).await?;
 
-        println!("\n{} plan ({} resources):", r.name, entries.len());
+        println!("\n{} plan ({} resources):", r.name, observed.len());
         let (mut conv, mut miss, mut drift, mut conf) = (0u32, 0u32, 0u32, 0u32);
-        for e in &entries {
+        for e in &observed {
             let label = match &e.status {
                 Status::Missing => {
                     miss += 1;
@@ -315,7 +322,7 @@ async fn cmd_plan(inv: &Inventory, name: Option<&str>, all: bool) -> Result<()> 
                     format!("CONFLICT ({n} live matches)")
                 }
             };
-            println!("  {:<11} {:<26} {label}", e.kind, e.id);
+            println!("  {:<11} {:<26} {label}", e.desired.kind, e.desired.id);
         }
         for p in &prunes {
             println!("  {:<11} {:<26} PRUNE (leftover)", p.kind, p.comment);
@@ -326,6 +333,70 @@ async fn cmd_plan(inv: &Inventory, name: Option<&str>, all: bool) -> Result<()> 
         );
     }
     // `plan` is observe-only; it always exits 0 regardless of drift.
+    Ok(())
+}
+
+async fn cmd_apply(inv: &Inventory, name: Option<&str>, all: bool, dry_run: bool) -> Result<()> {
+    let targets = select(inv, name, all)?;
+    let mut failures = 0;
+    for r in targets {
+        let ssh = Ssh::new(r.ssh_target(inv));
+        let (changes, skipped) = apply::plan_changes(&ssh, inv, r).await?;
+
+        let mode = if dry_run { " (dry run)" } else { "" };
+        println!("\n{} apply{mode}: {} change(s)", r.name, changes.len());
+        for s in &skipped {
+            println!("  ! {:<11} {:<26} SKIP — {}", s.kind, s.id, s.why);
+        }
+        if changes.is_empty() {
+            println!("  already converged");
+            continue;
+        }
+
+        let (mut done, mut failed) = (0u32, 0u32);
+        for c in &changes {
+            if dry_run {
+                println!("  + {:<6} {:<11} {:<22} {} [{}]", c.verb, c.kind, c.id, c.cmd, c.reason);
+                continue;
+            }
+            match apply::run_change(&ssh, c).await {
+                Ok(()) => {
+                    done += 1;
+                    println!("  ✓ {:<6} {:<11} {} ({})", c.verb, c.kind, c.id, c.reason);
+                }
+                Err(e) => {
+                    failed += 1;
+                    println!("  ✗ {:<6} {:<11} {} — {e:#}", c.verb, c.kind, c.id);
+                }
+            }
+        }
+
+        if dry_run {
+            continue;
+        }
+
+        // Re-observe to confirm convergence after mutating.
+        let (after, prunes_after) = plan::observe_router(&ssh, inv, r).await?;
+        let unconverged = after
+            .iter()
+            .filter(|o| o.status != plan::Status::Converged)
+            .count()
+            + prunes_after.len();
+        println!(
+            "  → {done} applied, {failed} failed; post-apply: {}",
+            if unconverged == 0 {
+                "fully converged".to_string()
+            } else {
+                format!("{unconverged} still not converged")
+            }
+        );
+        if failed > 0 || unconverged > 0 {
+            failures += 1;
+        }
+    }
+    if failures > 0 {
+        bail!("{failures} router(s) did not fully converge");
+    }
     Ok(())
 }
 

@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::ssh::Ssh;
 
@@ -108,6 +108,20 @@ fn ensure_complete(stdout: &str) -> Result<()> {
             stdout.trim()
         )
     }
+}
+
+/// Run a mutating RouterOS command (`add`/`set`/`remove`), verifying it
+/// completed. Same hazard as queries: RouterOS prints errors to stdout and
+/// exits 0. We append the OK sentinel — RouterOS aborts the script before
+/// printing it on error — so a missing sentinel means failure, with the
+/// router's own message surfaced. Returns stdout (which may include an `add`'s
+/// new internal id; that's fine, we only require the sentinel).
+pub async fn run_command(ssh: &Ssh, cmd: &str) -> Result<String> {
+    let script = format!("{cmd}; :put {END_MARKER:?}");
+    let out = ssh.run(&script).await?;
+    ensure_complete(&out)
+        .with_context(|| format!("RouterOS rejected `{cmd}`"))?;
+    Ok(out)
 }
 
 /// Observe: run the generated query over SSH and parse the result.
