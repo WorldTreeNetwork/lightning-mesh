@@ -153,8 +153,22 @@ struct IrohDatagramConn {
 #[async_trait::async_trait]
 impl DatagramConn for IrohDatagramConn {
     async fn send_datagram(&self, packet: Bytes) -> Result<(), EncapError> {
-        self.conn.send_datagram(packet).map_err(|e| {
-            EncapError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        // Use the *waiting* send: under congestion (notably right after connect,
+        // when the congestion window is tiny and we may still be relay-only), the
+        // non-waiting `send_datagram` silently drops datagrams oldest-first. That
+        // is the wrong policy for an L3 data plane — it turns transient backpressure
+        // into packet loss the upper layers must recover from. `send_datagram_wait`
+        // instead applies backpressure to the TUN reader until buffer space frees.
+        let len = packet.len();
+        self.conn.send_datagram_wait(packet).await.map_err(|e| {
+            use iroh::endpoint::SendDatagramError;
+            match e {
+                SendDatagramError::TooLarge => EncapError::DatagramTooLarge(len),
+                other => EncapError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    other.to_string(),
+                )),
+            }
         })
     }
 
@@ -217,9 +231,16 @@ async fn run_tun_connect(endpoint: Endpoint, addr_blob: &str) -> Result<()> {
     );
     // Echo server on our own link addr (so the peer can probe us too).
     spawn_udp_echo(self_addr);
-    // Give the peer a moment to bring up its side, then probe.
+    // Give the peer a moment to bring up its side. iroh returns from connect()
+    // as soon as a QUIC connection exists — which is over the *relay* initially;
+    // hole-punching to a direct path happens asynchronously over the next few
+    // seconds. Probing inside that window measures relay-only loss, which is high
+    // for unreliable datagrams. Wait (bounded) for a direct path before the
+    // headline probe, then report which path actually carried it.
     tokio::time::sleep(Duration::from_secs(1)).await;
-    probe_peer(peer_addr).await;
+    let direct = wait_for_direct_path(&conn, Duration::from_secs(10)).await;
+    log_conn_paths(&conn);
+    probe_peer(peer_addr, direct).await;
 
     info!("tunnel established; holding open (Ctrl-C to exit)");
     tokio::signal::ctrl_c().await.context("waiting for Ctrl-C")?;
@@ -291,9 +312,59 @@ fn spawn_udp_echo(bind_ip: Ipv4Addr) {
     });
 }
 
+/// Wait (bounded) for the connection to acquire a direct (hole-punched) path in
+/// addition to the relay. Returns `true` if a direct path was established within
+/// `timeout`, `false` if it stayed relay-only. A relay-only path forwards
+/// unreliable datagrams best-effort and drops heavily under load, so the data
+/// plane is far lossier before this returns true.
+async fn wait_for_direct_path(conn: &Connection, timeout: Duration) -> bool {
+    // Poll path snapshots rather than the path stream: the stream needs
+    // `StreamExt` (futures-util), which is a Linux-only dep here, whereas
+    // `paths()` is a plain snapshot that works on every platform.
+    let deadline = Instant::now() + timeout;
+    loop {
+        if conn.paths().iter().any(|p| p.is_ip()) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            warn!(
+                ?timeout,
+                "no direct path within timeout — still relay-only; datagram loss \
+                 will be high until a hole-punch succeeds"
+            );
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Log a one-line summary of every QUIC path on the connection (relay vs direct,
+/// selected, RTT) plus the current datagram-size ceiling. This is the diagnostic
+/// that turns a bare "1/5 probes crossed" into "1/5 on a relay-only path".
+fn log_conn_paths(conn: &Connection) {
+    let paths = conn.paths();
+    for p in paths.iter() {
+        let kind = if p.is_relay() { "relay" } else { "direct" };
+        info!(
+            kind,
+            selected = p.is_selected(),
+            remote = %p.remote_addr(),
+            rtt = ?p.rtt(),
+            "tunnel path"
+        );
+    }
+    info!(
+        max_datagram_size = ?conn.max_datagram_size(),
+        path_count = paths.len(),
+        "tunnel connection datagram ceiling"
+    );
+}
+
 /// Send a few UDP probes to `peer_ip:TUN_PROBE_PORT` over the tunnel and report
 /// round-trip results. Success proves real IP traffic flows across the mesh.
-async fn probe_peer(peer_ip: Ipv4Addr) {
+/// `direct_path` records whether a hole-punched path was up, so the headline
+/// makes relay-only loss legible rather than mysterious.
+async fn probe_peer(peer_ip: Ipv4Addr, direct_path: bool) {
     let sock = match tokio::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await {
         Ok(s) => s,
         Err(e) => {
@@ -321,7 +392,11 @@ async fn probe_peer(peer_ip: Ipv4Addr) {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    println!("tunnel reachability: {ok}/5 replies — {} ", if ok > 0 { "DATA PLANE WORKS" } else { "no traffic crossed" });
+    let path = if direct_path { "direct path" } else { "RELAY-ONLY path (lossy)" };
+    println!(
+        "tunnel reachability: {ok}/5 replies over {path} — {}",
+        if ok > 0 { "DATA PLANE WORKS" } else { "no traffic crossed" }
+    );
 }
 
 /// Probe TUN-device creation — the gating check for running the L3 data plane
