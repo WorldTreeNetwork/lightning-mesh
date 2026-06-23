@@ -1,8 +1,43 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// The reserved link-addressing block for per-peer TUN /31s.
 /// Devices on the mesh never see these addresses.
 pub const LINK_BLOCK: (Ipv4Addr, u8) = (Ipv4Addr::new(10, 255, 0, 0), 16);
+
+/// Prefix length of the shared mesh **backhaul** ULA (`fd6d:6a00::/64`).
+///
+/// Every node self-assigns one address in this prefix to its shared-segment
+/// (container) interface; the host part is derived from the node id, so each
+/// node's underlay address is stable and collision-free with zero coordination —
+/// no DHCP, no server, works fully offline.
+///
+/// This is the node-to-node *underlay* that iroh/QUIC and mDNS run over (distinct
+/// from the per-peer TUN /31s in [`LINK_BLOCK`] and from the CRDT-assigned client
+/// /24s). Because every node shares this one `/64`, all peers are on-link to each
+/// other on the shared L2 segment — direct neighbours, no routing, and no
+/// scope-ids (unlike raw `fe80::` link-local). `fd` marks it a ULA (RFC 4193);
+/// `6d6a` = "mj".
+pub const BACKHAUL_PREFIX_LEN: u8 = 64;
+
+/// Upper 64 bits of the backhaul prefix `fd6d:6a00::/64`.
+const BACKHAUL_PREFIX_HI: u64 = 0xfd6d_6a00_0000_0000;
+
+/// Derive this node's stable IPv6 backhaul address from its node id.
+///
+/// Address = the `fd6d:6a00::/64` prefix in the high 64 bits, host part = the
+/// first 64 bits of `blake3(node_id)`. Deterministic (same node id → same address
+/// every boot) and collision-resistant over the 64-bit host space — negligible for
+/// any realistic mesh. Mirrors [`pick_link_31`]'s hash-into-a-block approach. The
+/// host part is forced non-zero so we never land on the subnet-router anycast
+/// address (`fd6d:6a00::`).
+pub fn backhaul_addr(node_id: &str) -> Ipv6Addr {
+    let hash = blake3::hash(node_id.as_bytes());
+    let mut host = u64::from_be_bytes(hash.as_bytes()[..8].try_into().expect("8 bytes"));
+    if host == 0 {
+        host = 1; // avoid the subnet-router anycast address fd6d:6a00::
+    }
+    Ipv6Addr::from(((BACKHAUL_PREFIX_HI as u128) << 64) | host as u128)
+}
 
 /// Derive a /31 for a peer-pair, symmetrically.
 ///
@@ -93,6 +128,38 @@ mod tests {
         // The lower address of the pair must be even (bit 0 clear).
         let lower_u32 = self_u32.min(peer_u32);
         assert_eq!(lower_u32 & 1, 0);
+    }
+
+    #[test]
+    fn backhaul_addr_is_deterministic() {
+        let id = "fd7691128f2bb615d56cf2f0e202fa01472890dd8af89f9132d34d566776ed45";
+        assert_eq!(backhaul_addr(id), backhaul_addr(id));
+    }
+
+    #[test]
+    fn backhaul_addr_in_shared_prefix() {
+        // Every node lands in the same fd6d:6a00::/64, so all peers are on-link.
+        let a = backhaul_addr("alpha");
+        let b = backhaul_addr("beta");
+        let seg = a.segments();
+        assert_eq!([seg[0], seg[1], seg[2], seg[3]], [0xfd6d, 0x6a00, 0, 0]);
+        // Distinct node ids → distinct host parts (different addresses).
+        assert_ne!(a, b);
+        // Shared /64 prefix across nodes.
+        assert_eq!(&a.segments()[..4], &b.segments()[..4]);
+        // ULA range (fc00::/7) and never the anycast address.
+        assert!((a.segments()[0] & 0xfe00) == 0xfc00);
+        assert_ne!(a.segments()[4..], [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn backhaul_addrs_distinct_across_many_nodes() {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for i in 0u32..100 {
+            seen.insert(backhaul_addr(&format!("node-{i:08x}")));
+        }
+        assert_eq!(seen.len(), 100, "all 100 node backhaul addrs must be unique");
     }
 
     #[test]

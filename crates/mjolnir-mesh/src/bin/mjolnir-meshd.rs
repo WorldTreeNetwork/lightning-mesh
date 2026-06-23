@@ -82,9 +82,16 @@ struct Cli {
 
     /// Relay server URL(s) to use (repeatable), e.g. a self-hosted relay. If
     /// omitted, uses n0's staging relays. NOTE: iroh 0.96's "Default" points at
-    /// the flaky canary network, so we never use it.
+    /// the flaky canary network, so we never use it. Implies internet mode.
     #[arg(long, global = true)]
     relay: Vec<String>,
+
+    /// Opt into internet mode (n0 relays + pkarr/DNS discovery) for the `mesh`
+    /// daemon. By default `mesh` runs in `--lan` mode (offline, mDNS, no relay),
+    /// since the deployed same-site mesh has no internet. Use this only when the
+    /// mesh must span the internet across separate sites.
+    #[arg(long, global = true)]
+    internet: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -142,6 +149,11 @@ enum Command {
         /// the router for local-client delivery. Matches container-net.rsc.
         #[arg(long, default_value = "172.20.0.1")]
         client_gateway: Ipv4Addr,
+        /// The container interface on the shared L2 segment (the veth facing the
+        /// other mesh nodes). meshd self-assigns this node's derived IPv6 backhaul
+        /// ULA here so peers discover + connect directly over the LAN with no DHCP.
+        #[arg(long, default_value = "eth0")]
+        backhaul_iface: String,
     },
 }
 
@@ -160,13 +172,20 @@ async fn main() -> Result<()> {
         return run_tun_test().await;
     }
 
-    // --lan implies no relay (LAN discovery only).
-    let no_relay = cli.no_relay || cli.lan;
+    // The deployed `mesh` daemon defaults to LAN mode (offline, mDNS, no relay),
+    // since the same-site mesh has no internet. Opt into internet/relay mode with
+    // `--internet` or by passing `--relay`. The lower-level test commands
+    // (listen/connect/id) keep their explicit-`--lan` behaviour unchanged.
+    let mesh_mode = matches!(cli.command, Command::Mesh { .. });
+    let internet = cli.internet || !cli.relay.is_empty();
+    let lan = cli.lan || (mesh_mode && !internet);
+    // --lan (and LAN-by-default) imply no relay (LAN discovery only).
+    let no_relay = cli.no_relay || lan;
     let endpoint = build_endpoint(
         cli.secret_file.as_deref(),
         no_relay,
         cli.bind,
-        cli.lan,
+        lan,
         &cli.relay,
     )
     .await?;
@@ -186,6 +205,7 @@ async fn main() -> Result<()> {
             babel_config,
             babeld,
             client_gateway,
+            backhaul_iface,
         } => {
             run_mesh(
                 endpoint,
@@ -195,6 +215,7 @@ async fn main() -> Result<()> {
                 babel_config,
                 babeld,
                 client_gateway,
+                backhaul_iface,
             )
             .await?
         }
@@ -360,12 +381,19 @@ async fn run_mesh(
     babel_config: PathBuf,
     babeld: PathBuf,
     client_gateway: Ipv4Addr,
+    backhaul_iface: String,
 ) -> Result<()> {
-    wait_until_addressable(&endpoint, no_relay).await;
-    print_identity(&endpoint)?;
-
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
+
+    // Self-assign this node's derived IPv6 backhaul ULA to the shared-segment
+    // interface BEFORE we wait for addressability, so iroh enumerates it and mDNS
+    // announces it to peers (mjolnir-mesh-4pk). Zero-config, collision-free,
+    // DHCP-free — the underlay that lets all same-site nodes connect directly.
+    assign_backhaul_addr(&backhaul_iface, &self_id_str).await;
+
+    wait_until_addressable(&endpoint, no_relay).await;
+    print_identity(&endpoint)?;
 
     // Peer set = roster file (if any) merged with --peer args, deduped by token.
     let mut peer_entries: Vec<PeerEntry> = Vec::new();
@@ -745,6 +773,67 @@ async fn install_client_route(subnet: Ipv4Net, gateway: Ipv4Addr) {
 
 #[cfg(not(target_os = "linux"))]
 async fn install_client_route(_subnet: Ipv4Net, _gateway: Ipv4Addr) {}
+
+/// Self-assign this node's derived IPv6 backhaul ULA (`fd6d:6a00::/64`, host from
+/// the node id) to the shared-segment interface, so every node has a stable,
+/// collision-free, DHCP-free underlay address in one shared /64. Peers are then
+/// on-link to each other and iroh/mDNS discover + connect directly over the LAN
+/// (mjolnir-mesh-4pk). Containers commonly default-disable IPv6, so we enable it
+/// on the interface first. Best-effort: an unreachable interface or an
+/// already-present address is logged, not fatal — the node still runs.
+#[cfg(target_os = "linux")]
+async fn assign_backhaul_addr(iface: &str, self_id: &str) {
+    use futures_util::stream::TryStreamExt;
+    use rtnetlink::new_connection;
+
+    let addr = mjolnir_mesh::tun::backhaul_addr(self_id);
+    let prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN;
+
+    // Containers often ship with IPv6 disabled on the iface — enable it first.
+    let _ = std::fs::write(format!("/proc/sys/net/ipv6/conf/{iface}/disable_ipv6"), "0");
+
+    let (connection, handle, _) = match new_connection() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(%addr, "netlink connect for backhaul address failed: {e}");
+            return;
+        }
+    };
+    tokio::spawn(connection);
+
+    let mut links = handle.link().get().match_name(iface.to_string()).execute();
+    let index = match links.try_next().await {
+        Ok(Some(link)) => link.header.index,
+        Ok(None) => {
+            warn!(
+                iface,
+                "backhaul interface not found — is the container bridged onto the shared L2 segment? \
+                 (see deploy/mikrotik/container-net.rsc)"
+            );
+            return;
+        }
+        Err(e) => {
+            warn!(iface, "looking up backhaul interface failed: {e}");
+            return;
+        }
+    };
+
+    match handle
+        .address()
+        .add(index, std::net::IpAddr::V6(addr), prefix)
+        .execute()
+        .await
+    {
+        Ok(()) => info!(
+            %addr, iface, prefix,
+            "assigned IPv6 backhaul address — peers discover this node here via mDNS"
+        ),
+        Err(e) => warn!(%addr, iface, "could not assign backhaul address (may already exist): {e}"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn assign_backhaul_addr(_iface: &str, _self_id: &str) {}
 
 /// Enable IPv4 forwarding in this (container) network namespace so the kernel
 /// routes client traffic between the TUN tunnels and the veth/bridge. Required
