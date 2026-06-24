@@ -127,6 +127,36 @@ synchronization protocol" to design and build.
 This is squarely the kind of non-authoritative, eventually-consistent, symmetric
 mechanism the project is about — a good problem, not a blocker.
 
+## Hardware options for open WiFi 6 mesh nodes (2026-06-23 survey)
+
+For *additional* open, mesh-capable nodes (the MikroTiks stay AP/STA-only). The
+overlay runs **natively** on these (no container needed — they're real Linux);
+512 MB RAM is enough for native iroh + babeld, tight for containers.
+
+**Driver vs enclosure is the core tradeoff:**
+- **mt76 (MediaTek Filogic mt7915/7916/7981/7986)** — best *driver*: full 802.11s
+  **and** IBSS, in mac80211 kernelspace (reliable, same path as ath9k), dual-radio
+  concurrent. Weak ready-made *outdoor* options.
+- **ath11k IPQ6018** — *partial* 802.11s (firmware-path; minor quirks like ignoring
+  `mesh_dtim_period`, but babeld doesn't need tight beacon timing). Has ready
+  **outdoor PoE WiFi 6 enclosures** off the shelf.
+- **IPQ-5010/5018, rtw89, Intel iwlwifi** — not viable for open mesh.
+
+| Pick | Device | SoC / driver | RAM | Outdoor/PoE | 802.11s | Notes |
+|---|---|---|---|---|---|---|
+| 🥇 | TP-Link EAP610-Outdoor (~$60–80) | IPQ6018 / ath11k | 512 MB | Yes, 802.3at | partial | dual-radio (gateway-capable); OpenWrt merged — pin 24.10 stable; bench-validate mesh |
+| 🥈 | TP-Link EAP625-Outdoor HD (~$80–100) | IPQ6018 / ath11k | 512 MB | Yes, **IP67**, PoE+ | partial | detachable antennas (swap high-gain omni for forest NLOS); newer OpenWrt 25.12+ |
+| 🥉 | Banana Pi BPI-R3 (+ enclosure) | MT7986 / mt76 | **2 GB** | DIY | **full** | best driver + compute (runs containers); gateway/relay/compute node |
+| gw | GL.iNet GL-MT6000 (indoor) | MT7986 / mt76 | 512 MB | No | **full** | indoor bridgehead: 802.11s island ↔ MikroTik AP/STA fleet |
+
+**Hybrid gateway pattern** (confirmed on both IPQ6018 and MT7986): one radio =
+802.11s mesh point (babeld), the other = AP or STA toward the MikroTik fleet.
+
+**Strategic upside:** a couple of these stand up a *real* 802.11s island bridged to
+the MikroTiks — demonstrating the protocol spanning open-mesh + closed-AP/STA
+hardware, which is the portability story for the talk. Full survey + sources in the
+`mjolnir-mesh-b1d` notes.
+
 ## Status & next steps
 
 - **Validated:** L3 mesh + derived-IPv4 backhaul + direct iroh tunnels + mDNS
