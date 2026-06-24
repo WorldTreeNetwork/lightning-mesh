@@ -77,7 +77,10 @@ GL.iNet (Flint 2 etc.) are disqualified — sealed consumer units. If you want t
 → **BPI-R3** (or **BPI-R3 Mini** for compact). Onboard MT7976 = mesh on 5 GHz + clients on 2.4 GHz out of the box. All mt76, mainline, U.FL for your antennas, ~$75–110. Same silicon across both = one firmware/mesh config for the whole fleet.
 
 **Tri-radio node (the "3 radios" goal):**
-→ **BPI-R3 + one AsiaRF AW7916-NPD (or AW7915-NPD) DBDC card** → 4 radios, use 3: onboard 5 GHz = dedicated 802.11s backhaul (fixed non-DFS channel); onboard 2.4 GHz = clients; card 5/6 GHz = second client AP. Only one card = only one 3.3 V/3 A power concern. *Check the R3 M.2 slot is wired/powered for a WiFi card (vs NVMe-only) and budget an M.2↔mPCIe adapter.*
+→ **BPI-R3 + one AsiaRF card.** The R3 onboard MT7976 already gives two client radios (2.4 + 5); add the card as the **dedicated backhaul**. Pick the card by role — **mind that NP1 ≠ NPD:**
+  - **AW7915-NP1** (MT7915 **4T4R, single band-selectable = 1 radio**) locked to a fixed non-DFS 5 GHz channel → clean **3 radios**, with the most antennas/gain on the backhaul. *This is the right card for a dedicated-backhaul tri-radio.* (It's the 4T4R "Dual Bands Selectable" card on Amazon, ASIN B0D9XZD75M — **not** DBDC.)
+  - **AW7916-NPD / AW7915-NPD** (DBDC = **2 radios**) → 4 radios if you'd rather add two more client bands than a single high-gain backhaul.
+  Only one card either way = one 3.3 V/3 A power concern + heatsink. *Check the R3 M.2 slot is wired/powered for a WiFi card (vs NVMe-only) and budget an M.2↔mPCIe adapter.*
 
 **Tri-radio with cleaner backhaul isolation + 10G uplink:**
 → **BPI-R4 + 2× DBDC mt7916 cards** = 4 radios across two physical chips. Budget two well-powered 3.3 V/3 A slots + active cooling. (Avoid the BE14 module if you want a slot free per chip — it spans both mPCIe slots.)

@@ -34,6 +34,24 @@ For a node where one radio must be a rock-solid dedicated backhaul, prefer putti
 **backhaul on its own physical chip** (separate card or the onboard radio), and let a single
 DBDC card cover the two client bands.
 
+### NOT every AsiaRF card is DBDC — know what you're buying
+
+There are two distinct AsiaRF MT7915 mPCIe families, and they count differently:
+
+| Card | Config | Independent radios | Best role |
+|---|---|---|---|
+| **AW7915-NP1** | MT7915 **4T4R, single band-SELECTABLE** (2.4 GHz *or* 5 GHz, one at a time), 4× U.FL | **1** | Dedicated high-power **backhaul** radio on one fixed band |
+| **AW7915-NPD** | MT7915 **2T2R DBDC** (2.4 + 5 concurrent), 4× U.FL | **2** | Two client bands from one slot |
+| **AW7916-NPD** | MT7916 **2T2R/2T3R DBDC** (2.4 + 5/6, WiFi 6E), U.FL | **2** | Two client bands incl. a 6 GHz option |
+
+So the "DBDC card = 2 radios" rule applies to the **-NPD** parts. The **AW7915-NP1 is a single
+4T4R radio** (it is the one sold on Amazon as "Wi-Fi 6 802.11ax 4T4R Dual Bands *Selectable*
+mPCIe", ASIN B0D9XZD75M). It is *ideal* as a dedicated backhaul radio (more antennas/gain on
+the one band you lock it to) but it adds only ONE radio — do not count it as two. The 4T4R part
+is also the power-hungry one (~9 W, 3.3 V @ 3 A, heatsink mandatory); the 2T2R -NPD parts are
+lighter. Confirmed on AsiaRF's own page: the NP1 is "Dual-band 4T4R" *selectable*, distinct from
+the "-NPD … DBDC" variant.
+
 ---
 
 ## Tri-radio Recipes
@@ -45,7 +63,7 @@ DBDC card cover the two client bands.
 | **C** | **BPI-R4 + 1 DBDC mt7916 card** | **2** (card only; **no onboard radio**) → add 2nd card for **4** | 2× AsiaRF AW7916-NPD (mt7916) / **mt76** | per card: 2.4 + 5/6 GHz | 4–6 per card | **Yes** (mt76 802.11s) | **Bare board** | MT7988A (Filogic 880) A73 quad, 4/8 GB | board ~$95–100 + ~$60–90/card | **R4 has NO onboard WiFi** — all radios from the 2 mPCIe slots; each AsiaRF card wants **3.3 V @ 3 A (9 W)**; thermals; WED offload buggy |
 | **D** | **BPI-R4 + BE14 tri-band module** | **3** (2.4 + 5 + 6 GHz) on one module | MT7995AV + MT7976CN + MT7977IAN (WiFi 7) / **mt76 (mt7996)** | 2.4; 5; 6 GHz | 6 | mt76/mt7996 802.11s (newer, verify) | **Bare board** | MT7988A | board ~$95 + BE14 ~$74 | BE14 **occupies BOTH mPCIe slots** (it is a dual-mPCIe card) → no room for a 4th radio; mt7996 802.11s maturity less proven than mt7915 |
 | **E** | **BPI-R3 (onboard dual-band) + 1 DBDC mPCIe card** | **4** (onboard 2.4+5, card 2.4+5) — use 3 | MT7986 + MT7975 onboard + AsiaRF mt7915/16 in M.2/mPCIe / **mt76** | onboard 2.4; onboard 5; card 2.4; card 5 | 4 onboard + 2–4 card | **Yes** (mt76 802.11s, widely run on R3) | **Bare board** | MT7986A (Filogic 830) A53 quad, 2 GB | board ~$100 + card ~$60–90 | Only **M.2 Key-B/Key-M** expansion (no true mPCIe) — needs M.2↔mPCIe adapter or M.2 card; verify slot is wired for WiFi card not just NVMe/5G |
-| **F** | **x86 mini-PC / SBC + 2–3 mt76 cards** | **3–6** (2 DBDC cards = 4; 3 cards = 6) | 2–3× AsiaRF AW7915-NP1 (4T4R) or AW7916-NPD / **mt76** | each card DBDC 2.4+5 (or 6E) | 4 per 4T4R card (16+ total) | **Yes** (mt76 802.11s) | Bare boards exist; most mini-PCs are cased | varies: N100 board, DFI ADN/ASL-553, RK3588 SBC | ~$150–300 host + ~$70–90/card | **Power is the killer**: each 4T4R card = up to **9 W on 3.3 V (need 3 A/slot)**; few mainboards deliver this on >1 slot; heat ("running hot, sort cooling"); **PC Engines APU2 is EOL** |
+| **F** | **x86 mini-PC / SBC + 2–3 mt76 cards** | **2 DBDC cards = 4; 3 DBDC = 6; NP1 = 1 each** | AsiaRF **AW7916-NPD / AW7915-NPD** (DBDC, 2 radios each) or **AW7915-NP1** (4T4R, 1 radio, backhaul) / **mt76** | NPD card DBDC 2.4+5(/6); NP1 single band | 4 per card (16+ total) | **Yes** (mt76 802.11s) | Bare boards exist; most mini-PCs are cased | varies: N100 board, DFI ADN/ASL-553, RK3588 SBC | ~$150–300 host + ~$70–90/card | **Power is the killer**: each 4T4R card = up to **9 W on 3.3 V (need 3 A/slot)**; few mainboards deliver this on >1 slot; heat ("running hot, sort cooling"); **PC Engines APU2 is EOL**. Note: NP1 ≠ DBDC — counts as 1 radio |
 | **G** | **PC Engines APU2/4 + 2–3 ath9k/ath10k cards** | **2–3** | Compex WLE600/900 (ath10k) + ath9k / **ath9k+ath10k** | 1 band each (ath9k 2.4 or 5; ath10k 5) | 2–3 per card | **Yes** (ath9k solid; ath10k needs non-CT fw) | Bare board (no case) | AMD GX-412TC, 3× mPCIe (APU2) | **EOL — secondhand only** | APU2 **discontinued**; ath10k 802.11s needs non-ct firmware + rawmode; old WiFi 5 |
 
 ---
@@ -92,11 +110,12 @@ pattern (R4) plus DBDC counting is how you reach 3+ on MediaTek.
 
 ### Path 2 — SBC / x86 host + multiple radio cards (Recipe F/G)
 
-**Cards.** The workhorses on mt76:
-- **AsiaRF AW7915-NP1** — WiFi 6, MT7915, **4T4R**, 2401 Mbps, **4 antenna connectors**;
-  power **9 W max / 4–8 W avg, requires 3.3 V @ 3 A (2.5 A min) per slot.**
-- **AsiaRF AW7916-NPD** — WiFi 6E, MT7916, DBDC 2.4+5/6, same ~9 W / 3.3 V 3 A envelope.
-- **AsiaRF AW7915-NPD** — WiFi 6, MT7915 **2T2R DBDC** (lighter, lower power), good when you
+**Cards.** The workhorses on mt76 (see the NP1-vs-NPD table above — only the -NPD parts are DBDC/2-radio):
+- **AsiaRF AW7915-NP1** — WiFi 6, MT7915, **4T4R but SINGLE band-selectable = ONE radio**, 2401 Mbps,
+  **4 antenna connectors**; power **9 W max / 4–8 W avg, requires 3.3 V @ 3 A (2.5 A min) per slot.**
+  Best as a **dedicated backhaul** radio, not for covering two client bands.
+- **AsiaRF AW7916-NPD** — WiFi 6E, MT7916, **DBDC 2.4+5/6 = TWO radios**, same ~9 W / 3.3 V 3 A envelope.
+- **AsiaRF AW7915-NPD** — WiFi 6, MT7915 **2T2R DBDC = TWO radios** (lighter, lower power), good when you
   just want two client bands from one card.
 All are mainline **mt76** (work on OpenWrt 21.02+ with no extra driver; WPA3 supported).
 ([AW7915-NP1](https://asiarf.com/product/wifi-6-11ax-4t4r-mini-pcie-module-mt7915-aw7915-np1/),
@@ -166,11 +185,17 @@ Best balance of *buyable today*, *bare board*, *all-mt76 mainline*, *mature 802.
 *power sanity*:
 
 - **Board:** Banana Pi **BPI-R3** (MT7986A, ~$100, caseless). Onboard MT7975 dual-band gives
-  you **2 radios out of the box** with the best-tested MediaTek mesh stack.
-- **Add-in:** one **AsiaRF AW7916-NPD** (WiFi 6E DBDC, mt7916) or **AW7915-NPD** (WiFi 6 2T2R
-  DBDC, lower power) in the M.2 slot (via M.2 card or adapter) → **+2 radios = 4 total, use 3.**
-- **Radio plan:** onboard **5 GHz → dedicated 802.11s backhaul on a fixed non-DFS channel**;
-  onboard **2.4 GHz → client AP**; card **5 GHz (or 6 GHz on the 7916) → second client AP**.
+  you **2 radios out of the box** (2.4 + 5 GHz) with the best-tested MediaTek mesh stack.
+- **Add-in (pick by which role the card plays):**
+  - *Dedicated backhaul radio (recommended for a clean tri-radio):* one **AsiaRF AW7915-NP1**
+    (MT7915 **4T4R, single band-selectable = 1 radio**, 4× U.FL) locked to a fixed non-DFS
+    5 GHz channel → **3 radios total** (onboard 2.4 client + onboard 5 client + card 5 backhaul).
+    The 4T4R gives the backhaul the most antennas/gain; budget 3.3 V @ 3 A + heatsink.
+  - *Two more client bands instead:* one **AW7916-NPD** / **AW7915-NPD** DBDC card (= **2 radios**)
+    → 4 radios total, use 3.
+- **Radio plan (NP1 backhaul build):** onboard **2.4 GHz → client AP**; onboard **5 GHz → client AP**;
+  card **5 GHz (4T4R NP1) → dedicated 802.11s backhaul on a fixed non-DFS channel**. Putting the
+  backhaul on its **own physical chip** (the card) isolates it from client load on the onboard radio.
 - **Why:** only ONE add-in card → only one 3.3 V/3 A power concern, far easier than a 2–3 card
   x86 build; single bare PCB; all radios mt76; proven mesh. Build your own case as planned.
 
