@@ -783,7 +783,6 @@ async fn install_client_route(_subnet: Ipv4Net, _gateway: Ipv4Addr) {}
 /// or an already-present address is logged, not fatal — the node still runs.
 #[cfg(target_os = "linux")]
 async fn assign_backhaul_addr(iface: &str, self_id: &str) {
-    use futures_util::stream::TryStreamExt;
     use rtnetlink::new_connection;
 
     let addr = mjolnir_mesh::tun::backhaul_addr(self_id);
@@ -798,21 +797,47 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) {
     };
     tokio::spawn(connection);
 
-    let mut links = handle.link().get().match_name(iface.to_string()).execute();
-    let index = match links.try_next().await {
-        Ok(Some(link)) => link.header.index,
-        Ok(None) => {
+    // Resolve the backhaul interface from sysfs. RouterOS (a) brings the
+    // container veth up a moment AFTER the process starts, and (b) does NOT name
+    // it `eth0` like the plain Linux containers 4pk was validated on. So retry for
+    // the startup race and be name-agnostic: prefer the configured name if it
+    // appears, else fall back to the SOLE non-loopback interface — a fresh
+    // container has just `lo` + the backhaul veth (the mj-peer-* TUNs don't exist
+    // yet). The address must be assigned before iroh binds, so we wait here.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let (target, index) = loop {
+        let candidates: Vec<String> = std::fs::read_dir("/sys/class/net")
+            .map(|rd| {
+                rd.filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+                    .filter(|n| n != "lo" && !n.starts_with("mj-peer-"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let chosen = if candidates.iter().any(|n| n == iface) {
+            Some(iface.to_string())
+        } else if candidates.len() == 1 {
+            Some(candidates[0].clone())
+        } else {
+            None
+        };
+        if let Some(name) = chosen {
+            // ifindex straight from sysfs — avoids the netlink "No such device" path.
+            if let Some(idx) = std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+            {
+                break (name, idx);
+            }
+        }
+        if Instant::now() >= deadline {
             warn!(
-                iface,
-                "backhaul interface not found — is the container bridged onto the shared L2 segment? \
-                 (see deploy/mikrotik/container-net.rsc)"
+                configured = iface, available = ?candidates,
+                "no backhaul interface found — is the container bridged onto the shared L2 \
+                 segment? set --backhaul-iface to one of the available interfaces"
             );
             return;
         }
-        Err(e) => {
-            warn!(iface, "looking up backhaul interface failed: {e}");
-            return;
-        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
     };
 
     match handle
@@ -822,10 +847,12 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) {
         .await
     {
         Ok(()) => info!(
-            %addr, iface, prefix,
+            %addr, iface = %target, prefix,
             "assigned IPv4 backhaul address — peers discover this node here via mDNS"
         ),
-        Err(e) => warn!(%addr, iface, "could not assign backhaul address (may already exist): {e}"),
+        Err(e) => {
+            warn!(%addr, iface = %target, "could not assign backhaul address (may already exist): {e}")
+        }
     }
 }
 
