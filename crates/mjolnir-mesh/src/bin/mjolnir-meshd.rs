@@ -216,9 +216,11 @@ async fn main() -> Result<()> {
     // announces it to peers (mjolnir-mesh-4pk). Assigning after bind misses the
     // initial address scan — and with no DHCP the iface has no other address.
     let secret = load_or_create_secret(cli.secret_file.as_deref())?;
-    if let Command::Mesh { backhaul_iface, .. } = &cli.command {
-        assign_backhaul_addr(backhaul_iface, &secret.public().to_string()).await;
-    }
+    let l2_backhaul = if let Command::Mesh { backhaul_iface, .. } = &cli.command {
+        assign_backhaul_addr(backhaul_iface, &secret.public().to_string()).await
+    } else {
+        None
+    };
     // Pin the iroh socket to the derived backhaul address in LAN/mesh mode
     // (mjolnir-mesh-auu). Binding `0.0.0.0` made iroh enumerate AND advertise
     // every container address — the backhaul `10.254.x` AND the container's
@@ -253,9 +255,14 @@ async fn main() -> Result<()> {
             babel_config,
             babeld,
             client_gateway,
-            // backhaul_iface was used before bind in `main`.
+            // backhaul_iface was used before bind in `main`; the resolved name
+            // flows in via `l2_backhaul`.
             backhaul_iface: _,
         } => {
+            // In LAN mode babel routes over the shared-L2 backhaul directly; pass
+            // the resolved interface so the reconciler can add it as `type wired`
+            // and skip the per-peer iroh tunnels (mjolnir-mesh-auu).
+            let l2 = if lan { l2_backhaul } else { None };
             run_mesh(
                 endpoint,
                 no_relay,
@@ -264,6 +271,8 @@ async fn main() -> Result<()> {
                 babel_config,
                 babeld,
                 client_gateway,
+                lan,
+                l2,
             )
             .await?
         }
@@ -429,6 +438,8 @@ async fn run_mesh(
     babel_config: PathBuf,
     babeld: PathBuf,
     client_gateway: Ipv4Addr,
+    lan: bool,
+    l2_backhaul: Option<String>,
 ) -> Result<()> {
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
@@ -560,38 +571,51 @@ async fn run_mesh(
         let registry = registry.clone();
         let claims = claims.clone();
         let me = self_id_str.clone();
-        tokio::spawn(
-            async move { babel_reconciler(sup, registry, claims, me, babel_config).await },
-        )
+        let l2 = l2_backhaul.clone();
+        tokio::spawn(async move {
+            babel_reconciler(sup, registry, claims, me, babel_config, l2).await
+        })
     };
+    if let Some(iface) = &l2_backhaul {
+        info!(%iface, "LAN mode: routing babel over the shared-L2 backhaul (no per-peer iroh tunnels)");
+    }
 
     // Spawn one dialer task per peer we initiate to. Tie-break by node id so
     // exactly one side of each pair dials (the lexicographically-lower id) and
     // the other accepts — otherwise both ends would race to create the same
     // deterministic /31 interface. This mirrors `pick_link_31`'s ordering.
+    //
+    // In LAN mode we DON'T dial per-peer iroh tunnels at all: babel routes over
+    // the shared-L2 backhaul (above), which is stable, while iroh's path manager
+    // churned the per-peer tunnels (mjolnir-mesh-auu). iroh/gossip stays up for
+    // the CRDT control plane; only the L3 data-plane tunnels are dropped here.
     let mut dialers = Vec::new();
-    for entry in &peer_entries {
-        let addr = match parse_peer(&entry.token) {
-            Ok(a) => a,
-            Err(e) => {
-                warn!(token = %entry.token, "skipping unparseable roster entry: {e}");
-                continue;
+    if lan {
+        info!("LAN mode: not dialing per-peer iroh tunnels — babel routes over the shared L2");
+    } else {
+        for entry in &peer_entries {
+            let addr = match parse_peer(&entry.token) {
+                Ok(a) => a,
+                Err(e) => {
+                    warn!(token = %entry.token, "skipping unparseable roster entry: {e}");
+                    continue;
+                }
+            };
+            let peer = addr.id;
+            if peer == self_id {
+                continue; // our own id appears in the roster — skip
             }
-        };
-        let peer = addr.id;
-        if peer == self_id {
-            continue; // our own id appears in the roster — skip
-        }
-        if self_id_str < peer.to_string() {
-            let ep = endpoint.clone();
-            let reg = registry.clone();
-            let sid = self_id_str.clone();
-            let label = entry.label.clone();
-            dialers.push(tokio::spawn(async move {
-                connector_loop(ep, addr, sid, reg, label).await;
-            }));
-        } else {
-            info!(%peer, label = ?entry.label, "peer has the higher id — waiting for it to dial us");
+            if self_id_str < peer.to_string() {
+                let ep = endpoint.clone();
+                let reg = registry.clone();
+                let sid = self_id_str.clone();
+                let label = entry.label.clone();
+                dialers.push(tokio::spawn(async move {
+                    connector_loop(ep, addr, sid, reg, label).await;
+                }));
+            } else {
+                info!(%peer, label = ?entry.label, "peer has the higher id — waiting for it to dial us");
+            }
         }
     }
     info!(dialing = dialers.len(), "mesh up — holding (Ctrl-C to exit)");
@@ -826,8 +850,13 @@ async fn install_client_route(_subnet: Ipv4Net, _gateway: Ipv4Addr) {}
 /// as a connection candidate and announces it over mDNS, but not IPv6 ULAs — see
 /// the `iroh-lan-backhaul-findings` memory. Best-effort: an unreachable interface
 /// or an already-present address is logged, not fatal — the node still runs.
+///
+/// Returns the resolved backhaul interface name (which may differ from the
+/// configured `iface` — RouterOS doesn't name it `eth0` — via the sole-interface
+/// fallback below). Callers use it as babel's `type wired` L2 interface
+/// (mjolnir-mesh-auu). `None` means no usable interface was found.
 #[cfg(target_os = "linux")]
-async fn assign_backhaul_addr(iface: &str, self_id: &str) {
+async fn assign_backhaul_addr(iface: &str, self_id: &str) -> Option<String> {
     use rtnetlink::new_connection;
 
     let addr = mjolnir_mesh::tun::backhaul_addr(self_id);
@@ -837,7 +866,7 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) {
         Ok(c) => c,
         Err(e) => {
             warn!(%addr, "netlink connect for backhaul address failed: {e}");
-            return;
+            return None;
         }
     };
     tokio::spawn(connection);
@@ -880,7 +909,7 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) {
                 "no backhaul interface found — is the container bridged onto the shared L2 \
                  segment? set --backhaul-iface to one of the available interfaces"
             );
-            return;
+            return None;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
@@ -899,10 +928,15 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) {
             warn!(%addr, iface = %target, "could not assign backhaul address (may already exist): {e}")
         }
     }
+    // The interface exists either way (the address may already be present); hand
+    // its resolved name back so babel can route over it as `type wired`.
+    Some(target)
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn assign_backhaul_addr(_iface: &str, _self_id: &str) {}
+async fn assign_backhaul_addr(_iface: &str, _self_id: &str) -> Option<String> {
+    None
+}
 
 /// Enable IPv4 forwarding in this (container) network namespace so the kernel
 /// routes client traffic between the TUN tunnels and the veth/bridge. Required
@@ -933,7 +967,12 @@ async fn babel_reconciler(
     claims: ClaimStore,
     self_id: String,
     config_path: PathBuf,
+    l2_backhaul: Option<String>,
 ) {
+    // The shared-L2 backhaul interface, if any, is a permanent `type wired`
+    // babel link (mjolnir-mesh-auu) — present from startup, so babeld runs
+    // continuously instead of flapping with the per-peer tunnels.
+    let l2_refs: Vec<&str> = l2_backhaul.as_deref().into_iter().collect();
     if let Some(parent) = config_path.parent()
         && !parent.as_os_str().is_empty()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -961,27 +1000,33 @@ async fn babel_reconciler(
         };
 
         let iface_refs: Vec<&str> = ifaces.iter().map(String::as_str).collect();
-        let inputs = BabelConfigInputs::new(local_subnet, &iface_refs);
+        let inputs =
+            BabelConfigInputs::new(local_subnet, &iface_refs).l2_interfaces(&l2_refs);
         let conf = render_babeld_conf(&inputs);
+        // babeld needs at least one interface — the L2 backhaul (if present) or a
+        // live tunnel. With an L2 backhaul this is always true, so babeld runs
+        // continuously rather than flapping with the tunnel set.
+        let have_ifaces = !ifaces.is_empty() || !l2_refs.is_empty();
 
         match write_atomic_if_changed(&config_path, &conf) {
             Ok(changed) => {
-                if ifaces.is_empty() {
+                if !have_ifaces {
                     // babeld refuses to run with zero interfaces ("Eek... asked to
-                    // run on no interfaces!") and exits. When no tunnel is up, keep
+                    // run on no interfaces!") and exits. When nothing is up, keep
                     // babeld stopped rather than restart-looping it into an empty
-                    // config; it starts again once a tunnel reappears.
+                    // config; it starts again once an interface reappears.
                     if spawned {
-                        warn!("no live tunnels — stopping babeld until one returns");
+                        warn!("no live interfaces — stopping babeld until one returns");
                         let _ = sup.shutdown().await;
                         spawned = false;
                     }
                 } else if !spawned && !babeld_unavailable {
-                    // Start babeld once there's at least one tunnel to route over.
+                    // Start babeld once there's at least one interface to route over.
                     match sup.spawn().await {
                         Ok(()) => {
                             spawned = true;
-                            info!(config = %config_path.display(), ifaces = ifaces.len(), "babeld started");
+                            let count = ifaces.len() + l2_refs.len();
+                            info!(config = %config_path.display(), ifaces = count, "babeld started");
                         }
                         Err(e) => {
                             babeld_unavailable = true;
