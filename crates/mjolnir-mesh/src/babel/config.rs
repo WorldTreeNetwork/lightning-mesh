@@ -1,8 +1,10 @@
 //! babeld configuration generation.
 //!
 //! mjolnir-mesh manages babeld's config file from CRDT state. The daemon
-//! regenerates the file when its subnet claim or active-peer set changes,
-//! writes atomically, and SIGHUPs babeld. See docs/network-coordination/
+//! regenerates the file when its subnet claim or active-peer set changes and
+//! writes it atomically; on change the `mjolnir-babeld` procd service is
+//! restarted to pick it up (babeld 1.13 exits on SIGHUP, so a clean restart, not
+//! a signal-reload — mjolnir-mesh-m8t). See docs/network-coordination/
 //! babel-routing.md §5.
 
 use ipnet::Ipv4Net;

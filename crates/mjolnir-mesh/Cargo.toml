@@ -15,7 +15,6 @@ async-trait = "0.1"
 bytes.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-nix = { version = "0.31", features = ["signal", "process"] }
 
 # Daemon-only deps. Kept optional so the substrate library and its tests stay
 # iroh-free (the DatagramConn seam is what decouples them); enabled by the
