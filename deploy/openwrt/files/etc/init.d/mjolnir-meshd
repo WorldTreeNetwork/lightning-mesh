@@ -17,6 +17,18 @@ STOP=10
 
 PROG=/usr/bin/mjolnir-meshd
 
+# `service mjolnir-meshd diag` — one-shot ground-truth status (identity + build
+# stamp, backhaul addr, interface addrs, mesh routes). Read-only; no daemon needed.
+EXTRA_COMMANDS="diag"
+EXTRA_HELP="	diag	Dump identity, interfaces, and mesh routes (mjolnir-meshd status)"
+
+diag() {
+	local secret_file
+	config_load mjolnir
+	config_get secret_file meshd secret_file '/etc/mjolnir/secret'
+	"$PROG" status --secret-file "$secret_file"
+}
+
 append_peer() {
 	procd_append_param command --peer "$1"
 }
