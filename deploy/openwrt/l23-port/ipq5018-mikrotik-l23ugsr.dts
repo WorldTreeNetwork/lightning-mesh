@@ -1,0 +1,468 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/*
+ * DRAFT device tree for MikroTik L23UGSR-5HaxD2HaxD
+ * SoC: Qualcomm IPQ-5010 (IPQ5018-class "Maple")  ->  qualcommax/ipq50xx, SOC=ipq5018
+ * Radios: 2.4GHz integrated IPQ5018 (ath11k) + 5GHz QCN-6102 (treated as QCN6122, AHB)
+ * Storage: NOR (RouterBOOT + hard/soft_config)  +  128MB Winbond W25N01GW spi-nand (kernel+ubi)
+ * Bootloader: MikroTik RouterBOOT (netboot ELF over BOOTP/TFTP; permanent kernel in UBI volume)
+ *
+ * NOTE: This is a DRAFT. Every value that needs a live-hardware recon dump is marked
+ *       /* TODO(recon): ... *\/ with the best guess and the reference it was copied from.
+ *       See RECON-CHECKLIST.md for exactly how to resolve each one.
+ *
+ * Template lineage:
+ *   - SoC/radio/eth : ipq5018-mr3000d-ci.dts (IPQ5018 2.4G + QCN6102 5G) + ipq5018-ax830.dts
+ *   - RouterBOOT    : qcom-ipq4019-hap-ac3.dts (MikroTik NAND, routerboot-partitions, nvmem MAC)
+ *
+ * CONFIRMED from live box 192.168.0.134 (RouterOS 7.18.2 REST) — see RECON-LIVE-ROUTEROS.md:
+ *   - board-name/model = "L23UGSR-5HaxD2HaxD"; firmware-type ipq5000 (IPQ5010/IPQ5018-class)
+ *   - RAM 256MB; NAND 128MB (bad-blocks 0); CPU ARM 2 cores @800MHz
+ *   - RouterBOOT 7.16.1; boot-protocol=bootp (netboot via BOOTP+TFTP)
+ *   - base MAC F4:1E:57:9F:F5:00 :  ether1=+0  sfp1=+1  radio1(2.4G)=+2  radio2(5G)=+3
+ *
+ * PIVOTAL RISK (confirmed-open): RouterOS userland is **32-bit ARM** while qualcommax/ipq50xx
+ * is **aarch64-only**. It is unverified whether RouterBOOT hands the kernel off in AArch64
+ * (64-bit kernel boots fine) or AArch32 (this DTS/target would not boot as-is). Resolve at
+ * first serial netboot before trusting anything below.
+ */
+
+/dts-v1/;
+
+#include "ipq5018.dtsi"
+#include "ipq5018-ess.dtsi"
+#include "ipq5018-qcn6122.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "MikroTik L23UGSR-5HaxD2HaxD";
+	compatible = "mikrotik,l23ugsr-5haxd2haxd", "qcom,ipq5018";
+
+	aliases {
+		serial0 = &blsp1_uart1;
+		/*
+		 * TODO(recon): confirm which LED is the system/status LED and its color.
+		 * Best guess from MikroTik hAP ac3: a blue "running" + red "fault".
+		 */
+		led-boot = &led_user;
+		led-failsafe = &led_user;
+		led-running = &led_user;
+		led-upgrade = &led_user;
+		label-mac-device = &dp1;
+	};
+
+	chosen {
+		/*
+		 * ipq50xx UBI rootfs. ubiblock index depends on the volume order created by
+		 * the MikroTik NAND recipe; AX830/MR3000D-CI use ubiblock0_1. Verify after first
+		 * NAND install. TODO(recon): confirm ubiblockN_M index.
+		 */
+		bootargs-append = " root=/dev/ubiblock0_1 swiotlb=1 coherent_pool=2M";
+		stdout-path = "serial0:115200n8";
+	};
+
+	keys {
+		compatible = "gpio-keys";
+		pinctrl-0 = <&button_pins>;
+		pinctrl-names = "default";
+
+		/*
+		 * TODO(recon): MikroTik boards typically have a single mode/reset button wired
+		 * to RouterBOOT. Confirm GPIO number and active level.
+		 * Best guess GPIO from ipq5018 boards: reset on a tlmm gpio in the 27..38 range.
+		 */
+		reset {
+			label = "reset";
+			gpios = <&tlmm 27 GPIO_ACTIVE_LOW>; /* TODO(recon): real GPIO (guess: hAP-style mode/reset) */
+			linux,code = <KEY_RESTART>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		/*
+		 * TODO(recon): real LED gpios + colors + functions. MikroTik L-series usually
+		 * have a "user" LED plus per-interface LEDs. Values below are placeholders copied
+		 * structurally from ipq5018-mr3000d-ci.dts (gpio-leds, ACTIVE_HIGH).
+		 */
+		led_user: led-0 {
+			function = LED_FUNCTION_STATUS;        /* TODO(recon) */
+			color = <LED_COLOR_ID_GREEN>;          /* TODO(recon) */
+			gpios = <&tlmm 46 GPIO_ACTIVE_HIGH>;   /* TODO(recon): real GPIO */
+		};
+
+		wlan2g {
+			function = LED_FUNCTION_WLAN_2GHZ;
+			color = <LED_COLOR_ID_GREEN>;
+			gpios = <&tlmm 33 GPIO_ACTIVE_HIGH>;   /* TODO(recon): real GPIO (guess from AX830 gpio33) */
+			linux,default-trigger = "phy0radio";
+		};
+
+		wlan5g {
+			function = LED_FUNCTION_WLAN_5GHZ;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&tlmm 34 GPIO_ACTIVE_HIGH>;   /* TODO(recon): real GPIO (guess from AX830 gpio34) */
+			linux,default-trigger = "phy1radio";
+		};
+	};
+};
+
+&sleep_clk {
+	clock-frequency = <32000>;
+};
+
+&xo_board_clk {
+	clock-div = <4>;
+	clock-mult = <1>;
+};
+
+&blsp1_uart1 {
+	status = "okay";
+	pinctrl-0 = <&serial_0_pins>;
+	pinctrl-names = "default";
+};
+
+&crypto {
+	status = "okay";
+};
+
+&cryptobam {
+	status = "okay";
+};
+
+&prng {
+	status = "okay";
+};
+
+&qfprom {
+	status = "okay";
+};
+
+&qpic_bam {
+	status = "okay";
+};
+
+/*
+ * =====================================================================
+ *  NOR flash on BLSP1 SPI1: MikroTik RouterBOOT + hard_config/soft_config
+ *  Pattern copied from qcom-ipq4019-hap-ac3.dts. The routerbootpart parser
+ *  discovers hard/soft/dtb_config offsets dynamically, so only the outer
+ *  "RouterBoot" partition reg + the hard_config size need to be (roughly) right.
+ * =====================================================================
+ */
+&blsp1_spi1 {
+	status = "okay";
+
+	/* TODO(recon): confirm CS gpio if RouterBOOT NOR needs an explicit chip-select.
+	 * hAP ac3 uses cs-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>; ipq5018 SoC CS may be native. */
+
+	flash@0 {
+		reg = <0>;
+		compatible = "jedec,spi-nor";
+		spi-max-frequency = <24000000>; /* TODO(recon): RouterBOOT NOR speed (hAP ac3 = 24MHz) */
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/*
+			 * TODO(recon): exact NOR partition offsets/sizes from `cat /proc/mtd`
+			 * on the live box. Below mirrors hAP ac3 (0x80000 boot loader, 0x80000
+			 * RouterBoot) which is the most likely MikroTik ARM layout.
+			 */
+			partition@0 {
+				label = "RouterBoot_preinit"; /* MikroTik calls it "Qualcomm"/loader; TODO(recon) */
+				reg = <0x0 0x80000>;          /* TODO(recon): real offset/size */
+				read-only;
+			};
+
+			partition@80000 {
+				compatible = "mikrotik,routerboot-partitions";
+				#address-cells = <1>;
+				#size-cells = <1>;
+				label = "RouterBoot";
+				reg = <0x80000 0x80000>;      /* TODO(recon): real offset/size of RouterBoot segment */
+
+				hard_config {
+					read-only;
+					size = <0x2000>;          /* hAP ac3 value; routerbootpart finds the offset */
+
+					nvmem-layout {
+						compatible = "mikrotik,routerboot-nvmem";
+
+						macaddr_hard: base-mac-address {
+							#nvmem-cell-cells = <1>;
+						};
+					};
+				};
+
+				dtb_config {
+					read-only;
+				};
+
+				soft_config {
+				};
+			};
+		};
+	};
+};
+
+/*
+ * =====================================================================
+ *  NAND: Winbond W25N01GW (128MB) under QPIC. spi-nand binding from AX830;
+ *  fixed "kernel"+"ubi" layout from hAP ac3 (RouterBOOT loads the ELF kernel
+ *  from the "kernel" UBI volume; rootfs lives in "ubi").
+ * =====================================================================
+ */
+&qpic_nand {
+	pinctrl-0 = <&qpic_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	nand@0 {
+		compatible = "spi-nand";
+		reg = <0>;
+		nand-ecc-engine = <&qpic_nand>;
+		nand-bus-width = <8>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/*
+			 * TODO(recon): real NAND partition sizes from `cat /proc/mtd` after a
+			 * RouterOS or first-boot inspection. Values below = hAP ac3 (kernel 10MB,
+			 * ubi rest). 128MB W25N01GW total.
+			 */
+			partition@0 {
+				label = "kernel";
+				reg = <0x0 0xa00000>;          /* TODO(recon): real kernel volume size */
+			};
+
+			partition@a00000 {
+				label = "ubi";
+				reg = <0xa00000 0x7600000>;    /* TODO(recon): real ubi size (extend to chip end) */
+			};
+		};
+	};
+};
+
+/*
+ * =====================================================================
+ *  Ethernet
+ *  ether1 (1G copper) : MAC0 -> internal GE phy (mdio0 addr 7)  [AX830 dp1 pattern]
+ *  2.5G SFP           : MAC1 -> uniphy -> SFP cage              [NOVEL — all TODO(recon)]
+ * =====================================================================
+ */
+&switch {
+	status = "okay";
+
+	switch_mac_mode = <MAC_MODE_SGMII_CHANNEL0>;
+
+	qcom,port_phyinfo {
+		/* MAC0 -> internal GE Phy -> ether1 (1G copper) */
+		port@1 {
+			port_id = <1>;
+			mdiobus = <&mdio0>;
+			phy_address = <7>;
+		};
+
+		/*
+		 * MAC1 -> Uniphy -> 2.5G SFP.
+		 * TODO(recon): determine whether the SFP runs at 1G SGMII or 2.5G 2500BASE-X.
+		 * If 2.5G, switch_mac_mode/port_mac_sel and phy-mode must change accordingly
+		 * (cf. ipq8074 usxgmii boards). Best guess = forced 1G SGMII like MX2000 until
+		 * confirmed.
+		 */
+		port@2 {
+			port_id = <2>;
+			forced-speed = <1000>;     /* TODO(recon): 2500 if 2.5G link */
+			forced-duplex = <1>;
+			/* TODO(recon): port_mac_sel / mdiobus for SFP PHY if managed via mdio1 */
+		};
+	};
+};
+
+/* ether1 : MAC0 -> internal GE phy */
+&dp1 {
+	status = "okay";
+
+	label = "ether1";
+	nvmem-cells = <&macaddr_hard 0>;          /* CONFIRMED: ether1 = base+0 (F4:1E:57:9F:F5:00) */
+	nvmem-cell-names = "mac-address";
+	phy-mode = "sgmii";
+};
+
+/* 2.5G SFP : MAC1 -> uniphy */
+&dp2 {
+	status = "okay";
+
+	label = "sfp";
+	nvmem-cells = <&macaddr_hard 1>;          /* CONFIRMED: sfp1 = base+1 (F4:1E:57:9F:F5:01) */
+	nvmem-cell-names = "mac-address";
+
+	/*
+	 * CONFIRMED: sfp1 is 2.5G-baseT/baseX capable (RouterOS). So the real link is likely
+	 * 2500base-x (or USXGMII). TODO(recon): replace fixed-link with a proper sfp phandle once
+	 * the SFP cage's I2C bus + tx-disable/los/mod-def GPIOs are known. For 2.5G use
+	 * phy-mode = "2500base-x"; the fixed-link below only brings the MAC up at 1G for the
+	 * initial serial bring-up.
+	 */
+	fixed-link {
+		speed = <1000>;                   /* TODO(recon): 2500 if 2.5G */
+		full-duplex;
+	};
+	/* TODO(recon): sfp = <&sfp0>;  managed = "in-band-status"; */
+};
+
+&mdio0 {
+	status = "okay";
+};
+
+&mdio1 {
+	status = "okay";
+
+	pinctrl-0 = <&mdio1_pins>;
+	pinctrl-names = "default";
+	/* TODO(recon): SFP/PHY reset-gpios if any (AX830 uses reset-gpios = <&tlmm 24 ...>) */
+
+	/*
+	 * TODO(recon): if the 2.5G side is a copper PHY (e.g. QCA8081 at addr 28 like AX830)
+	 * rather than a bare SFP cage, declare it here and phy-handle it from dp2:
+	 *
+	 * qca8081: ethernet-phy@28 {
+	 *     compatible = "ethernet-phy-id004d.d101";
+	 *     reg = <28>;
+	 *     reset-deassert-us = <10000>;
+	 *     reset-gpios = <&tlmm 24 GPIO_ACTIVE_LOW>;  // TODO(recon)
+	 * };
+	 */
+};
+
+/* MAC0 -> internal GE phy */
+&ge_phy {
+	/* qcom,dac-preset-short-cable;  // enable if ether1 is on a short internal trace (PZ-L8 does) */
+};
+
+/*
+ * =====================================================================
+ *  SFP cage (DRAFT scaffold — entire block is TODO(recon))
+ *  Pattern reference: ipq8074-rt-ax89x.dts sfp/sfp_i2c + GPIO lines.
+ * =====================================================================
+ *
+ * sfp0: sfp {
+ *     compatible = "sff,sfp";
+ *     i2c-bus = <&sfp_i2c>;                       // TODO(recon): which I2C controller/bus
+ *     mod-def0-gpios = <&tlmm XX GPIO_ACTIVE_LOW>; // TODO(recon)
+ *     los-gpios      = <&tlmm XX GPIO_ACTIVE_HIGH>;// TODO(recon)
+ *     tx-disable-gpios = <&tlmm XX GPIO_ACTIVE_HIGH>; // TODO(recon)
+ *     tx-fault-gpios = <&tlmm XX GPIO_ACTIVE_HIGH>;// TODO(recon)
+ *     maximum-power-milliwatt = <2000>;           // TODO(recon)
+ * };
+ */
+
+&tlmm {
+	/*
+	 * TODO(recon): ALL pin groups below are best-guess copies from ipq5018-ax830.dts /
+	 * ipq5018-mr3000d-ci.dts. Verify each pin against the L23 schematic / RouterBOOT.
+	 */
+	button_pins: button-state {
+		pins = "gpio27";                /* TODO(recon): real reset/mode pin(s) */
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
+
+	mdio1_pins: mdio-state {
+		mdc-pins {
+			pins = "gpio36";
+			function = "mdc";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		mdio-pins {
+			pins = "gpio37";
+			function = "mdio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+	};
+
+	qpic_pins: qpic-state {
+		clock-pins {
+			pins = "gpio9";
+			function = "qspi_clk";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		cs-pins {
+			pins = "gpio8";
+			function = "qspi_cs";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data-pins {
+			pins = "gpio4", "gpio5", "gpio6", "gpio7";
+			function = "qspi_data";
+			drive-strength = <8>;
+			bias-disable;
+		};
+	};
+
+	serial_0_pins: uart0-state {
+		pins = "gpio20", "gpio21";      /* TODO(recon): confirm UART pins (AX830 gpio20/21; MR3000D-CI gpio28/29) */
+		function = "blsp0_uart0";
+		drive-strength = <8>;
+		bias-disable;
+	};
+};
+
+/*
+ * =====================================================================
+ *  Radios
+ *  wifi  : IPQ5018 2.4GHz  (wifi@c000000, from ipq5018.dtsi)
+ *  wifi1 : QCN6102 5GHz    (wifi@b00a040, from ipq5018-qcn6122.dtsi)
+ *  Pattern: ipq5018-mr3000d-ci.dts (exact radio combo)
+ * =====================================================================
+ */
+&q6v5_wcss {
+	status = "okay";
+
+	/* QCN6102 maps to UPD ID 2; without bootargs firmware expects UPD ID 3. */
+	boot-args = <
+		/* type:       */ 0x1   /* PCIE0 */
+		/* length:     */ 4
+		/* UPD ID:     */ 2
+		/* reset GPIO: */ 15    /* TODO(recon): confirm QCN6102 reset GPIO (MR3000D-CI/MX2000 = 15) */
+		/* reserved:   */ 0 0>;
+};
+
+&wifi {
+	/* IPQ5018 2.4GHz — RouterOS radio1, MAC = base+2 (F4:1E:57:9F:F5:02) for caldata patch */
+	status = "okay";
+
+	qcom,rproc = <&q6_wcss_pd1>;
+	qcom,ath11k-calibration-variant = "MikroTik-L23UGSR";
+	qcom,ath11k-fw-memory-mode = <1>;
+	qcom,bdf-addr = <0x4c400000>;
+};
+
+&wifi1 {
+	/* QCN6102 5GHz (treated as QCN6122) — RouterOS radio2, MAC = base+3 (F4:1E:57:9F:F5:03) */
+	status = "okay";
+
+	qcom,rproc = <&q6_wcss_pd2>;
+	qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
+	qcom,ath11k-calibration-variant = "MikroTik-L23UGSR";
+	qcom,ath11k-fw-memory-mode = <1>;
+	qcom,bdf-addr = <0x4d100000>;
+	qcom,m3-dump-addr = <0x4df00000>;
+};
