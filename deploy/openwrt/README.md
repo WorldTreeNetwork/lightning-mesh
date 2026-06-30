@@ -26,11 +26,16 @@ One command — idempotent, safe to re-run:
 deploy/openwrt/install-node.sh root@<node-ip>
 ```
 
-It pushes the binary to `/usr/bin/mjolnir-meshd`, installs the procd init scripts
-and UCI config, installs `babeld` (via `apk` on OpenWrt 25.12+, else `opkg`;
-`kmod-tun` best-effort — only cross-site iroh tunnels need it), hands babeld
-supervision to procd (see below), and enables the meshd service. It does **not**
-start meshd — you set peers first.
+It pushes the binary to `/usr/bin/mjolnir-meshd`, installs the procd init scripts,
+installs `babeld` + `kmod-tun` (via `apk` on OpenWrt 25.12+, else `opkg`), hands
+babeld supervision to procd (see below), swaps `wpad-basic`→`wpad-mesh` (802.11s
+SAE), and enables the meshd service. On a **fresh** node it also drops the UCI
+config template; on an existing node it leaves `/etc/config/mjolnir` untouched
+(your peers survive). It does **not** start meshd — you set peers first.
+
+`kmod-tun` is **required** whenever per-peer iroh tunnels run (`lan_tunnels=1` or
+`mode internet`): without it `/dev/net/tun` is absent and a tunnel fails to come
+up with `No such file or directory (os error 2)`.
 
 What lands on the node:
 
@@ -44,11 +49,66 @@ What lands on the node:
 
 ### babeld is supervised by procd, not meshd (mjolnir-mesh-m8t)
 
-Split of concerns: **meshd owns the config** — it renders `/etc/mjolnir/babeld.conf`
-and triggers `restart` on `mjolnir-babeld` when it changes — and **procd owns the
-process** (start on boot, respawn on crash, clean stop). meshd never `fork()`s
-babeld itself; that chain orphaned babelds on `SIGKILL`. `install-node.sh`
-disables the stock `babeld` service so the two don't both run.
+Split of concerns: **meshd renders the config** (`/etc/mjolnir/babeld.conf`) and
+**procd owns the process *and* the restarts**. `mjolnir-babeld` declares
+`procd_set_param file /etc/mjolnir/babeld.conf`, so procd restarts babeld whenever
+meshd rewrites it — meshd starts babeld once and otherwise stays out of the
+restart loop. (Driving those restarts synchronously from meshd wedged the daemon
+under rapid config churn — `mjolnir-mesh-qz9`.) meshd never `fork()`s babeld
+itself; that chain orphaned babelds on `SIGKILL`. `install-node.sh` disables the
+stock `babeld` service so the two don't both run.
+
+## Reaching & operating nodes (runbook)
+
+The gotchas that otherwise get re-discovered every time:
+
+**Install over Ethernet / out-of-band.** `install-node.sh` swaps
+`wpad-basic`→`wpad-mesh`, which **bounces wifi** — SSHing in over the 802.11s mesh
+you're reconfiguring will cut your own session. Use a wired LAN port.
+
+**Reaching a node — three paths:**
+- **Wired / direct** — plug the build machine into the node's LAN port; the node
+  answers at OpenWrt's default `192.168.1.1`. Simplest, and survives a wifi/meshd
+  bounce.
+- **Over the mesh (jump host)** — a node that's only on the 802.11s backhaul is
+  reachable *through* a wired peer with SSH `ProxyJump`, at its derived `10.254.x`
+  backhaul address (SSH is allowed because the mesh iface sits in the `lan` zone).
+  Find the address with `mjolnir-meshd id` → it's `10.254.<blake3(node_id)[0..2]>`,
+  or just read it off a wired peer (`ip -4 route | grep 10.254`). Example
+  `~/.ssh/config`:
+  ```
+  Host gw            # the wired peer
+      HostName 192.168.1.1
+  Host leaf          # mesh-only peer, reached through gw
+      HostName 10.254.x.y
+      ProxyJump gw
+  ```
+- **NOT the WAN** — OpenWrt firewalls SSH on the `wan` zone, so a node's upstream
+  IP refuses `:22`. Use the LAN port or the mesh jump.
+
+**`scp` to OpenWrt needs `-O`.** Dropbear has no SFTP subsystem, so a modern
+`scp` (SFTP by default) fails with `sftp-server: not found`. Use `scp -O` (legacy
+protocol) for any manual copy. `install-node.sh` already does, and lands the
+binary via `.new`+`mv` so replacing the *running* binary doesn't hit `ETXTBSY`.
+
+**Shared direct-link IP / host-key churn.** Every node uses `192.168.1.1` on its
+LAN port, so swapping which node is wired changes the SSH host key. Clear it
+first: `ssh-keygen -R 192.168.1.1`.
+
+**Update an in-place node.** Re-run `install-node.sh root@<ip>` (config is
+preserved), then `service mjolnir-meshd restart` to exec the new binary. Verify:
+`sha256sum /usr/bin/mjolnir-meshd` matches `deploy/openwrt/mjolnir-meshd-aarch64`.
+
+**Recover / un-stick a node.** The previous binary is backed up at
+`/root/mjolnir-meshd.bak`. To return to the known-good state:
+```sh
+ssh root@<node> 'uci set mjolnir.meshd.lan_tunnels=0; uci commit mjolnir; service mjolnir-meshd restart'
+```
+
+**`lan_tunnels` (experimental, default `0`).** `lan_tunnels=1` re-enables per-peer
+iroh tunnels in LAN mode (the `mjolnir-mesh-auu` retest); needs `kmod-tun`. It
+currently triggers a daemon hang shortly after a tunnel forms
+(`mjolnir-mesh-qz9`) — keep it `0` for production until that's fixed.
 
 ## Configure & run
 

@@ -250,6 +250,24 @@ Traffic between sites is secured at the transport layer by Iroh:
 - No open relay: the Iroh relay servers are used only for NAT traversal handshake, not for
   sustained packet forwarding between routers
 
+### End-to-end vs per-hop confidentiality
+
+Where Iroh carries the **data plane** (cross-site tunnels today; optionally same-site too — see
+the single-overlay-TUN work, `buw`), confidentiality is **end-to-end between the two router
+daemons**: every packet rides inside a QUIC / TLS 1.3 connection, so no intermediate node — not
+even another mesh router relaying the datagrams — can read it.
+
+Contrast the radio backhaul. 802.11s with SAE encrypts each **radio hop** independently: a
+multi-hop frame is decrypted and re-encrypted at every forwarding node, so an intermediate mesh
+router *does* see plaintext. That is fine for a single trusted hop, but it is **not** end-to-end.
+
+So: cross-site traffic over the Iroh overlay is confidential even from the routers relaying it;
+native 802.11s same-site traffic is only hop-by-hop confidential. Routing same-site over the
+overlay as well (the `buw` "U1" option) extends end-to-end confidentiality to every hop, at the
+cost of QUIC encapsulation on the local radio link. This property only holds where Iroh is the
+data plane — it is a reason to *prefer* the overlay where confidentiality from intermediate
+nodes matters.
+
 ### Future Work: Membership Control
 
 **Current gap:** Any Iroh node that knows the gossip topic can join the mesh and inject data. There is no membership enforcement.
