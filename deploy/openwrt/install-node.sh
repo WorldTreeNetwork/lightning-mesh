@@ -14,23 +14,33 @@ BIN="$DIR/mjolnir-meshd-aarch64"
 [ -f "$BIN" ] || { echo "binary missing — run deploy/openwrt/build.sh first"; exit 1; }
 
 echo ">> static binary -> /usr/bin/mjolnir-meshd"
-scp "$BIN" "$HOST:/usr/bin/mjolnir-meshd"
-ssh "$HOST" 'chmod +x /usr/bin/mjolnir-meshd'
+# scp -O: OpenWrt dropbear has no sftp-server, so default scp (SFTP) fails. Land
+# it as .new then mv, so replacing a RUNNING binary doesn't hit ETXTBSY.
+scp -O "$BIN" "$HOST:/usr/bin/mjolnir-meshd.new"
+ssh "$HOST" 'mv /usr/bin/mjolnir-meshd.new /usr/bin/mjolnir-meshd && chmod +x /usr/bin/mjolnir-meshd'
 
-echo ">> init scripts (meshd + babeld) + uci config + wireless helper"
-scp "$DIR/files/etc/init.d/mjolnir-meshd"  "$HOST:/etc/init.d/mjolnir-meshd"
-scp "$DIR/files/etc/init.d/mjolnir-babeld" "$HOST:/etc/init.d/mjolnir-babeld"
-scp "$DIR/files/etc/config/mjolnir"        "$HOST:/etc/config/mjolnir"
-scp "$DIR/setup-wireless.sh"               "$HOST:/root/setup-wireless.sh"
+echo ">> init scripts (meshd + babeld) + wireless helper"
+scp -O "$DIR/files/etc/init.d/mjolnir-meshd"  "$HOST:/etc/init.d/mjolnir-meshd"
+scp -O "$DIR/files/etc/init.d/mjolnir-babeld" "$HOST:/etc/init.d/mjolnir-babeld"
+scp -O "$DIR/setup-wireless.sh"               "$HOST:/root/setup-wireless.sh"
 ssh "$HOST" 'chmod +x /etc/init.d/mjolnir-meshd /etc/init.d/mjolnir-babeld /root/setup-wireless.sh'
 
-echo ">> deps: babeld (required) + kmod-tun (only for cross-site iroh tunnels — best-effort)"
+# UCI config carries node-specific state (peers, client_iface). Install the
+# template ONLY on a fresh node — never clobber an existing config (would wipe peers).
+echo ">> uci config (template only if absent — preserves existing peers/config)"
+if ssh "$HOST" '[ -e /etc/config/mjolnir ]'; then
+  echo "   /etc/config/mjolnir present — left as-is"
+else
+  scp -O "$DIR/files/etc/config/mjolnir" "$HOST:/etc/config/mjolnir"
+fi
+
+echo ">> deps: babeld + kmod-tun (kmod-tun is REQUIRED for iroh tunnels: lan_tunnels=1 or --internet)"
 # OpenWrt 25.12+ uses apk; older releases use opkg. Needs the node to have internet.
 ssh "$HOST" '
 if command -v apk >/dev/null 2>&1; then
-  apk update && apk add babeld && apk add kmod-tun || echo "WARN: babeld installed; kmod-tun skipped (not needed for the LAN bench)"
+  apk update && apk add babeld && apk add kmod-tun || echo "WARN: a dep failed — babeld is required; kmod-tun is needed once tunnels are enabled (/dev/net/tun)"
 else
-  opkg update && opkg install babeld && opkg install kmod-tun || echo "WARN: babeld installed; kmod-tun skipped (not needed for the LAN bench)"
+  opkg update && opkg install babeld && opkg install kmod-tun || echo "WARN: a dep failed — babeld is required; kmod-tun is needed once tunnels are enabled (/dev/net/tun)"
 fi'
 
 echo ">> wpad-mesh-mbedtls (802.11s SAE) — swaps stock wpad-basic-mbedtls, which lacks mesh"
