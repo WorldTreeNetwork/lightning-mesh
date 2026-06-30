@@ -82,6 +82,20 @@ Three things that didn't exist 5 years ago make this feasible:
 
 Every router runs this stack. No special roles. No leaders. Fully symmetric.
 
+## One Network on Any Substrate
+
+Look at that stack again, bottom to top. Most mesh products *are* their radio layer — an eero mesh is eeros talking to eeros over eero's radios; pull out the radio and there is no network. mjolnir-mesh inverts that. **The network is the Layer-3 overlay — identity, routing, and coordination — and it rides on top of whatever link happens to be there: an 802.11s radio mesh, a plain WiFi access point, an Ethernet cable, a fiber run, or the open internet.** The radio is plumbing. The network is the layer above it.
+
+That sounds like a technicality. It is the most consequential design decision in the project, and here is what it buys:
+
+**Any hardware, one mesh, as equals.** A $40 OpenWrt box, a closed-driver MikroTik that cannot even speak 802.11s, a Raspberry Pi with a USB WiFi dongle, a laptop, a virtual machine — all join the *same* mesh on equal footing, because they all speak the L3 layer. Their links can be completely different, and one node can have no radio at all and join over Ethernet; those differences live *below* the abstraction. You are never locked to one vendor's mesh tech, and you can grow a network out of whatever hardware people already have.
+
+**Encryption that does not trust the wire.** This is the part that matters most for a network strangers might share. Security lives at L3: every node is a cryptographic identity (a public key), and every connection is end-to-end encrypted between those identities. A packet can cross a neighbor's router, a closed-firmware box you did not build, or a café's internet connection, and everyone forwarding it **sees only ciphertext** — they move it without being able to read it. Compare ordinary WiFi security (WPA/WPA3): it encrypts each radio *hop*, then hands plaintext to every router in the middle. Link encryption trusts every forwarder; L3 end-to-end encryption trusts none of them. That is what lets you build a *trusted* network on top of an *untrusted* substrate — and it is why mixing your hardware with someone else's is safe.
+
+**Meshes can merge.** Because the unifying layer is just routing plus identity, two independently-built meshes can fuse into one — even other community-mesh projects that already speak the same routing language, like LibreMesh — by linking them at a single node and letting the routing layer stitch the address spaces together. The radios do not have to match; the L3 layer does the unifying.
+
+**The one place the abstraction leaks: legacy clients.** A device that speaks the L3 layer — an app with the networking built in, or another router — gets all of this for free and does its own encryption, putting no load on the little routers. But a *normal* device, a phone with a web browser hitting `http://projector.mesh`, knows nothing about node-ids or end-to-end tunnels. For those, a **gateway** bridges the legacy world into the mesh: plain HTTP to the browser on one side, the L3 layer to the service on the other. That gateway is the single spot where substrate-independence stops being free — so it is worth building well, because "any normal device, any browser, just works" is most of what people actually do.
+
 ## The Power of Service Discovery
 
 Beyond basic networking, the mesh becomes a platform for services:
