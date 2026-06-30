@@ -116,6 +116,13 @@ struct Cli {
 enum Command {
     /// Print this node's EndpointId and a shareable address blob.
     Id,
+    /// One-shot ground-truth diagnostic: node identity + build stamp, the
+    /// derived backhaul address, every interface's IPv4 addresses, and the
+    /// installed kernel routes in the mesh space — read straight from the
+    /// system, no running daemon required. The fast way to answer "is the
+    /// backhaul addr assigned, is the interface dual-addressed, did babel
+    /// install routes and via what next-hop" without grepping logs.
+    Status,
     /// Listen for inbound mesh connections and echo ping datagrams. Runs until Ctrl-C.
     Listen,
     /// Dial a peer (address blob from `id`/`listen`) and measure a round-trip.
@@ -214,6 +221,11 @@ async fn main() -> Result<()> {
         return run_tun_test().await;
     }
 
+    // status is a read-only system inspection — no endpoint, no daemon needed.
+    if let Command::Status = cli.command {
+        return run_status(cli.secret_file.as_deref()).await;
+    }
+
     // The deployed `mesh` daemon defaults to LAN mode (offline, mDNS, no relay),
     // since the same-site mesh has no internet. Opt into internet/relay mode with
     // `--internet` or by passing `--relay`. The lower-level test commands
@@ -292,7 +304,7 @@ async fn main() -> Result<()> {
             )
             .await?
         }
-        Command::TunTest => unreachable!("handled above"),
+        Command::TunTest | Command::Status => unreachable!("handled above"),
     }
     Ok(())
 }
@@ -1565,6 +1577,163 @@ fn print_identity(endpoint: &Endpoint) -> Result<()> {
     println!("node id: {}", endpoint.id());
     println!("address: {}", encode_addr(&endpoint.addr())?);
     Ok(())
+}
+
+/// `status` subcommand (mjolnir-mesh OpenWrt enablement): a read-only,
+/// daemon-free dump of ground truth. Identity + build stamp come from the
+/// binary and secret; interfaces and routes come straight from the kernel via
+/// netlink. The point is to answer the questions the auu session had to grep
+/// logs for — is the backhaul addr assigned, is its interface dual-addressed,
+/// did routing install mesh routes and via what next-hop — in one command.
+async fn run_status(secret_file: Option<&std::path::Path>) -> Result<()> {
+    let secret = load_or_create_secret(secret_file)?;
+    let id = secret.public().to_string();
+    let backhaul = mjolnir_mesh::tun::backhaul_addr(&id);
+    let prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN;
+
+    println!("mjolnir-meshd status");
+    println!("  build:    {}", env!("MJOLNIR_BUILD"));
+    println!("  version:  {}", env!("CARGO_PKG_VERSION"));
+    println!("  node id:  {id}");
+    println!("  backhaul: {backhaul}/{prefix}  (derived from node id)");
+    println!();
+    print_system_status(backhaul).await;
+    Ok(())
+}
+
+/// True for the mesh's reserved IPv4 spaces — client `10.42/16`, backhaul
+/// `10.254/16`, per-peer tunnel /31s `10.255/16` — the routes worth showing.
+#[cfg(target_os = "linux")]
+fn is_mesh_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 10 && matches!(o[1], 42 | 254 | 255)
+}
+
+/// Dump interfaces (IPv4) and mesh-space kernel routes via netlink. Flags the
+/// dual-addressed-backhaul trap (the auu root cause) and a missing backhaul addr.
+#[cfg(target_os = "linux")]
+async fn print_system_status(backhaul: Ipv4Addr) {
+    use futures_util::stream::TryStreamExt;
+    use rtnetlink::packet_route::address::AddressAttribute;
+    use rtnetlink::packet_route::link::LinkAttribute;
+    use rtnetlink::packet_route::route::{RouteAddress, RouteAttribute};
+    use rtnetlink::{new_connection, RouteMessageBuilder};
+    use std::collections::HashMap;
+
+    let (connection, handle, _) = match new_connection() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("(could not open netlink to read system state: {e})");
+            return;
+        }
+    };
+    tokio::spawn(connection);
+
+    // ifindex -> interface name
+    let mut names: HashMap<u32, String> = HashMap::new();
+    let mut links = handle.link().get().execute();
+    while let Ok(Some(link)) = links.try_next().await {
+        if let Some(name) = link.attributes.iter().find_map(|a| match a {
+            LinkAttribute::IfName(n) => Some(n.clone()),
+            _ => None,
+        }) {
+            names.insert(link.header.index, name);
+        }
+    }
+
+    // ifindex -> [(ipv4, prefix_len)]
+    let mut addrs: HashMap<u32, Vec<(Ipv4Addr, u8)>> = HashMap::new();
+    let mut astream = handle.address().get().execute();
+    while let Ok(Some(msg)) = astream.try_next().await {
+        if let Some(v4) = msg.attributes.iter().find_map(|a| match a {
+            AddressAttribute::Local(IpAddr::V4(v)) | AddressAttribute::Address(IpAddr::V4(v)) => {
+                Some(*v)
+            }
+            _ => None,
+        }) {
+            addrs
+                .entry(msg.header.index)
+                .or_default()
+                .push((v4, msg.header.prefix_len));
+        }
+    }
+
+    println!("interfaces (IPv4):");
+    let mut backhaul_seen = false;
+    let mut idxs: Vec<u32> = addrs.keys().copied().collect();
+    idxs.sort_unstable();
+    for idx in idxs {
+        let name = names.get(&idx).cloned().unwrap_or_else(|| format!("if{idx}"));
+        if name == "lo" {
+            continue;
+        }
+        let list = &addrs[&idx];
+        let has_backhaul = list.iter().any(|(a, _)| *a == backhaul);
+        backhaul_seen |= has_backhaul;
+        let shown = list
+            .iter()
+            .map(|(a, p)| format!("{a}/{p}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let flag = if has_backhaul && list.len() > 1 {
+            "   <- backhaul; DUAL-ADDRESSED (extra addrs can leak as bogus next-hops — see auu)"
+        } else if has_backhaul {
+            "   <- backhaul"
+        } else {
+            ""
+        };
+        println!("  {name:<12} {shown}{flag}");
+    }
+    if !backhaul_seen {
+        println!(
+            "  WARNING: derived backhaul {backhaul} is not assigned on any interface \
+             (daemon not running, or the backhaul interface is down)"
+        );
+    }
+    println!();
+
+    println!("mesh routes (10.42/16 client · 10.254/16 backhaul · 10.255/16 tunnels):");
+    let mut found = false;
+    let mut rstream = handle
+        .route()
+        .get(RouteMessageBuilder::<Ipv4Addr>::new().build())
+        .execute();
+    while let Ok(Some(r)) = rstream.try_next().await {
+        let dst = r.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Destination(RouteAddress::Inet(v)) => Some(*v),
+            _ => None,
+        });
+        let Some(dst) = dst else { continue };
+        if !is_mesh_v4(dst) {
+            continue;
+        }
+        let gw = r.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Gateway(RouteAddress::Inet(v)) => Some(format!("via {v} ")),
+            _ => None,
+        });
+        let dev = r
+            .attributes
+            .iter()
+            .find_map(|a| match a {
+                RouteAttribute::Oif(i) => names.get(i).cloned(),
+                _ => None,
+            })
+            .unwrap_or_else(|| "?".into());
+        println!(
+            "  {dst}/{:<3} {}dev {dev}",
+            r.header.destination_prefix_length,
+            gw.unwrap_or_default()
+        );
+        found = true;
+    }
+    if !found {
+        println!("  (none installed — no peers converged yet, or routing not running)");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn print_system_status(_backhaul: Ipv4Addr) {
+    println!("(interface/route inspection is Linux-only; identity is shown above)");
 }
 
 async fn run_listen(endpoint: Endpoint, no_relay: bool) -> Result<()> {

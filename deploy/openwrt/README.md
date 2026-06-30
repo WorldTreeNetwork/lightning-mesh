@@ -89,6 +89,20 @@ ssh root@<node> 'logread -e "mjolnir-meshd starting"'   # version= build= must m
 A clean SHA (no `-dirty`) means the deployed binary is traceable to a committed
 source tree. Pair with a `sha256sum /usr/bin/mjolnir-meshd` check at deploy time.
 
+## Diagnostics
+
+`service mjolnir-meshd diag` (or `mjolnir-meshd status --secret-file <path>`) is a
+read-only, daemon-free dump of ground truth: build stamp, node id, the derived
+`10.254.x` backhaul address, every interface's IPv4 addresses (it flags a
+dual-addressed backhaul interface — the `auu` failure mode where an extra address
+leaks as a bogus next-hop), and the installed mesh-space kernel routes with their
+next-hops. Use it to answer "is the backhaul addr up, did babel install routes and
+via what next-hop" without grepping logs.
+
+```sh
+ssh root@<node> 'service mjolnir-meshd diag'
+```
+
 ## Radio side (separate)
 
 The 802.11s mesh + client AP config lives at the OpenWrt/wifi layer — see
