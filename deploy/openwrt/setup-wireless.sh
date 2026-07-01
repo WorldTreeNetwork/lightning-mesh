@@ -2,7 +2,8 @@
 # Configure the radio layer on an MT7981 OpenWrt node for the mjolnir mesh:
 #   - 2.4 GHz radio  -> 802.11s mesh-point backhaul (bridged into br-mesh)
 #                       + a concurrent client AP on the same channel (for 2.4-only
-#                         IoT/ESP32) unless CLIENT_AP_2G=0
+#                         IoT/ESP32), STAGED DISABLED — flip per-node with
+#                         CLIENT_AP_2G=1 or `uci set wireless.clientap2g.disabled=0`
 #   - 5 GHz radio    -> client AP on br-lan
 # Band-detecting, so it's robust to radio0/radio1 ordering across units.
 #
@@ -20,10 +21,14 @@ MESH_CHANNEL_2G="${MESH_CHANNEL_2G:-6}"  # one shared 2.4 GHz channel mesh-wide
 CLIENT_SSID="${CLIENT_SSID:-Lightning Mesh}"
 CLIENT_KEY="${CLIENT_KEY:-lightning!}"
 CLIENT_CHANNEL_5G="${CLIENT_CHANNEL_5G:-36}"
-CLIENT_AP_2G="${CLIENT_AP_2G:-0}"            # 1 => also run a client AP on 2.4 GHz (concurrent with the mesh-point) for 2.4-only IoT/ESP32; 0 => backhaul-only.
-                                             # DEFAULT OFF (mjolnir-mesh-oaq): the concurrent AP doesn't just come up start_disabled —
-                                             # on WR3000S it blocks the MESH JOIN itself (wpad holds phy0; needs AP removal + reboot
-                                             # to recover). Re-enable per-node only once oaq is solved (mjolnir-mesh-ab4).
+CLIENT_AP_2G="${CLIENT_AP_2G:-0}"            # ENABLE flag for the 2.4 GHz client AP (concurrent with the mesh-point, for 2.4-only
+                                             # IoT/ESP32). The section is ALWAYS rendered so the SSID/key/FT config is staged; the
+                                             # flag only sets wireless.clientap2g.disabled. DEFAULT DISABLED (mjolnir-mesh-oaq): an
+                                             # ENABLED concurrent AP doesn't just come up start_disabled — on WR3000S it blocks the
+                                             # MESH JOIN itself (wpad holds phy0; needs AP removal + reboot to recover). Keep the
+                                             # backhaul clean; enable per-node deliberately (leaf nodes, IoT-only — it shares the
+                                             # backhaul channel's airtime) once oaq is solved (mjolnir-mesh-ab4):
+                                             #   uci set wireless.clientap2g.disabled=0; uci commit wireless; wifi reload
 CLIENT_AP_2G_ENC="${CLIENT_AP_2G_ENC:-psk2}" # WPA2-PSK by default: most ESP32/cheap IoT lack WPA3-SAE. Set to 'sae-mixed' to match 5 GHz, or 'none' for open.
 COUNTRY="${COUNTRY:-DE}"                  # regulatory domain — REQUIRED, or the radios won't initiate (vifs never appear)
 DISTANCE="${DISTANCE:-}"                  # metres to the farthest mesh peer; sets ACK timeout for long/foliage links. empty = driver default
@@ -132,33 +137,38 @@ fi
 # 5 GHz AP alone locks them out. mt76 runs a mesh-point + AP concurrently on one
 # radio — they share channel $MESH_CHANNEL_2G and its airtime (fine for low-bandwidth
 # IoT; steer heavy clients to 5 GHz). Same SSID/key as the 5 GHz AP so a device roams
-# across bands on one L2. Default WPA2-PSK for max IoT compatibility. CLIENT_AP_2G=0
-# restores the old backhaul-only behaviour. (mjolnir-mesh-ab4)
+# across bands on one L2. Default WPA2-PSK for max IoT compatibility. (mjolnir-mesh-ab4)
+# The section is rendered UNCONDITIONALLY but disabled unless CLIENT_AP_2G=1 — a
+# disabled wifi-iface creates no vif, so it can't trigger the oaq mesh-join breakage,
+# and enabling in the field is one uci flip instead of a setup-wireless re-run.
 uci -q delete wireless.clientap2g || true
+uci set wireless.clientap2g='wifi-iface'
 if [ "$CLIENT_AP_2G" = 1 ]; then
-	uci set wireless.clientap2g='wifi-iface'
-	uci set wireless.clientap2g.device="$radio_2g"
-	uci set wireless.clientap2g.mode='ap'
-	uci set wireless.clientap2g.ssid="$CLIENT_SSID"
-	uci set wireless.clientap2g.network='lan'
-	uci set wireless.clientap2g.encryption="$CLIENT_AP_2G_ENC"
-	[ "$CLIENT_AP_2G_ENC" = none ] || uci set wireless.clientap2g.key="$CLIENT_KEY"
-	if [ -n "$FT_KEY" ] && [ "$CLIENT_AP_2G_ENC" != none ]; then
-		uci set wireless.clientap2g.ieee80211r='1'
-		uci set wireless.clientap2g.mobility_domain="$FT_MOBILITY_DOMAIN"
-		uci set wireless.clientap2g.ft_over_ds='0'
-		case "$CLIENT_AP_2G_ENC" in
-		*sae*)
-			# FT-SAE, same as the 5 GHz AP above — no local-derivation shortcut.
-			add_ft_wildcard_rxkh clientap2g
-			;;
-		*)
-			# FT-PSK: hostapd derives PMK-R0/R1 locally from the shared PSK, so no
-			# r0kh/r1kh key-holder push is needed between nodes at all.
-			uci set wireless.clientap2g.ft_psk_generate_local='1'
-			;;
-		esac
-	fi
+	uci set wireless.clientap2g.disabled='0'
+else
+	uci set wireless.clientap2g.disabled='1'
+fi
+uci set wireless.clientap2g.device="$radio_2g"
+uci set wireless.clientap2g.mode='ap'
+uci set wireless.clientap2g.ssid="$CLIENT_SSID"
+uci set wireless.clientap2g.network='lan'
+uci set wireless.clientap2g.encryption="$CLIENT_AP_2G_ENC"
+[ "$CLIENT_AP_2G_ENC" = none ] || uci set wireless.clientap2g.key="$CLIENT_KEY"
+if [ -n "$FT_KEY" ] && [ "$CLIENT_AP_2G_ENC" != none ]; then
+	uci set wireless.clientap2g.ieee80211r='1'
+	uci set wireless.clientap2g.mobility_domain="$FT_MOBILITY_DOMAIN"
+	uci set wireless.clientap2g.ft_over_ds='0'
+	case "$CLIENT_AP_2G_ENC" in
+	*sae*)
+		# FT-SAE, same as the 5 GHz AP above — no local-derivation shortcut.
+		add_ft_wildcard_rxkh clientap2g
+		;;
+	*)
+		# FT-PSK: hostapd derives PMK-R0/R1 locally from the shared PSK, so no
+		# r0kh/r1kh key-holder push is needed between nodes at all.
+		uci set wireless.clientap2g.ft_psk_generate_local='1'
+		;;
+	esac
 fi
 
 # --- firewall: put the mesh backhaul in the 'lan' zone so IP *input* (babel hellos,
