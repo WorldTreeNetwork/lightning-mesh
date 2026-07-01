@@ -126,7 +126,7 @@ for pair in "$NS_A:a" "$NS_B:b"; do
   # an 'unreachable' /32 for the peer's transport address and poisons the very
   # UDP/veth path the overlay rides on (a self-inflicted feedback loop).
   cat >"$LOG/babeld-$tag.conf" <<CONF
-interface mjolnir0 type wired hello-interval 1
+interface mjolnir0 ${IFACE_OPTS:-type wired hello-interval 1}
 redistribute ip ${net}.0/24 ge 24 le 24 allow
 redistribute local deny
 redistribute deny

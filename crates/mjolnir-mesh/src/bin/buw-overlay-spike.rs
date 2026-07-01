@@ -141,7 +141,7 @@ mod linux {
 
         // 1. Create the overlay TUN.
         let mut cfg = tun::Configuration::default();
-        cfg.name(&args.tun).mtu(TUNNEL_MTU).up();
+        cfg.tun_name(&args.tun).mtu(TUNNEL_MTU).up();
         let device = tun::create_as_async(&cfg)?;
 
         // 2. Enable IPv6 on the iface (babel transports over fe80::), then assign

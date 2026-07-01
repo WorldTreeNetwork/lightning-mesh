@@ -87,7 +87,7 @@ where
     }));
 
     // One receiver task per peer connection.
-    for conn in conns.iter().cloned() {
+    for conn in conns.clone() {
         let inbound_tx = inbound_tx.clone();
         tasks.push(tokio::spawn(async move {
             loop {
