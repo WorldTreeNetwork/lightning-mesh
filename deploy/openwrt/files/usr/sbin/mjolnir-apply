@@ -1,0 +1,274 @@
+#!/bin/sh
+# mjolnir-apply — detached, self-healing applier for mjolnir node updates
+# (mjolnir-mesh-6e5). Runs ON the node, launched by install-node.sh via setsid
+# so it survives the SSH session it was started from — that's what makes
+# in-band (over-the-mesh / over-the-wifi-being-reconfigured) updates safe:
+# the session dying mid-apply no longer matters.
+#
+# Commit-confirm pattern: snapshot -> apply -> health gate -> auto-rollback.
+#   1. snapshot uci configs, the running binary, and which wpad variant is
+#      installed; record pre-apply mesh peers + responding 10.254.x neighbours
+#      as the health baseline.
+#   2. apply idempotently from /root/mjolnir-stage (packages install from the
+#      prefetched files in stage/pkgs first, so no internet is needed mid-apply
+#      — the radio bounce takes the mesh egress down with it on mesh-fed nodes).
+#      The wpad swap is SKIPPED when wpad-mesh is already installed, so re-runs
+#      never bounce wifi.
+#   3. if the apply touched wifi (or restarted a live meshd), require the mesh
+#      to come back — a peer re-appearing or a baseline neighbour answering
+#      ping — within HEALTH_TIMEOUT, else roll everything back (configs,
+#      binary, previous wpad from the prefetched package) and bring wifi up
+#      on the old config. Either way the operator SSHes back in.
+#   4. write $STAGE/result last (OK / ROLLED_BACK / FAILED) — install-node.sh
+#      polls that file over reconnecting SSH.
+#
+# Nodes with NO baseline (fresh install: zero mesh peers, no 10.254 neighbours)
+# skip the gate — there is nothing to regress, and requiring connectivity that
+# never existed would wrongly roll back every first install.
+#
+# Busybox ash. Deliberately NOT `set -e`: every critical step handles its own
+# failure so we always end at a result file, never a half-applied silent death.
+
+STAGE=/root/mjolnir-stage
+RESULT="$STAGE/result"
+BACKUP="$STAGE/backup"
+UCI_CONFIGS="wireless network firewall mjolnir"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+write_result() {
+	# tmp+mv so the poller never reads a half-written file
+	echo "$1" > "$RESULT.tmp" && mv "$RESULT.tmp" "$RESULT"
+	log "result: $1"
+}
+
+# --- single-instance lock ---------------------------------------------------
+if ! mkdir "$STAGE/.lock" 2>/dev/null; then
+	log "another mjolnir-apply is running ($STAGE/.lock exists) — refusing"
+	exit 1
+fi
+trap 'rmdir "$STAGE/.lock" 2>/dev/null' EXIT
+
+rm -f "$RESULT"
+[ -f "$STAGE/apply.env" ] && . "$STAGE/apply.env"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+RUN_WIRELESS="${RUN_WIRELESS:-0}"
+NOTES=""
+
+# --- package manager: apk (OpenWrt 25.12+) vs opkg ---------------------------
+pm_install()   { if command -v apk >/dev/null 2>&1; then apk add "$1"; else opkg install "$1"; fi; }
+pm_remove()    { if command -v apk >/dev/null 2>&1; then apk del "$1" 2>/dev/null; else opkg remove "$1" 2>/dev/null; fi; }
+pm_installed() { if command -v apk >/dev/null 2>&1; then apk info -e "$1" >/dev/null 2>&1; else opkg list-installed 2>/dev/null | grep -q "^$1 "; fi; }
+
+# Install a package from the prefetched files in stage/pkgs (apk names files
+# name-version.apk, opkg names them name_version_arch.ipk).
+pkg_local_install() {
+	local f
+	for f in "$STAGE/pkgs/$1"-[0-9]*.apk "$STAGE/pkgs/$1"_*.ipk; do
+		[ -f "$f" ] || continue
+		log "installing $1 from prefetched $f"
+		if command -v apk >/dev/null 2>&1; then apk add --no-network "$f" && return 0
+		else opkg install "$f" && return 0; fi
+	done
+	return 1
+}
+
+# Ensure a package is installed: already there -> done; else prefetched file,
+# else the network feeds (which may be down mid-apply — hence prefetch-first).
+pkg_ensure() {
+	pm_installed "$1" && return 0
+	pkg_local_install "$1" && return 0
+	log "no prefetched $1 — trying network feeds"
+	pm_install "$1"
+}
+
+# --- health probes ------------------------------------------------------------
+mesh_station_count() {
+	local i n total=0
+	for i in $(iw dev 2>/dev/null | awk '$1=="Interface"{i=$2} $1=="type"&&$2=="mesh"{print i}'); do
+		n=$(iw dev "$i" station dump 2>/dev/null | grep -c '^Station')
+		total=$((total + n))
+	done
+	echo "$total"
+}
+
+# 10.254.x hosts the kernel currently knows about (babel routes / next-hops),
+# minus our own addresses — ping-filtered below into the health baseline.
+health_candidates() {
+	local own c
+	own=$(ip -4 addr show 2>/dev/null | sed -n 's/.*inet \(10\.254\.[0-9.]*\)\/.*/\1/p')
+	ip -4 route 2>/dev/null | grep -o '10\.254\.[0-9]*\.[0-9]*' | sort -u | head -8 | while read -r c; do
+		echo "$own" | grep -qx "$c" || echo "$c"
+	done
+}
+
+any_target_pings() {
+	local t
+	for t in $HEALTH_TARGETS; do
+		ping -c1 -W2 "$t" >/dev/null 2>&1 && return 0
+	done
+	return 1
+}
+
+# --- pre-apply state (the health baseline + what rollback must restore) -------
+MESHD_WAS_RUNNING=0
+/etc/init.d/mjolnir-meshd running 2>/dev/null && MESHD_WAS_RUNNING=1
+PEERS_BEFORE=$(mesh_station_count)
+HEALTH_TARGETS=""
+for c in $(health_candidates); do
+	[ "$(echo "$HEALTH_TARGETS" | wc -w)" -ge 3 ] && break
+	ping -c1 -W2 "$c" >/dev/null 2>&1 && HEALTH_TARGETS="$HEALTH_TARGETS $c"
+done
+WPAD_PREV=none
+pm_installed wpad-basic-mbedtls && WPAD_PREV=wpad-basic-mbedtls
+pm_installed wpad-mesh-mbedtls  && WPAD_PREV=wpad-mesh-mbedtls
+log "pre-apply: meshd_running=$MESHD_WAS_RUNNING mesh_peers=$PEERS_BEFORE health_targets='${HEALTH_TARGETS# }' wpad=$WPAD_PREV"
+
+mkdir -p "$BACKUP"
+for c in $UCI_CONFIGS; do
+	[ -f "/etc/config/$c" ] && cp "/etc/config/$c" "$BACKUP/$c"
+done
+[ -f /usr/bin/mjolnir-meshd ] && cp /usr/bin/mjolnir-meshd "$BACKUP/mjolnir-meshd"
+
+WIFI_TOUCHED=0
+BINARY_CHANGED=0
+WPAD_SWAPPED=0
+
+rollback() {
+	log "ROLLING BACK: $1"
+	local c
+	for c in $UCI_CONFIGS; do
+		[ -f "$BACKUP/$c" ] && cp "$BACKUP/$c" "/etc/config/$c"
+	done
+	if [ "$BINARY_CHANGED" = 1 ] && [ -f "$BACKUP/mjolnir-meshd" ]; then
+		cp "$BACKUP/mjolnir-meshd" /usr/bin/mjolnir-meshd.new && mv /usr/bin/mjolnir-meshd.new /usr/bin/mjolnir-meshd
+	fi
+	if [ "$WPAD_SWAPPED" = 1 ]; then
+		pm_remove wpad-mesh-mbedtls
+		[ "$WPAD_PREV" != none ] && pkg_ensure "$WPAD_PREV"
+	fi
+	[ "$WIFI_TOUCHED" = 1 ] && wifi reload
+	[ "$MESHD_WAS_RUNNING" = 1 ] && /etc/init.d/mjolnir-meshd restart
+	write_result "ROLLED_BACK: $1 (previous config restored — see $STAGE/apply.log)"
+	exit 1
+}
+
+# =============================== APPLY =======================================
+
+# 1. babeld — unconditionally required for the mesh to route at all.
+if ! pkg_ensure babeld; then
+	write_result "FAILED: babeld install failed (no prefetched package, feeds unreachable) — nothing was changed"
+	exit 1
+fi
+
+# 2. kmod-tun — required for iroh tunnels (lan_tunnels=1 / mode internet).
+#    Non-fatal: warn and carry on, same as install-node.sh always did.
+if ! pkg_ensure kmod-tun; then
+	NOTES="$NOTES; WARNING: kmod-tun failed to install — /dev/net/tun absent, iroh tunnels won't come up"
+	log "WARN: kmod-tun install failed"
+fi
+
+# 3. wpad swap (802.11s SAE needs the mesh variant) — the wifi-bouncing step.
+#    Skipped entirely when wpad-mesh is already in place, so re-runs are
+#    non-disruptive. The variants PROVIDE/CONFLICT on `wpad`, so remove must
+#    come first; the prefetched package is what makes the gap survivable.
+if pm_installed wpad-mesh-mbedtls; then
+	log "wpad-mesh-mbedtls already installed — skipping swap (no wifi bounce)"
+else
+	WIFI_TOUCHED=1
+	WPAD_SWAPPED=1
+	log "swapping wpad-basic-mbedtls -> wpad-mesh-mbedtls"
+	pm_remove wpad-basic-mbedtls
+	pkg_ensure wpad-mesh-mbedtls || rollback "wpad-mesh-mbedtls install failed after wpad-basic removal"
+fi
+
+# 4. the daemon binary (.new + mv so replacing a RUNNING binary avoids ETXTBSY).
+if [ -f "$STAGE/mjolnir-meshd" ] && ! cmp -s "$STAGE/mjolnir-meshd" /usr/bin/mjolnir-meshd; then
+	log "installing new mjolnir-meshd binary"
+	cp "$STAGE/mjolnir-meshd" /usr/bin/mjolnir-meshd.new \
+		&& chmod +x /usr/bin/mjolnir-meshd.new \
+		&& mv /usr/bin/mjolnir-meshd.new /usr/bin/mjolnir-meshd \
+		|| rollback "binary install failed"
+	BINARY_CHANGED=1
+fi
+
+# 5. init scripts + helpers (and this applier itself, for future OTA runs).
+for f in mjolnir-meshd mjolnir-babeld; do
+	if [ -f "$STAGE/init.d-$f" ]; then
+		cp "$STAGE/init.d-$f" "/etc/init.d/$f" && chmod +x "/etc/init.d/$f" || rollback "installing /etc/init.d/$f failed"
+	fi
+done
+[ -f "$STAGE/setup-wireless.sh" ] && cp "$STAGE/setup-wireless.sh" /root/setup-wireless.sh && chmod +x /root/setup-wireless.sh
+[ -f "$STAGE/mjolnir-apply" ] && cp "$STAGE/mjolnir-apply" /usr/sbin/mjolnir-apply && chmod +x /usr/sbin/mjolnir-apply
+
+# 6. UCI config template — only if no meshd section exists (never clobber a
+#    customized config: that would wipe peers). An anonymous meshd section gets
+#    a name so `uci set mjolnir.meshd.*` (setup-wireless.sh, README) resolves;
+#    rename touches no values, so it can't lose configuration.
+if uci -q show mjolnir 2>/dev/null | grep -q "=meshd$"; then
+	log "/etc/config/mjolnir has a meshd section — left as-is"
+	if ! uci -q get mjolnir.meshd >/dev/null 2>&1; then
+		uci rename mjolnir.@meshd[0]=meshd && uci commit mjolnir \
+			&& log "anonymous meshd section renamed to mjolnir.meshd" \
+			|| log "WARN: could not name the anonymous meshd section"
+	fi
+elif [ -f "$STAGE/config-mjolnir" ]; then
+	log "installing UCI config template"
+	cp "$STAGE/config-mjolnir" /etc/config/mjolnir
+fi
+
+# 7. service wiring: stock babeld off, procd-supervised mjolnir-* on (m8t).
+/etc/init.d/babeld disable 2>/dev/null; /etc/init.d/babeld stop 2>/dev/null
+/etc/init.d/mjolnir-babeld enable 2>/dev/null
+/etc/init.d/mjolnir-meshd enable 2>/dev/null
+
+# 8. optional radio (re)configuration — the other wifi-bouncing step.
+if [ "$RUN_WIRELESS" = 1 ]; then
+	WIFI_TOUCHED=1
+	log "running setup-wireless.sh"
+	if [ -f "$STAGE/wireless.env" ]; then
+		set -a; . "$STAGE/wireless.env"; set +a
+	fi
+	sh /root/setup-wireless.sh || rollback "setup-wireless.sh failed"
+fi
+
+# 9. activate.
+if [ "$WIFI_TOUCHED" = 1 ]; then
+	log "wifi reload"
+	wifi reload
+fi
+if [ "$BINARY_CHANGED" = 1 ] && [ "$MESHD_WAS_RUNNING" = 1 ]; then
+	log "restarting mjolnir-meshd onto the new binary"
+	/etc/init.d/mjolnir-meshd restart
+fi
+
+# ============================ HEALTH GATE =====================================
+NEED_GATE=0
+[ "$WIFI_TOUCHED" = 1 ] && NEED_GATE=1
+[ "$BINARY_CHANGED" = 1 ] && [ "$MESHD_WAS_RUNNING" = 1 ] && NEED_GATE=1
+HAVE_BASELINE=0
+[ "$PEERS_BEFORE" -gt 0 ] && HAVE_BASELINE=1
+[ -n "${HEALTH_TARGETS# }" ] && HAVE_BASELINE=1
+
+if [ "$NEED_GATE" = 1 ] && [ "$HAVE_BASELINE" = 1 ]; then
+	log "health gate: up to ${HEALTH_TIMEOUT}s for a mesh peer or a ping to:${HEALTH_TARGETS:- (none)}"
+	DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
+	HEALTHY=0
+	while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+		if [ -n "${HEALTH_TARGETS# }" ]; then
+			# L3 proof: a pre-apply neighbour answers again over the new config
+			any_target_pings && { HEALTHY=1; break; }
+		elif [ "$(mesh_station_count)" -gt 0 ]; then
+			# no L3 baseline (meshd wasn't routing) — L2 peering back is the bar
+			HEALTHY=1; break
+		fi
+		sleep 5
+	done
+	[ "$HEALTHY" = 1 ] || rollback "health check failed after ${HEALTH_TIMEOUT}s (peers_before=$PEERS_BEFORE targets='${HEALTH_TARGETS# }')"
+	log "health gate passed"
+else
+	log "health gate skipped (need_gate=$NEED_GATE baseline=$HAVE_BASELINE — fresh/bench node or nothing disruptive applied)"
+fi
+
+write_result "OK: applied (wifi_touched=$WIFI_TOUCHED wpad_swapped=$WPAD_SWAPPED binary_changed=$BINARY_CHANGED wireless_run=$RUN_WIRELESS)$NOTES"
+exit 0

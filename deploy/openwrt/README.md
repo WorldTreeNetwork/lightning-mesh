@@ -20,18 +20,37 @@ rebuild as needed. The startup banner stamps the git short-SHA (`MJOLNIR_BUILD`,
 
 ## Install on a node
 
-One command — idempotent, safe to re-run:
+One command — idempotent, safe to re-run, and safe to run **in-band** (over the
+802.11s mesh or the very wifi being reconfigured — mjolnir-mesh-6e5):
 
 ```sh
-deploy/openwrt/install-node.sh root@<node-ip>
+deploy/openwrt/install-node.sh root@<node-ip>                      # binary/deps only
+deploy/openwrt/install-node.sh --wireless node.env root@<node-ip>  # + (re)run setup-wireless.sh
 ```
 
-It pushes the binary to `/usr/bin/mjolnir-meshd`, installs the procd init scripts,
-installs `babeld` + `kmod-tun` (via `apk` on OpenWrt 25.12+, else `opkg`), hands
-babeld supervision to procd (see below), swaps `wpad-basic`→`wpad-mesh` (802.11s
-SAE), and enables the meshd service. On a **fresh** node it also drops the UCI
-config template; on an existing node it leaves `/etc/config/mjolnir` untouched
-(your peers survive). It does **not** start meshd — you set peers first.
+It works in two phases. **Stage** (non-disruptive): pushes the binary, init
+scripts, `setup-wireless.sh`, and the applier to `/root/mjolnir-stage`, and
+prefetches the packages (`babeld`, `kmod-tun`, both `wpad` variants) as local
+files — via the node's feeds when it has internet, else from the local
+`deploy/openwrt/pkg-cache/` (auto-filled from any node that *can* fetch; a
+fresh box with no WAN installs entirely from the cache). **Apply** (detached):
+`mjolnir-apply` runs on the node under `setsid`, so the SSH session dying
+mid-wifi-bounce doesn't matter. It snapshots configs/binary/wpad, applies
+idempotently (the `wpad-basic`→`wpad-mesh` swap is **skipped once done** — 
+re-runs never bounce wifi), then health-gates: if the apply touched wifi or
+restarted a live meshd, a mesh peer or a pre-apply `10.254.x` neighbour must
+answer within `--health-timeout` (default 120 s) or **everything rolls back**
+(configs, previous binary, previous wpad from the prefetched package) and wifi
+comes back up on the old config. `install-node.sh` polls
+`/root/mjolnir-stage/result` over reconnecting SSH and reports
+`OK` / `ROLLED_BACK` / `FAILED` with the log tail. `--stage-only` stages
+without applying.
+
+On a **fresh** node it also drops the UCI config template; on an existing node
+it leaves `/etc/config/mjolnir` untouched (your peers survive). It does **not**
+start meshd — you set peers first. Fresh nodes have no health baseline (no
+peers, no `10.254.x` neighbours), so the gate is skipped — there is nothing to
+regress.
 
 `kmod-tun` is **required** whenever per-peer iroh tunnels run (`lan_tunnels=1` or
 `mode internet`): without it `/dev/net/tun` is absent and a tunnel fails to come
@@ -46,6 +65,8 @@ What lands on the node:
 | `/etc/init.d/mjolnir-babeld`      | procd service for babeld (START=96) |
 | `/etc/config/mjolnir`             | UCI config (peers, backhaul_iface, mode, …) |
 | `/root/setup-wireless.sh`         | 802.11s backhaul + client-AP helper |
+| `/usr/sbin/mjolnir-apply`         | detached applier (snapshot → apply → health gate → rollback) |
+| `/root/mjolnir-stage/`            | staged payload, prefetched packages, apply log + result |
 
 ### babeld is supervised by procd, not meshd (mjolnir-mesh-m8t)
 
@@ -62,9 +83,12 @@ stock `babeld` service so the two don't both run.
 
 The gotchas that otherwise get re-discovered every time:
 
-**Install over Ethernet / out-of-band.** `install-node.sh` swaps
-`wpad-basic`→`wpad-mesh`, which **bounces wifi** — SSHing in over the 802.11s mesh
-you're reconfiguring will cut your own session. Use a wired LAN port.
+**Installs/updates run in-band.** `install-node.sh` stages first and applies
+detached with health-gated rollback, so the wifi bounce (wpad swap,
+`setup-wireless.sh`) cutting your SSH session is expected and harmless — the
+script reconnects and reports the result. Ethernet at `192.168.1.1` is the
+**recovery of last resort** (e.g. a rollback that still didn't restore
+reachability), not a requirement.
 
 **Reaching a node — three paths:**
 - **Wired / direct** — plug the build machine into the node's LAN port; the node
@@ -96,16 +120,21 @@ LAN port, so swapping which node is wired changes the SSH host key. Clear it
 first: `ssh-keygen -R 192.168.1.1`.
 
 **Update an in-place node.** Re-run `install-node.sh root@<ip>` (config is
-preserved), then `service mjolnir-meshd restart` to exec the new binary. Verify:
-`sha256sum /usr/bin/mjolnir-meshd` matches `deploy/openwrt/mjolnir-meshd-aarch64`.
+preserved, the wpad swap is skipped, and a running meshd is restarted onto the
+new binary automatically — with rollback to the previous binary if the mesh
+doesn't come back). Verify: `sha256sum /usr/bin/mjolnir-meshd` matches
+`deploy/openwrt/mjolnir-meshd-aarch64`.
 
 **Recover / un-stick a node.** If a node hangs after enabling an experimental
 flag (e.g. `lan_tunnels=1` hitting `mjolnir-mesh-qz9`), disable it and restart:
 ```sh
 ssh root@<node> 'uci set mjolnir.meshd.lan_tunnels=0; uci commit mjolnir; service mjolnir-meshd restart'
 ```
-`install-node.sh` does not keep a backup of the previous binary — a bad binary
-is recovered by re-running `install-node.sh` with a known-good build.
+During an apply the previous binary/configs/wpad live in
+`/root/mjolnir-stage/backup/` and are restored automatically if the health gate
+fails; a bad binary that *passes* the gate is still recovered by re-running
+`install-node.sh` with a known-good build. Post-mortem: `cat
+/root/mjolnir-stage/apply.log` (and `result`).
 
 **`lan_tunnels` (experimental, default `0`).** `lan_tunnels=1` re-enables per-peer
 iroh tunnels in LAN mode (the `mjolnir-mesh-auu` retest); needs `kmod-tun`. It

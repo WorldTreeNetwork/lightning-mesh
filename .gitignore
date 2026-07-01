@@ -55,6 +55,10 @@ deploy/mikrotik/*.tar
 # OpenWrt native build artifact (static aarch64 binary; rebuild with deploy/openwrt/build.sh)
 deploy/openwrt/*-aarch64
 
+# Prefetched OpenWrt packages (install-node.sh fills this from any node with
+# feed access; pushed to nodes without WAN). Re-fetchable, release-specific.
+deploy/openwrt/pkg-cache/
+
 # Official MikroTik RouterOS packages (large binaries, MikroTik's to distribute).
 # Re-download with deploy/mikrotik/fetch-firmware.sh.
 deploy/mikrotik/*.npk
