@@ -286,15 +286,16 @@ async fn main() -> Result<()> {
         }
         _ => None,
     };
-    // Pin the iroh socket to the derived backhaul address in LAN/mesh mode
-    // (mjolnir-mesh-auu). Binding `0.0.0.0` made iroh enumerate AND advertise
-    // every container address — the backhaul `10.254.x` AND the container's
-    // private NAT addr (e.g. `172.20.0.2`, identical on every node and not
-    // reachable peer-to-peer). That second, bogus candidate gave the connection
-    // >1 IP path, so iroh tried to prune one and hit `MultipathNotNegotiated`,
-    // killing the tunnel ~36s in. Binding to the single backhaul IP advertises
-    // exactly one reachable address → one path → no prune. Explicit `--bind`
-    // still wins; non-mesh/non-LAN paths are unchanged.
+    // Pin the iroh socket to the derived backhaul address in LAN/mesh mode so
+    // peers can dial us at a fully-derived address with no discovery lookup
+    // (mjolnir-mesh-0yb.1). NOTE: the `MultipathNotNegotiated` tunnel death this
+    // was once thought to prevent was NOT an iroh multipath bug — it was an
+    // L23/RouterOS-container artifact (a duplicate `172.20.0.2` on the shared L2,
+    // identical on every node, advertised as a bogus second candidate), proven by
+    // the auu native retest (OpenWrt: single DIRECT path, stable). So the pin is
+    // retained only for deterministic dialing, not to avoid multipath — iroh
+    // handles multiple candidates fine on clean networks. Explicit `--bind` still
+    // wins; overlay + non-mesh/non-LAN paths are unchanged.
     let bind = match cli.bind {
         Some(addr) => Some(addr),
         // Overlay mode binds the underlay normally (mjolnir0 owns 10.254.x); only
@@ -768,13 +769,15 @@ async fn run_mesh(
             if peer == self_id {
                 continue; // our own id appears in the roster — skip
             }
-            // LAN: dial the peer at its DERIVED backhaul address
+            // Per-peer LAN: dial the peer at its DERIVED backhaul address
             // (10.254.x:MESH_IROH_PORT), reachable over the babel-routed underlay
-            // with no flat-L2 mDNS (mjolnir-mesh-0yb.1). Internet mode keeps
-            // discovery/relay resolution. The pinned port makes this addr
-            // identical to what the peer announces, so the connection still sees
-            // exactly one path (no MultipathNotNegotiated — see auu).
-            let addr = if lan {
+            // with no flat-L2 mDNS (mjolnir-mesh-0yb.1). NOT in overlay mode: there
+            // 10.254.x is the peer's OVERLAY address (on mjolnir0, reachable only
+            // over the overlay itself), and iroh isn't pinned to that port — so
+            // overlay dials by NODE ID and lets iroh discovery (mDNS/relay) resolve
+            // the underlay address (mjolnir-mesh-buw.8). Internet mode likewise
+            // keeps discovery/relay resolution.
+            let addr = if lan && overlay_state.is_none() {
                 let ip = mjolnir_mesh::tun::backhaul_addr(&peer.to_string());
                 addr.with_ip_addr(SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT))
             } else {
@@ -1616,10 +1619,19 @@ impl OverlayRouter {
             4 => {
                 let d: [u8; 4] = packet.get(16..20)?.try_into().ok()?;
                 let dest = Ipv4Addr::from(d);
-                // A peer's own overlay address is its own next hop; everything
-                // else (client /24s) resolves through babeld's routes (FIB).
+                // Overlay-block (10.254.0.0/16) unicast is NEVER forwarded across
+                // the overlay: those are the mjolnir0 interface/neighbour
+                // addresses, not a data path. Client traffic routes by its OWN
+                // destination via the FIB — the 10.254.x next hop is resolved from
+                // the FIB entry, never carried as a packet destination (true for
+                // single- and multi-hop). Dropping the block (return None) stops
+                // iroh — which advertises mjolnir0's own 10.254.x as a candidate
+                // direct address, with no public API to suppress it (buw.8) — from
+                // forming a bogus, fragile iroh-over-overlay path to a peer's
+                // overlay address. The underlay reaches peers via iroh's native
+                // discovery (mDNS/relay), not the overlay.
                 if dest.octets()[..2] == [10, 254] {
-                    Some(dest)
+                    None
                 } else {
                     self.fib.lock().expect("fib poisoned").lookup(dest)
                 }
