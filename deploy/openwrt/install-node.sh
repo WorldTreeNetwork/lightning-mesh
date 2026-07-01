@@ -37,6 +37,13 @@ ssh "$HOST" 'chmod +x /etc/init.d/mjolnir-meshd /etc/init.d/mjolnir-babeld /root
 echo ">> uci config (template only if missing a meshd section — preserves existing peers/config)"
 if ssh "$HOST" "uci -q show mjolnir 2>/dev/null | grep -q '=meshd\$'"; then
   echo "   /etc/config/mjolnir has a meshd section — left as-is"
+  # setup-wireless.sh and this repo's README address it by name
+  # (`mjolnir.meshd.*`); give it that name if it's anonymous (addressable
+  # only as `@meshd[0]`) so those `uci set` commands don't fail against it.
+  # `uci rename` only assigns an addressable name — it touches no option/list
+  # values, so this can't lose any of the section's actual configuration.
+  ssh "$HOST" 'uci -q get mjolnir.meshd >/dev/null 2>&1 || { uci rename mjolnir.@meshd[0] meshd && uci commit mjolnir && echo "   anonymous meshd section renamed to mjolnir.meshd"; }' \
+    || echo "   WARN: could not name the anonymous meshd section — uci set mjolnir.meshd.* commands (setup-wireless.sh, README) may fail against it"
 else
   scp -O "$DIR/files/etc/config/mjolnir" "$HOST:/etc/config/mjolnir"
 fi
@@ -73,16 +80,15 @@ fi
 echo ">> wpad-mesh-mbedtls (802.11s SAE) — swaps stock wpad-basic-mbedtls, which lacks mesh"
 # Removing wpad bounces wifi; fine — nodes are managed out-of-band over eth. Open mesh
 # (no MESH_KEY) needs none of this; only SAE backhaul requires the mesh-capable wpad.
-# Install the replacement BEFORE removing the stock package: if the index
-# refresh or install fails, the node keeps wpad-basic-mbedtls rather than
-# being left with neither installed.
+# wpad-basic-mbedtls and wpad-mesh-mbedtls are mutually-exclusive alternatives
+# (both PROVIDE/CONFLICT on `wpad`), so installing the replacement while the
+# stock package is still present always fails — remove MUST come first. That
+# does leave a brief window with no wpad package if the install then fails;
+# say so plainly rather than claiming a fallback that may not hold.
 ssh "$HOST" "$PM_HELPERS"'
+pm_remove wpad-basic-mbedtls
 pm_update
-if pm_install wpad-mesh-mbedtls; then
-  pm_remove wpad-basic-mbedtls
-else
-  echo "WARN: wpad-mesh-mbedtls install failed — left wpad-basic-mbedtls in place (SAE mesh wont auth; open mesh and existing client APs still work)"
-fi'
+pm_install wpad-mesh-mbedtls || echo "WARN: wpad-mesh-mbedtls install failed — node has NO wpad package now (neither SAE nor WPA/PSK auth will come up on wifi radios). Re-run install-node.sh once feeds/connectivity are fixed."'
 
 echo ">> babeld lifecycle -> procd (m8t): disable the stock babeld service, use mjolnir-babeld"
 ssh "$HOST" '
