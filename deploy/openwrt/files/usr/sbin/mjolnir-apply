@@ -241,14 +241,18 @@ if [ "$RUN_WIRELESS" = 1 ]; then
 	sh /root/setup-wireless.sh || rollback "setup-wireless.sh failed"
 fi
 
-# 9. activate.
+# 9. activate. A running meshd is restarted not only for a new binary but
+#    also after any wifi bounce: ifdown/ifup flushes the backhaul iface's
+#    addresses and meshd doesn't re-assert its 10.254.x yet (mjolnir-mesh-bov)
+#    — without the restart the health gate below would fail a GOOD apply.
 if [ "$WIFI_TOUCHED" = 1 ]; then
 	log "wifi reload"
 	wifi reload
 fi
-if [ "$BINARY_CHANGED" = 1 ] && [ "$MESHD_WAS_RUNNING" = 1 ]; then
-	log "restarting mjolnir-meshd onto the new binary"
+if [ "$MESHD_WAS_RUNNING" = 1 ] && { [ "$BINARY_CHANGED" = 1 ] || [ "$WIFI_TOUCHED" = 1 ]; }; then
+	log "restarting mjolnir-meshd (new binary and/or wifi bounce — re-asserts the backhaul addr, bov)"
 	/etc/init.d/mjolnir-meshd restart
+	sleep 3
 fi
 
 # ============================ HEALTH GATE =====================================
