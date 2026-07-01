@@ -201,6 +201,18 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // Log panics via tracing. A task panic otherwise only reaches stderr (easily
+    // lost) yet can silently poison a std::Mutex — cascading every
+    // `.lock().expect("poisoned")` into more silent panics until the whole runtime
+    // parks with no live tasks. That is the exact "hang" signature under
+    // lan_tunnels=1 (mjolnir-mesh-qz9); make the origin (file:line + message)
+    // visible in logread.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(target: "mjolnir_meshd", "PANIC: {info}");
+        default_hook(info);
+    }));
+
     // Build-identity banner. mjolnir-mesh-auu traced a deterministic ~36s tunnel
     // death to iroh's `MultipathNotNegotiated` — which, on two nodes running the
     // SAME 1.0.0 binary, should not happen (multipath is on by default). The
