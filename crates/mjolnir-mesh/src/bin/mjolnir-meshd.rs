@@ -28,9 +28,13 @@ use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use iroh_gossip::api::{Event, GossipReceiver, GossipSender};
 use iroh_gossip::{Gossip, TopicId};
-use mjolnir_mesh::tun::{spawn_tunnel, DatagramConn, EncapError, Tunnel};
+use mjolnir_mesh::tun::{
+    classify, spawn_overlay_tun, spawn_tunnel, DatagramConn, EncapError, Fib, OverlayDest, Tunnel,
+    UnicastRouter, OVERLAY_IFACE, TUNNEL_MTU,
+};
 use mjolnir_mesh::babel::{
-    render_babeld_conf, write_atomic_if_changed, BabelConfigInputs,
+    render_babeld_conf, render_overlay_babeld_conf, write_atomic_if_changed, BabelConfigInputs,
+    OverlayRtt,
 };
 use mjolnir_mesh::{
     alloc, merge_subnet_claim, GossipError, GossipSync, GossipTransport, MergeResult, PeerEntry,
@@ -189,6 +193,13 @@ enum Command {
         /// missing.
         #[arg(long, default_value = "/etc/mjolnir/claims.state")]
         claims_file: PathBuf,
+        /// buw single-overlay-TUN data plane (mjolnir-mesh-buw): bring up ONE
+        /// `mjolnir0` multiplexing every peer, so babeld sees one static
+        /// interface instead of N churning per-peer tunnels. Off by default —
+        /// the deployed path is per-peer tunnels; this is opt-in until validated
+        /// on the fleet.
+        #[arg(long)]
+        overlay: bool,
     },
 }
 
@@ -250,6 +261,12 @@ async fn main() -> Result<()> {
     // `--internet` or by passing `--relay`. The lower-level test commands
     // (listen/connect/id) keep their explicit-`--lan` behaviour unchanged.
     let mesh_mode = matches!(cli.command, Command::Mesh { .. });
+    // In overlay mode the node's backhaul address (10.254.x) belongs to the
+    // single overlay TUN mjolnir0, NOT the underlay iface — so we skip assigning
+    // it to the backhaul iface and skip pinning the iroh socket to it (the iroh
+    // underlay uses its own transport / relays). Assigning it to both would
+    // collide (mjolnir0 vs backhaul iface with the same address).
+    let overlay_mode = matches!(cli.command, Command::Mesh { overlay: true, .. });
     let internet = cli.internet || !cli.relay.is_empty();
     let lan = cli.lan || (mesh_mode && !internet);
     // --lan (and LAN-by-default) imply no relay (LAN discovery only).
@@ -261,10 +278,13 @@ async fn main() -> Result<()> {
     // announces it to peers (mjolnir-mesh-4pk). Assigning after bind misses the
     // initial address scan — and with no DHCP the iface has no other address.
     let secret = load_or_create_secret(cli.secret_file.as_deref())?;
-    let l2_backhaul = if let Command::Mesh { backhaul_iface, .. } = &cli.command {
-        assign_backhaul_addr(backhaul_iface, &secret.public().to_string()).await
-    } else {
-        None
+    let l2_backhaul = match &cli.command {
+        // Overlay mode: mjolnir0 carries the backhaul address, so don't put it on
+        // the underlay iface too. (Overlay also ignores the l2 wired backhaul.)
+        Command::Mesh { backhaul_iface, .. } if !overlay_mode => {
+            assign_backhaul_addr(backhaul_iface, &secret.public().to_string()).await
+        }
+        _ => None,
     };
     // Pin the iroh socket to the derived backhaul address in LAN/mesh mode
     // (mjolnir-mesh-auu). Binding `0.0.0.0` made iroh enumerate AND advertise
@@ -277,7 +297,9 @@ async fn main() -> Result<()> {
     // still wins; non-mesh/non-LAN paths are unchanged.
     let bind = match cli.bind {
         Some(addr) => Some(addr),
-        None if lan && mesh_mode => {
+        // Overlay mode binds the underlay normally (mjolnir0 owns 10.254.x); only
+        // the per-peer LAN path pins iroh to the derived backhaul address.
+        None if lan && mesh_mode && !overlay_mode => {
             let ip = mjolnir_mesh::tun::backhaul_addr(&secret.public().to_string());
             // Pin a well-known port so peers can dial us at a fully-derived
             // address (backhaul_addr + MESH_IROH_PORT), no mDNS needed (0yb.1).
@@ -306,6 +328,7 @@ async fn main() -> Result<()> {
             backhaul_iface: _,
             lan_tunnels,
             claims_file,
+            overlay,
         } => {
             // In LAN mode babel routes over the shared-L2 backhaul directly; pass
             // the resolved interface so the reconciler can add it as `type wired`
@@ -322,6 +345,7 @@ async fn main() -> Result<()> {
                 lan_tunnels,
                 l2,
                 claims_file,
+                overlay,
             )
             .await?
         }
@@ -479,6 +503,7 @@ async fn run_tun_connect(endpoint: Endpoint, addr_blob: &str) -> Result<()> {
 /// P2 multi-peer mesh: accept inbound tunnels and dial every roster peer for
 /// which this node is the initiator, maintaining one /31 TUN per peer with
 /// redial-on-drop. Holds until Ctrl-C.
+#[allow(clippy::too_many_arguments)] // cohesive mesh config; a struct would just move the noise
 async fn run_mesh(
     endpoint: Endpoint,
     no_relay: bool,
@@ -490,6 +515,7 @@ async fn run_mesh(
     lan_tunnels: bool,
     l2_backhaul: Option<String>,
     claims_file: PathBuf,
+    overlay: bool,
 ) -> Result<()> {
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
@@ -523,6 +549,46 @@ async fn run_mesh(
     enable_ip_forwarding();
 
     let registry: TunnelRegistry = Arc::new(Mutex::new(HashMap::new()));
+
+    // buw overlay data plane (--overlay): bring up ONE mjolnir0 for all peers and
+    // start its reader/writer/FIB-mirror. `overlay_state` carries the connection
+    // manager + inbound sender the accept handler and dialers register into.
+    // When off, this is None and everything below takes the per-peer path.
+    let overlay_state: Option<(ConnManager, tokio::sync::mpsc::Sender<Bytes>)> = if overlay {
+        let (device, link) = spawn_overlay_tun(&self_id_str, OVERLAY_IFACE)
+            .await
+            .context("bringing up overlay TUN mjolnir0")?;
+        info!(iface = %link.iface_name, addr = %link.self_addr, ll = %link.link_local, "overlay mode: single mjolnir0 up");
+        let (writer, reader) = device.split().context("splitting overlay TUN")?;
+
+        let conns = ConnManager::new();
+        let fib = Arc::new(Mutex::new(Fib::new()));
+        let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<Bytes>(1024);
+
+        // Writer task: every peer's inbound datagrams funnel here -> mjolnir0.
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let mut writer = writer;
+            while let Some(pkt) = inbound_rx.recv().await {
+                if writer.write_all(&pkt).await.is_err() {
+                    break;
+                }
+            }
+        });
+        // Mirror babeld's mjolnir0 routes into the FIB (demux next hops).
+        tokio::spawn(fib_mirror(link.iface_name.clone(), fib.clone()));
+        // Reader task: mjolnir0 -> route unicast / flood multicast to peers.
+        let router = OverlayRouter {
+            fib,
+            conns: conns.clone(),
+        };
+        tokio::spawn(overlay_reader(reader, conns.clone(), router, TUNNEL_MTU as usize));
+
+        Some((conns, inbound_tx))
+    } else {
+        None
+    };
+
     // Shared CRDT subnet-claim store (mjolnir-mesh-chn): cidr -> claim. Written
     // by the gossip apply loop and the local claim routine; babeld (83k) reads
     // it for the local subnet to redistribute. Seeded from disk (mjolnir-mesh-s9v)
@@ -540,16 +606,32 @@ async fn run_mesh(
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
     // Accept inbound tunnels (peers with a higher node id dial in) and gossip.
-    let router = Router::builder(endpoint.clone())
-        .accept(
-            TUN_ALPN,
-            TunnelHandler {
-                self_id: self_id_str.clone(),
-                registry: registry.clone(),
-            },
-        )
-        .accept(iroh_gossip::ALPN, gossip.clone())
-        .spawn();
+    // In overlay mode the TUN_ALPN handler serves connections into the connection
+    // manager; otherwise it brings up a per-peer tunnel. Both spawn the same
+    // Router type (handlers are boxed via ProtocolHandler).
+    let router = if let Some((conns, inbound)) = &overlay_state {
+        Router::builder(endpoint.clone())
+            .accept(
+                TUN_ALPN,
+                OverlayHandler {
+                    conns: conns.clone(),
+                    inbound: inbound.clone(),
+                },
+            )
+            .accept(iroh_gossip::ALPN, gossip.clone())
+            .spawn()
+    } else {
+        Router::builder(endpoint.clone())
+            .accept(
+                TUN_ALPN,
+                TunnelHandler {
+                    self_id: self_id_str.clone(),
+                    registry: registry.clone(),
+                },
+            )
+            .accept(iroh_gossip::ALPN, gossip.clone())
+            .spawn()
+    };
 
     // Subscribe to the mesh CRDT topic, bootstrapping the gossip swarm with the
     // roster peers. On success, spawn two tasks: a dispatch loop that applies
@@ -634,14 +716,18 @@ async fn run_mesh(
     // and triggers the `mjolnir-babeld` procd service to (re)load on change. procd
     // — not meshd — owns the babeld PROCESS (start/respawn/boot/stop); meshd only
     // owns the config. babeld absence is non-fatal.
-    let babel_task = {
+    let babel_task = if overlay_state.is_some() {
+        // Overlay: render ONE static mjolnir0 config from the claim store; no
+        // per-peer interfaces means the config never churns (qz9 by construction).
+        let claims = claims.clone();
+        let me = self_id_str.clone();
+        tokio::spawn(async move { babel_reconciler_overlay(claims, me, babel_config).await })
+    } else {
         let registry = registry.clone();
         let claims = claims.clone();
         let me = self_id_str.clone();
         let l2 = l2_backhaul.clone();
-        tokio::spawn(async move {
-            babel_reconciler(registry, claims, me, babel_config, l2).await
-        })
+        tokio::spawn(async move { babel_reconciler(registry, claims, me, babel_config, l2).await })
     };
     if let Some(iface) = &l2_backhaul {
         info!(%iface, "LAN mode: routing babel over the shared-L2 backhaul (no per-peer iroh tunnels)");
@@ -661,7 +747,9 @@ async fn run_mesh(
     // iroh tunnels — they churned in the container era (mjolnir-mesh-auu). The
     // --lan-tunnels flag re-enables them for the native retest; internet mode
     // always tunnels.
-    let want_tunnels = !lan || lan_tunnels;
+    // Overlay mode always dials every peer (it needs one connection to each);
+    // otherwise the per-peer tunnel policy applies.
+    let want_tunnels = overlay_state.is_some() || !lan || lan_tunnels;
     if !want_tunnels {
         info!("LAN mode: not dialing per-peer iroh tunnels — babel routes over the shared L2");
     } else {
@@ -694,12 +782,20 @@ async fn run_mesh(
             };
             if self_id_str < peer.to_string() {
                 let ep = endpoint.clone();
-                let reg = registry.clone();
-                let sid = self_id_str.clone();
                 let label = entry.label.clone();
-                dialers.push(tokio::spawn(async move {
-                    connector_loop(ep, addr, sid, reg, label).await;
-                }));
+                if let Some((conns, inbound)) = &overlay_state {
+                    let conns = conns.clone();
+                    let inbound = inbound.clone();
+                    dialers.push(tokio::spawn(async move {
+                        connector_loop_overlay(ep, addr, conns, inbound, label).await;
+                    }));
+                } else {
+                    let reg = registry.clone();
+                    let sid = self_id_str.clone();
+                    dialers.push(tokio::spawn(async move {
+                        connector_loop(ep, addr, sid, reg, label).await;
+                    }));
+                }
             } else {
                 info!(%peer, label = ?entry.label, "peer has the higher id — waiting for it to dial us");
             }
@@ -1418,6 +1514,343 @@ impl ProtocolHandler for TunnelHandler {
             warn!("accepted tunnel ended with error: {e}");
         }
         Ok(())
+    }
+}
+
+// ===== buw single-overlay-TUN data plane (mjolnir-mesh-buw.3/4/5) ===========
+// Opt-in via `--overlay`. Replaces the per-peer TUN registry + tunnels with ONE
+// `mjolnir0` multiplexing every peer. The per-peer path above is untouched.
+
+/// buw connection manager (mjolnir-mesh-buw.3): the live iroh [`Connection`] for
+/// each peer, indexed BOTH by node id (lifecycle / dedup) and by the peer's
+/// derived overlay address `10.254.x` (data-plane demux: FIB next-hop -> conn).
+/// Decoupled from any interface — a dropped connection removes a map entry, not
+/// a babel interface, so babeld's config never churns (the qz9 fix).
+#[derive(Clone, Default)]
+struct ConnManager {
+    inner: Arc<Mutex<ConnManagerInner>>,
+}
+
+#[derive(Default)]
+struct ConnManagerInner {
+    by_peer: HashMap<EndpointId, Connection>,
+    by_addr: HashMap<Ipv4Addr, Connection>,
+}
+
+impl std::fmt::Debug for ConnManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let g = self.inner.lock().expect("connmgr poisoned");
+        write!(f, "ConnManager({} conns)", g.by_peer.len())
+    }
+}
+
+impl ConnManager {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// The peer's derived overlay address (`10.254.x`) — the demux key, matching
+    /// the address `spawn_overlay_tun` assigns and babeld's next hops.
+    fn addr_of(peer: &EndpointId) -> Ipv4Addr {
+        mjolnir_mesh::tun::backhaul_addr(&peer.to_string())
+    }
+
+    /// Register `conn` for `peer`, updating BOTH indexes atomically. Returns
+    /// `false` if a connection for this peer already exists (caller refuses the
+    /// duplicate) — the one-connection-per-peer invariant.
+    fn register(&self, peer: EndpointId, conn: Connection) -> bool {
+        let addr = Self::addr_of(&peer);
+        let mut g = self.inner.lock().expect("connmgr poisoned");
+        if g.by_peer.contains_key(&peer) {
+            return false;
+        }
+        g.by_peer.insert(peer, conn.clone());
+        g.by_addr.insert(addr, conn);
+        true
+    }
+
+    /// Remove `peer` from both indexes. No-op if absent.
+    fn deregister(&self, peer: &EndpointId) {
+        let addr = Self::addr_of(peer);
+        let mut g = self.inner.lock().expect("connmgr poisoned");
+        g.by_peer.remove(peer);
+        g.by_addr.remove(&addr);
+    }
+
+    /// The connection whose peer owns overlay address `addr`, if connected.
+    fn by_addr(&self, addr: Ipv4Addr) -> Option<Connection> {
+        self.inner
+            .lock()
+            .expect("connmgr poisoned")
+            .by_addr
+            .get(&addr)
+            .cloned()
+    }
+
+    /// Snapshot of every live connection (for multicast flooding).
+    fn all(&self) -> Vec<Connection> {
+        self.inner
+            .lock()
+            .expect("connmgr poisoned")
+            .by_peer
+            .values()
+            .cloned()
+            .collect()
+    }
+}
+
+/// Resolves a unicast overlay packet to the peer connection that should carry
+/// it (mjolnir-mesh-buw.4): v4 client/overlay traffic via the FIB (or on-link
+/// `10.254/16`), v6 babel link-local (`fe80::X`) via the `fe80 <-> 10.254`
+/// derivation, then the connection manager's addr index -> [`Connection`].
+#[derive(Clone)]
+struct OverlayRouter {
+    fib: Arc<Mutex<Fib>>,
+    conns: ConnManager,
+}
+
+impl OverlayRouter {
+    /// The `10.254.x` next hop for a unicast packet, or `None` if unroutable.
+    fn next_hop(&self, packet: &[u8]) -> Option<Ipv4Addr> {
+        match packet.first()? >> 4 {
+            4 => {
+                let d: [u8; 4] = packet.get(16..20)?.try_into().ok()?;
+                let dest = Ipv4Addr::from(d);
+                // A peer's own overlay address is its own next hop; everything
+                // else (client /24s) resolves through babeld's routes (FIB).
+                if dest.octets()[..2] == [10, 254] {
+                    Some(dest)
+                } else {
+                    self.fib.lock().expect("fib poisoned").lookup(dest)
+                }
+            }
+            6 => {
+                let d: [u8; 16] = packet.get(24..40)?.try_into().ok()?;
+                let seg = std::net::Ipv6Addr::from(d).segments();
+                // fe80::X (babel IHU to a neighbour) -> next-hop 10.254.X, the
+                // reverse of tun::iface::overlay_link_local.
+                if seg[0] == 0xfe80 {
+                    let host = seg[7];
+                    Some(Ipv4Addr::new(10, 254, (host >> 8) as u8, (host & 0xff) as u8))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+impl UnicastRouter<IrohDatagramConn> for OverlayRouter {
+    fn resolve(&self, packet: &[u8]) -> Option<IrohDatagramConn> {
+        let nh = self.next_hop(packet)?;
+        self.conns.by_addr(nh).map(|conn| IrohDatagramConn { conn })
+    }
+}
+
+/// The mjolnir0 reader: read each IP packet off the overlay TUN and forward it —
+/// multicast (babel Hello) flooded to EVERY live peer (emulation), unicast
+/// routed to the ONE peer `router` resolves (or dropped). Mirrors
+/// [`mjolnir_mesh::tun::spawn_overlay_routed`] (the tested reference) but with a
+/// LIVE flood set from the connection manager, since peers join/leave at runtime.
+async fn overlay_reader<R>(mut reader: R, conns: ConnManager, router: OverlayRouter, mtu: usize)
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+{
+    use tokio::io::AsyncReadExt;
+    let mut buf = vec![0u8; mtu];
+    loop {
+        let n = match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                warn!("overlay reader: TUN read error: {e}");
+                break;
+            }
+        };
+        let pkt = Bytes::copy_from_slice(&buf[..n]);
+        match classify(&pkt) {
+            Some(OverlayDest::Multicast) => {
+                for conn in conns.all() {
+                    let _ = IrohDatagramConn { conn }.send_datagram(pkt.clone()).await;
+                }
+            }
+            Some(OverlayDest::Unicast) => {
+                if let Some(dc) = router.resolve(&pkt) {
+                    let _ = dc.send_datagram(pkt).await;
+                }
+                // else: unroutable — dropped (no flood), so a transit node can't loop.
+            }
+            None => {}
+        }
+    }
+}
+
+/// Mirror babeld's kernel routes on `iface` (mjolnir0) into `fib` by polling
+/// `ip -4 route show dev <iface>` (route-event subscription is a later
+/// optimization). A `dest/len via 10.254.x` line becomes `fib[dest/len] =
+/// 10.254.x` — the demux the overlay reader needs, since the raw packet carries
+/// only the client dest, not babeld's next hop.
+async fn fib_mirror(iface: String, fib: Arc<Mutex<Fib>>) {
+    loop {
+        let out = tokio::process::Command::new("ip")
+            .args(["-4", "route", "show", "dev", &iface])
+            .output()
+            .await;
+        if let Ok(out) = out {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut next = Fib::new();
+            for line in text.lines() {
+                let toks: Vec<&str> = line.split_whitespace().collect();
+                let Some(prefix) = toks.first() else { continue };
+                let gw = toks
+                    .iter()
+                    .position(|t| *t == "via")
+                    .and_then(|i| toks.get(i + 1))
+                    .and_then(|s| s.parse::<Ipv4Addr>().ok());
+                if let (Some((net, len)), Some(gw)) = (parse_cidr(prefix), gw) {
+                    next.upsert(net, len, gw);
+                }
+            }
+            *fib.lock().expect("fib poisoned") = next;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Parse `a.b.c.d/len` (or a bare host = /32) into `(network, len)`.
+fn parse_cidr(s: &str) -> Option<(Ipv4Addr, u8)> {
+    match s.split_once('/') {
+        Some((ip, len)) => Some((ip.parse().ok()?, len.parse().ok()?)),
+        None => Some((s.parse().ok()?, 32)),
+    }
+}
+
+/// Overlay analogue of [`serve_tunnel`]: register the peer's connection, pump its
+/// inbound datagrams onto the shared mjolnir0 writer via `inbound`, and hold
+/// until the connection closes — then deregister. NO per-peer interface.
+async fn serve_overlay_conn(
+    conn: Connection,
+    conns: ConnManager,
+    inbound: tokio::sync::mpsc::Sender<Bytes>,
+) -> Result<()> {
+    let peer = conn.remote_id();
+    if !conns.register(peer, conn.clone()) {
+        warn!(%peer, "already have a connection for this peer — refusing duplicate");
+        conn.close(2u32.into(), b"duplicate connection");
+        return Ok(());
+    }
+    info!(%peer, addr = %ConnManager::addr_of(&peer), "overlay peer connected");
+    spawn_path_logger(conn.clone(), peer);
+
+    // Receiver: each inbound datagram from this peer -> the single mjolnir0 writer.
+    let recv = {
+        let conn = conn.clone();
+        tokio::spawn(async move {
+            // Ok = a datagram; Err = connection closed (loop ends).
+            while let Ok(pkt) = conn.read_datagram().await {
+                if inbound.send(pkt).await.is_err() {
+                    break; // writer gone
+                }
+            }
+        })
+    };
+
+    let reason = conn.closed().await;
+    info!(%peer, ?reason, "overlay peer disconnected");
+    recv.abort();
+    conns.deregister(&peer);
+    Ok(())
+}
+
+/// Overlay analogue of [`connector_loop`]: dial a peer and serve the connection
+/// into the connection manager, redialing with backoff until aborted.
+async fn connector_loop_overlay(
+    endpoint: Endpoint,
+    addr: EndpointAddr,
+    conns: ConnManager,
+    inbound: tokio::sync::mpsc::Sender<Bytes>,
+    label: Option<String>,
+) {
+    let peer = addr.id;
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(30);
+    loop {
+        info!(%peer, label = ?label, "dialing peer (overlay)");
+        match endpoint.connect(addr.clone(), TUN_ALPN).await {
+            Ok(conn) => {
+                backoff = Duration::from_secs(1);
+                if let Err(e) = serve_overlay_conn(conn, conns.clone(), inbound.clone()).await {
+                    warn!(%peer, "overlay connection ended with error: {e}");
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(e) => {
+                warn!(%peer, ?backoff, "dial failed: {e}; retrying after backoff");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+            }
+        }
+    }
+}
+
+/// iroh handler that serves each accepted connection into the overlay connection
+/// manager (the overlay analogue of [`TunnelHandler`]).
+#[derive(Clone, Debug)]
+struct OverlayHandler {
+    conns: ConnManager,
+    inbound: tokio::sync::mpsc::Sender<Bytes>,
+}
+
+impl ProtocolHandler for OverlayHandler {
+    async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+        if let Err(e) = serve_overlay_conn(conn, self.conns.clone(), self.inbound.clone()).await {
+            warn!("accepted overlay connection ended with error: {e}");
+        }
+        Ok(())
+    }
+}
+
+/// Overlay babeld reconciler (mjolnir-mesh-buw.5): renders the SINGLE static
+/// `mjolnir0` config from the claim store. mjolnir0 is always up, so babeld runs
+/// continuously and the config only changes when our claimed /24 changes — no
+/// per-peer churn (qz9 dissolved by construction, no debounce needed).
+async fn babel_reconciler_overlay(claims: ClaimStore, self_id: String, config_path: PathBuf) {
+    if let Some(parent) = config_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!("could not create babeld config dir {}: {e}", parent.display());
+    }
+    let mut started = false;
+    let mut last_rendered: Option<String> = None;
+    loop {
+        let local_subnet: Option<Ipv4Net> = {
+            let c = claims.lock().expect("claim store poisoned");
+            c.values()
+                .find(|claim| claim.owner_node_id == self_id)
+                .and_then(|claim| match claim.cidr {
+                    IpNet::V4(n) => Some(n),
+                    IpNet::V6(_) => None,
+                })
+        };
+        let conf = render_overlay_babeld_conf(OVERLAY_IFACE, local_subnet, OverlayRtt::default());
+        if last_rendered.as_deref() != Some(conf.as_str()) {
+            match write_atomic_if_changed(&config_path, &conf) {
+                Ok(_) => {
+                    if !started {
+                        babeld_service("enable").await;
+                        if babeld_service("restart").await {
+                            started = true;
+                            info!(config = %config_path.display(), iface = OVERLAY_IFACE, "babeld started (overlay: single mjolnir0)");
+                        }
+                    }
+                    last_rendered = Some(conf);
+                }
+                Err(e) => warn!("failed to write overlay babeld config {}: {e}", config_path.display()),
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 

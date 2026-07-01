@@ -53,28 +53,36 @@ impl OverlayHandles {
     }
 }
 
-/// Bridge one overlay TUN to `conns` (all current peer connections), emulating
-/// multicast for babel neighbour discovery.
-///
-/// `tun_read` / `tun_write` are the read/write halves of `mjolnir0`. `conns` is
-/// the set of peer [`DatagramConn`]s; for the buw.1 spike this is a fixed set
-/// (one peer), but the type is a `Vec` so buw.3's connection manager can grow it.
-/// `mtu` bounds each TUN read (one read = one IP packet).
-pub fn spawn_overlay<R, W, C>(
-    mut tun_read: R,
-    tun_write: W,
-    conns: Vec<C>,
-    mtu: usize,
-) -> OverlayHandles
+/// Resolves how the overlay forwards a UNICAST packet read off the TUN: to the
+/// single peer connection that owns the destination, or `None` to drop it as
+/// unroutable. (Multicast is never routed here — the overlay floods it to every
+/// peer for babel discovery.) The daemon implements this over the FIB
+/// (`dest -> next-hop 10.254.x`) plus the connection manager
+/// (`next-hop -> Connection`); tests and the spike use a plain closure.
+pub trait UnicastRouter<C>: Send + 'static {
+    /// Return the connection that should carry this unicast `packet`, or `None`.
+    fn resolve(&self, packet: &[u8]) -> Option<C>;
+}
+
+impl<C, F> UnicastRouter<C> for F
 where
-    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    F: Fn(&[u8]) -> Option<C> + Send + 'static,
+{
+    fn resolve(&self, packet: &[u8]) -> Option<C> {
+        self(packet)
+    }
+}
+
+/// Spawn the inbound half shared by both overlay variants: one writer task that
+/// drains an mpsc queue to the TUN, and one receiver task per connection feeding
+/// it. Returns the spawned tasks (writer first).
+fn spawn_inbound<W, C>(tun_write: W, conns: &[C]) -> Vec<JoinHandle<Result<(), EncapError>>>
+where
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     C: DatagramConn + Clone,
 {
-    // Inbound funnel: every receiver pushes here; one writer drains to the TUN.
     let (inbound_tx, mut inbound_rx) = mpsc::channel::<Bytes>(INBOUND_QUEUE);
-
-    let mut tasks = Vec::with_capacity(conns.len() + 2);
+    let mut tasks = Vec::with_capacity(conns.len() + 1);
 
     // Writer task — sole owner of the TUN write half.
     let mut tun_write = tun_write;
@@ -87,7 +95,8 @@ where
     }));
 
     // One receiver task per peer connection.
-    for conn in conns.clone() {
+    for conn in conns {
+        let conn = conn.clone();
         let inbound_tx = inbound_tx.clone();
         tasks.push(tokio::spawn(async move {
             loop {
@@ -105,9 +114,30 @@ where
             }
         }));
     }
-    drop(inbound_tx); // only the receivers hold senders now
+    tasks
+}
 
-    // Reader task — read each packet off the TUN and fan it out.
+/// Bridge one overlay TUN to `conns`, FLOODING every packet to all peers.
+///
+/// This is the buw.1 spike / walking-skeleton data plane: correct for a single
+/// peer (or a full mesh with no transit), but it does not scale to multi-hop
+/// because it floods unicast too. Production uses [`spawn_overlay_routed`], which
+/// routes unicast to one peer via a [`UnicastRouter`] while still flooding
+/// multicast. `mtu` bounds each TUN read (one read = one IP packet).
+pub fn spawn_overlay<R, W, C>(
+    mut tun_read: R,
+    tun_write: W,
+    conns: Vec<C>,
+    mtu: usize,
+) -> OverlayHandles
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    C: DatagramConn + Clone,
+{
+    let mut tasks = spawn_inbound(tun_write, &conns);
+
+    // Reader task — read each packet off the TUN and flood it to every peer.
     let send_conns = conns;
     tasks.push(tokio::spawn(async move {
         let mut buf = vec![0u8; mtu];
@@ -121,9 +151,7 @@ where
             let dest = classify(&pkt);
             tracing::debug!(target: "overlay", "rd-tun {n}B {dest:?}");
             match dest {
-                // Multicast (babel Hello) MUST reach every peer — the emulation.
-                // Unicast is flooded too during the spike; buw.4 swaps this for
-                // LPM(dest)->peer. Either way, fan out to all connections.
+                // Both multicast (babel Hello) and unicast are flooded here.
                 Some(OverlayDest::Multicast) | Some(OverlayDest::Unicast) => {
                     for conn in &send_conns {
                         // A single dead peer must not sink the whole overlay;
@@ -137,6 +165,68 @@ where
                     }
                 }
                 // Not an IP packet we understand (runt / unknown version): drop.
+                None => {
+                    tracing::debug!(target: "overlay", "drop {n}B non-IP frame off TUN");
+                }
+            }
+        }
+    }));
+
+    OverlayHandles { tasks }
+}
+
+/// Bridge one overlay TUN to many peers with PRODUCTION demux: multicast is
+/// flooded to every peer (babel discovery — the emulation), while each unicast
+/// packet is routed to the single peer `router` resolves for it (`LPM(dest) ->
+/// next-hop -> conn`). An unroutable unicast dest is dropped, NOT flooded, so a
+/// transit node can forward without looping.
+///
+/// `flood_conns` are the connections multicast fans out to (typically every
+/// current peer); `router` owns the unicast decision and can consult live state
+/// (FIB + connection map) per packet.
+pub fn spawn_overlay_routed<R, W, C, U>(
+    mut tun_read: R,
+    tun_write: W,
+    flood_conns: Vec<C>,
+    router: U,
+    mtu: usize,
+) -> OverlayHandles
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    C: DatagramConn + Clone,
+    U: UnicastRouter<C>,
+{
+    let mut tasks = spawn_inbound(tun_write, &flood_conns);
+
+    tasks.push(tokio::spawn(async move {
+        let mut buf = vec![0u8; mtu];
+        loop {
+            let n = match tun_read.read(&mut buf).await {
+                Ok(0) => return Ok(()),
+                Ok(n) => n,
+                Err(e) => return Err(EncapError::from(e)),
+            };
+            let pkt = Bytes::copy_from_slice(&buf[..n]);
+            let dest = classify(&pkt);
+            tracing::debug!(target: "overlay", "rd-tun {n}B {dest:?}");
+            match dest {
+                // Multicast (babel Hello) is flooded to every peer — the emulation.
+                Some(OverlayDest::Multicast) => {
+                    for conn in &flood_conns {
+                        if let Err(e) = conn.send_datagram(pkt.clone()).await {
+                            tracing::debug!(target: "overlay", "mcast tx dropped: {e}");
+                        }
+                    }
+                }
+                // Unicast goes to the ONE peer the router resolves, or is dropped.
+                Some(OverlayDest::Unicast) => match router.resolve(&pkt) {
+                    Some(conn) => match conn.send_datagram(pkt).await {
+                        Ok(()) => tracing::debug!(target: "overlay", "tx-routed {n}B"),
+                        Err(e) => tracing::debug!(target: "overlay", "routed tx dropped: {e}"),
+                    },
+                    None => tracing::debug!(target: "overlay", "unicast drop: unroutable"),
+                },
                 None => {
                     tracing::debug!(target: "overlay", "drop {n}B non-IP frame off TUN");
                 }
@@ -232,6 +322,103 @@ mod tests {
         assert_eq!(got_a, hello);
         assert_eq!(got_b, hello);
 
+        handles.abort();
+    }
+
+    fn ipv4_unicast(dst: &str) -> Bytes {
+        // Minimal IPv4 header (20 bytes) to a unicast destination.
+        let mut pkt = vec![0u8; 20];
+        pkt[0] = 0x45; // version 4, IHL 5
+        let d: std::net::Ipv4Addr = dst.parse().unwrap();
+        pkt[16..20].copy_from_slice(&d.octets());
+        Bytes::from(pkt)
+    }
+
+    #[tokio::test]
+    async fn routed_unicast_reaches_only_the_resolved_peer() {
+        let (tun_write_in, tun_read) = tokio::io::duplex(2048);
+        let (dummy_w, _dummy_r) = tokio::io::duplex(2048);
+
+        let a = wire();
+        let b = wire();
+        // Router sends every unicast to peer B only.
+        let b_conn = b.conn.clone();
+        let router = move |_pkt: &[u8]| Some(b_conn.clone());
+        let handles = spawn_overlay_routed(
+            tun_read,
+            dummy_w,
+            vec![a.conn.clone(), b.conn.clone()],
+            router,
+            1300,
+        );
+
+        let pkt = ipv4_unicast("10.42.1.5");
+        {
+            let mut w = tun_write_in;
+            w.write_all(&pkt).await.unwrap();
+        }
+
+        // B receives it; A does NOT (unicast is routed, not flooded).
+        let got_b = b.sent.lock().await.recv().await.unwrap();
+        assert_eq!(got_b, pkt);
+        assert!(
+            a.sent.lock().await.try_recv().is_err(),
+            "unicast must not reach the unrelated peer"
+        );
+        handles.abort();
+    }
+
+    #[tokio::test]
+    async fn routed_multicast_still_floods_all_peers() {
+        let (tun_write_in, tun_read) = tokio::io::duplex(2048);
+        let (dummy_w, _dummy_r) = tokio::io::duplex(2048);
+
+        let a = wire();
+        let b = wire();
+        // Router would send unicast nowhere, but multicast must ignore it.
+        let router = move |_pkt: &[u8]| None::<MockConn>;
+        let handles = spawn_overlay_routed(
+            tun_read,
+            dummy_w,
+            vec![a.conn.clone(), b.conn.clone()],
+            router,
+            1300,
+        );
+
+        let hello = babel_hello();
+        {
+            let mut w = tun_write_in;
+            w.write_all(&hello).await.unwrap();
+        }
+        assert_eq!(a.sent.lock().await.recv().await.unwrap(), hello);
+        assert_eq!(b.sent.lock().await.recv().await.unwrap(), hello);
+        handles.abort();
+    }
+
+    #[tokio::test]
+    async fn routed_unroutable_unicast_is_dropped_not_flooded() {
+        let (tun_write_in, tun_read) = tokio::io::duplex(2048);
+        let (dummy_w, _dummy_r) = tokio::io::duplex(2048);
+
+        let a = wire();
+        // Router drops all unicast (None).
+        let router = move |_pkt: &[u8]| None::<MockConn>;
+        let handles =
+            spawn_overlay_routed(tun_read, dummy_w, vec![a.conn.clone()], router, 1300);
+
+        // Send an unroutable unicast — it must be dropped, NOT flooded to A.
+        let unicast = ipv4_unicast("10.42.9.9");
+        {
+            let mut w = tun_write_in;
+            w.write_all(&unicast).await.unwrap();
+        }
+        // Nothing should ever reach A: a bounded wait must time out (empty).
+        let mut sent = a.sent.lock().await;
+        let got = tokio::time::timeout(std::time::Duration::from_millis(250), sent.recv()).await;
+        assert!(
+            got.is_err(),
+            "unroutable unicast must be dropped, not forwarded to any peer"
+        );
         handles.abort();
     }
 
