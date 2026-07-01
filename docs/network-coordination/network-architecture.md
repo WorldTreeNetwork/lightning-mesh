@@ -219,6 +219,41 @@ Address space configuration is set in the CRDT root document and read by all nod
 
 ---
 
+## Why This Scales: No Shared L2 Broadcast Domain
+
+The design deliberately keeps each router's clients in their **own routed `/24`** and routes
+between them at L3 with Babel — rather than bridging every node into one large L2 cloud. This
+is the single most important scaling decision, and it is what separates this design from
+flat-mesh systems (e.g. `batman-adv`-based meshes such as the default LibreMesh cloud), which
+put a whole area into one L2 broadcast domain.
+
+Three properties fall out of it:
+
+- **Broadcast containment.** ARP, DHCP-discover, and mDNS multicast stay inside a single
+  node's `/24` — never flooded mesh-wide. Flat-L2 meshes must flood broadcast across the whole
+  cloud; that traffic (and the storm risk) grows with the mesh and is the classic ceiling those
+  designs hit. Here it is bounded per node, independent of mesh size.
+- **Route aggregation.** Babel carries **one `/24` per node** — routing state is `O(nodes)`,
+  not `O(clients)`. A node advertises its subnet, not its individual devices, so convergence
+  stays cheap as the client count grows.
+- **No L2 loop surface, and provable L3 loop-freedom.** There is no spanning L2 segment for a
+  frame to loop in — `br-mesh` carries only the mesh backhaul and is never bridged into the
+  client domains. And Babel is loop-free *by construction* (its feasibility condition forbids
+  installing a route that could form a loop, and avoids transient loops during reconvergence —
+  no count-to-infinity; see `babel-routing.md`). IP TTL is the final backstop for any transient.
+  So the two failure modes that make large flat meshes fragile — broadcast storms and forwarding
+  loops — are structurally absent, not merely mitigated.
+
+The discipline that preserves this: **never bridge a client segment across nodes.** Keep each
+`/24` node-local and routed. Bridging client L2 across routers to "extend the LAN" hands back
+exactly the mesh-wide broadcast domain and loop surface the design removes.
+
+This is the same axis as the routing-metric and roaming choices: pushing the L3 boundary out to
+each node buys broadcast containment, loop safety, and quality-aware routing; the price is that
+seamless roaming becomes an L3 problem (see below) rather than a free L2 property.
+
+---
+
 ## Roaming Across Sites
 
 A device physically moving from Site A to Site B:
@@ -235,6 +270,30 @@ A device physically moving from Site A to Site B:
 
 Option (a) is the MVP behavior: simpler implementation, no host-route management, but TCP
 sessions break on roam. Option (b) enables seamless cross-site roaming by letting Babel carry per-device /32 routes — natively supported but deferred to a later milestone for operational simplicity.
+
+### Fast roaming (802.11r) and the L2/L3 split
+
+802.11r (Fast BSS Transition) is **orthogonal** to the subnet design: it speeds up the *radio
+re-association* — pre-computing the keys so a client re-associates to the next AP in
+milliseconds instead of running a full 4-way / EAP handshake — which is what makes handoff fast
+enough for latency-sensitive traffic like VoIP. It works on both bands and with SAE (FT-SAE) and
+WPA2-PSK (FT-PSK). So **yes, 802.11r still works** — but *what* it buys depends on the mode:
+
+- **Flat-L2 island (the default: one SSID, one subnet, `mesh_fwding=1`):** 802.11r gives
+  **fully seamless roaming** — a fast L2 handoff *and* the client keeps its IP, because every AP
+  shares the subnet. Nothing else is needed. This is the right mode for dense client roaming
+  (events), and a reason the flat island is the default.
+- **L3-per-hop / cross-site (per-node `/24`, `mesh_fwding=0`, or separate sites):** 802.11r
+  still makes the *radio* handoff fast, but it is **necessary, not sufficient** — the client
+  lands on a different subnet, so its IP would change and active sessions break unless the IP is
+  made portable. That is the job of the `/32`-host-route-over-Babel + CRDT-lease mechanism
+  (Option b above): the new node already holds the client's `MAC→IP` reservation from the
+  gossiped lease, offers the *same* IP, and advertises a `/32` so traffic follows the device.
+
+So **802.11r and the `/32`/CRDT roaming are complementary layers, not alternatives**: 802.11r for
+a fast radio handoff, the `/32` route + CRDT lease for IP continuity. In the flat-island default,
+802.11r alone is enough; in the L3 mode it remains available and useful, paired with per-device
+`/32` roaming to preserve the address.
 
 ---
 

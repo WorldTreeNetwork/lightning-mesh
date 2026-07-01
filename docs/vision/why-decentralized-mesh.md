@@ -60,6 +60,36 @@ Three things that didn't exist 5 years ago make this feasible:
 - mjolnir-mesh coordinates DHCP, DNS, service discovery, and routing as a unified system.
 - Those protocols are designed for ad-hoc wireless links. mjolnir-mesh works over any transport Iroh supports (direct, relayed, internet).
 
+## Why Flat Mesh Networks Hit a Wall (and This One Doesn't)
+
+Most "just works" mesh systems glue every node into one big flat network — a single Layer-2
+cloud where every device shares one broadcast domain. It's simple, and it's fine for a dozen
+nodes. But it carries a hidden ceiling: every "who has this address?" (ARP), every DHCP request,
+every "who has this name?" lookup is flooded to *the entire mesh*. Double the network and you
+double that background chatter for everyone. Past a certain size the broadcast noise — and the
+risk of a single loop turning into a storm that takes the whole thing down — becomes the limit.
+This is the wall flat meshes (batman-adv, the classic LibreMesh cloud) run into.
+
+This design doesn't have that cloud. Each router owns its own small slice of address space and
+**routes** between them instead of bridging everything together. The consequences:
+
+- **Local noise stays local.** Your phone's chatter reaches your router and stops there — it is
+  never broadcast across the whole network. The background load on any node doesn't grow as the
+  mesh grows.
+- **The map stays small.** Routers tell each other "I own this block," not "here is every
+  device on me." The routing table grows with the number of *routers*, not the number of phones
+  and laptops.
+- **Loops can't storm.** The routing math (Babel) is loop-free by construction, and with no
+  giant shared segment there's nothing for a stray packet to circle inside. The two things that
+  make big flat meshes fall over — broadcast storms and forwarding loops — are designed out, not
+  patched over.
+
+The trade-off is honest: pushing this structure out to every node means roaming between them is
+something we solve deliberately (fast Wi-Fi handoff, plus carrying your address with you) rather
+than something a flat network gives away for free. We think that's the right trade — it's what
+lets the same design run a three-router apartment and a thousand-router festival without changing
+shape.
+
 ## The Architecture in Brief
 
 ```
