@@ -35,15 +35,23 @@ ssh "$HOST" 'chmod +x /etc/init.d/mjolnir-meshd /etc/init.d/mjolnir-babeld /root
 # which only resolves the named path and would wrongly call an anonymous
 # `config meshd` (no name token) "missing" and clobber it.
 echo ">> uci config (template only if missing a meshd section — preserves existing peers/config)"
-if ssh "$HOST" "uci -q show mjolnir 2>/dev/null | grep -q '=meshd\$'"; then
+# One remote round trip: check for a meshd section (named or anonymous), and
+# — since setup-wireless.sh and this repo's README address it by name
+# (`mjolnir.meshd.*`) — rename it if it's anonymous so those `uci set`
+# commands don't fail against it. `uci rename` only assigns an addressable
+# name; it touches no option/list values, so this can't lose configuration.
+if UCI_OUT=$(ssh "$HOST" '
+if uci -q show mjolnir 2>/dev/null | grep -q "=meshd$"; then
+  uci -q get mjolnir.meshd >/dev/null 2>&1 || { uci rename mjolnir.@meshd[0] meshd && uci commit mjolnir && echo RENAMED; } || echo RENAME_FAILED
+  exit 0
+else
+  exit 1
+fi'); then
   echo "   /etc/config/mjolnir has a meshd section — left as-is"
-  # setup-wireless.sh and this repo's README address it by name
-  # (`mjolnir.meshd.*`); give it that name if it's anonymous (addressable
-  # only as `@meshd[0]`) so those `uci set` commands don't fail against it.
-  # `uci rename` only assigns an addressable name — it touches no option/list
-  # values, so this can't lose any of the section's actual configuration.
-  ssh "$HOST" 'uci -q get mjolnir.meshd >/dev/null 2>&1 || { uci rename mjolnir.@meshd[0] meshd && uci commit mjolnir && echo "   anonymous meshd section renamed to mjolnir.meshd"; }' \
-    || echo "   WARN: could not name the anonymous meshd section — uci set mjolnir.meshd.* commands (setup-wireless.sh, README) may fail against it"
+  case "$UCI_OUT" in
+    *RENAMED*) echo "   anonymous meshd section renamed to mjolnir.meshd" ;;
+    *RENAME_FAILED*) echo "   WARN: could not name the anonymous meshd section — uci set mjolnir.meshd.* commands (setup-wireless.sh, README) may fail against it" ;;
+  esac
 else
   scp -O "$DIR/files/etc/config/mjolnir" "$HOST:/etc/config/mjolnir"
 fi
@@ -55,6 +63,7 @@ PM_HELPERS='
 pm_update() { if command -v apk >/dev/null 2>&1; then apk update; else opkg update; fi; }
 pm_install() { if command -v apk >/dev/null 2>&1; then apk add "$1"; else opkg install "$1"; fi; }
 pm_remove() { if command -v apk >/dev/null 2>&1; then apk del "$1" 2>/dev/null; else opkg remove "$1" 2>/dev/null; fi; }
+pm_installed() { if command -v apk >/dev/null 2>&1; then apk info -e "$1" >/dev/null 2>&1; else opkg list-installed 2>/dev/null | grep -q "^$1 "; fi; }
 '
 
 echo ">> deps: babeld (required)"
@@ -83,12 +92,19 @@ echo ">> wpad-mesh-mbedtls (802.11s SAE) — swaps stock wpad-basic-mbedtls, whi
 # wpad-basic-mbedtls and wpad-mesh-mbedtls are mutually-exclusive alternatives
 # (both PROVIDE/CONFLICT on `wpad`), so installing the replacement while the
 # stock package is still present always fails — remove MUST come first. That
-# does leave a brief window with no wpad package if the install then fails;
-# say so plainly rather than claiming a fallback that may not hold.
+# does leave a brief window with no wpad package if the install then fails, so
+# on failure ask the package manager what's ACTUALLY installed (rather than
+# assuming pm_remove above succeeded) before deciding which warning is true.
 ssh "$HOST" "$PM_HELPERS"'
 pm_remove wpad-basic-mbedtls
 pm_update
-pm_install wpad-mesh-mbedtls || echo "WARN: wpad-mesh-mbedtls install failed — node has NO wpad package now (neither SAE nor WPA/PSK auth will come up on wifi radios). Re-run install-node.sh once feeds/connectivity are fixed."'
+if ! pm_install wpad-mesh-mbedtls; then
+  if pm_installed wpad-basic-mbedtls; then
+    echo "WARN: wpad-mesh-mbedtls install failed; wpad-basic-mbedtls is still in place (SAE mesh wont auth; open mesh and existing client APs still work)"
+  else
+    echo "WARN: wpad-mesh-mbedtls install failed and wpad-basic-mbedtls is gone too — node has NO wpad package now (neither SAE nor WPA/PSK auth will come up on wifi radios). Re-run install-node.sh once feeds/connectivity are fixed."
+  fi
+fi'
 
 echo ">> babeld lifecycle -> procd (m8t): disable the stock babeld service, use mjolnir-babeld"
 ssh "$HOST" '
