@@ -26,6 +26,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$DIR/mjolnir-meshd-aarch64"
 STAGE=/root/mjolnir-stage
 PKGS="babeld kmod-tun wpad-mesh-mbedtls wpad-basic-mbedtls"  # basic variant = rollback fuel for the wpad swap
+# Drivers for every supported USB dongle ride along on every node (fleet
+# plug-and-play: a dongle plugged in the FIELD needs no download). The table
+# in files/usr/sbin/mjolnir-dongle is the single source of truth.
+PKGS="$PKGS $(sh "$DIR/files/usr/sbin/mjolnir-dongle" packages)"
 
 HOST=""
 WIRELESS_ENV=""
@@ -55,6 +59,8 @@ scp -O "$DIR/files/etc/init.d/mjolnir-babeld"  "$HOST:$STAGE/init.d-mjolnir-babe
 scp -O "$DIR/files/etc/config/mjolnir"         "$HOST:$STAGE/config-mjolnir"
 scp -O "$DIR/setup-wireless.sh"                "$HOST:$STAGE/setup-wireless.sh"
 scp -O "$DIR/files/usr/sbin/mjolnir-apply"     "$HOST:$STAGE/mjolnir-apply"
+scp -O "$DIR/files/usr/sbin/mjolnir-dongle"    "$HOST:$STAGE/mjolnir-dongle"
+scp -O "$DIR/files/etc/hotplug.d/usb/70-mjolnir-dongle" "$HOST:$STAGE/hotplug-usb-mjolnir-dongle"
 ssh "$HOST" "chmod +x $STAGE/mjolnir-apply"
 
 RUN_WIRELESS=0
@@ -75,7 +81,9 @@ missing=''
 for p in $PKGS; do
 	ls \"\$p\"-[0-9]*.apk \"\$p\"_*.ipk >/dev/null 2>&1 && continue
 	if command -v apk >/dev/null 2>&1; then
-		apk fetch -o . \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
+		# -R pulls dependencies too (kmods need their -lib/firmware deps for a
+		# no-network install later); fall back for apk builds without it
+		apk fetch -R -o . \"\$p\" >/dev/null 2>&1 || apk fetch -o . \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
 	else
 		opkg download \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
 	fi

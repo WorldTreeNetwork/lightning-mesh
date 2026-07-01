@@ -1,0 +1,250 @@
+#!/bin/sh
+# mjolnir-dongle — plug-and-play USB wifi for mjolnir mesh nodes.
+#
+# One SUPPORTED HARDWARE table below maps usb vid:pid -> driver kmods -> role.
+# Any fleet node with this helper installed auto-configures a supported dongle
+# the moment it's plugged in (hotplug), at setup-wireless.sh time, and during
+# mjolnir-apply — no per-node forethought needed. Drivers for EVERY supported
+# device are preinstalled by mjolnir-apply, so a dongle plugged in the FIELD
+# (node possibly without internet) still comes up without a download.
+#
+# Roles:
+#   ap2g   dedicated 2.4 GHz client AP bridged into br-lan, mirroring the
+#          staged clientap2g SSID/key/encryption (Lightning Mesh / WPA2 for
+#          IoT compatibility). Channel is picked at the far end of the band
+#          from the mesh backhaul channel. This is the practical workaround
+#          for mjolnir-mesh-oaq: the internal radio can't run mesh-point + AP
+#          concurrently without risking the mesh join, so a dongle carries
+#          the 2.4 GHz clients instead.
+#
+# Subcommands:
+#   apply [--no-reload]   detect + configure every supported dongle present
+#                         (idempotent). exit 0 = wireless config changed (and
+#                         committed), exit 2 = nothing to do, exit 1 = error.
+#                         --no-reload skips `wifi reload` (caller reloads).
+#   supports <PRODUCT>    exit 0 if the hotplug $PRODUCT (vid/pid/bcd, hex
+#                         without leading zeros) is in the table — the cheap
+#                         gate the hotplug script uses before backgrounding.
+#   packages              print the union of driver packages for ALL supported
+#                         hardware — consumed by install-node.sh (prefetch)
+#                         and mjolnir-apply (fleet-wide preinstall).
+#
+# Busybox ash, self-contained (hotplug runs it with nothing else around).
+
+STAGE=/root/mjolnir-stage
+
+# --- SUPPORTED HARDWARE -------------------------------------------------------
+# Format: vid:pid  kmods(comma-separated)  role  notes...
+# Only list VALIDATED devices. Adding a line here is the whole procedure:
+# from the next install-node.sh run on, every node prefetches + preinstalls
+# the kmods, and any of these devices becomes plug-and-play fleet-wide.
+supported_table() {
+	cat <<'EOF'
+148f:5370 kmod-rt2800-usb ap2g Ralink RT5370 2.4GHz (validated on TR3000 2026-07-01)
+EOF
+}
+
+log() {
+	logger -t mjolnir-dongle "$*" 2>/dev/null
+	echo "[mjolnir-dongle] $*"
+}
+
+# compare two hex numbers ignoring case/leading zeros (sysfs pads to 4 digits,
+# the kernel's hotplug $PRODUCT strips leading zeros)
+hex_eq() {
+	[ -n "$1" ] && [ -n "$2" ] || return 1
+	[ "$(printf '%d' "0x$1" 2>/dev/null)" = "$(printf '%d' "0x$2" 2>/dev/null)" ]
+}
+
+# lookup <vid> <pid> -> "kmods role" on stdout, exit 1 if unsupported
+lookup() {
+	supported_table | {
+		while read -r vp kmods role _notes; do
+			hex_eq "${vp%%:*}" "$1" && hex_eq "${vp#*:}" "$2" || continue
+			echo "$kmods $role"
+			exit 0
+		done
+		exit 1
+	}
+}
+
+# --- package manager (apk = OpenWrt 25.12+, opkg = older) ---------------------
+pm_installed() {
+	if command -v apk >/dev/null 2>&1; then apk info -e "$1" >/dev/null 2>&1
+	else opkg list-installed 2>/dev/null | grep -q "^$1 "; fi
+}
+
+# Ensure a driver package: usually a no-op (mjolnir-apply preinstalls the whole
+# table); else feeds; else the prefetched files in the stage dir. The local
+# fallback feeds apk every staged non-wpad package so kmod dependencies (also
+# prefetched, see install-node.sh -R) resolve; wpad variants are excluded
+# because the two CONFLICT and picking one here could undo the mesh swap.
+pkg_ensure() {
+	pm_installed "$1" && return 0
+	log "installing driver $1"
+	if command -v apk >/dev/null 2>&1; then
+		apk add "$1" >/dev/null 2>&1 && return 0
+		files=$(ls "$STAGE/pkgs/"*.apk 2>/dev/null | grep -v wpad)
+		# shellcheck disable=SC2086
+		[ -n "$files" ] && apk add --no-network --allow-untrusted $files >/dev/null 2>&1
+	else
+		opkg install "$1" >/dev/null 2>&1 && return 0
+		for f in "$STAGE/pkgs/$1"_*.ipk; do
+			[ -f "$f" ] && opkg install "$f" >/dev/null 2>&1
+		done
+	fi
+	pm_installed "$1"
+}
+
+# wait_phy <usb-dev> (e.g. 1-1): print the phy whose device sits on that usb
+# port, waiting up to 20s for the driver to probe + load firmware.
+wait_phy() {
+	i=0
+	while [ "$i" -lt 20 ]; do
+		for p in /sys/class/ieee80211/*; do
+			[ -e "$p" ] || continue
+			case "$(readlink -f "$p/device")" in
+				*"/$1/"*|*"/$1") echo "${p##*/}"; return 0 ;;
+			esac
+		done
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# radio_for_phy <phy>: the uci wifi-device whose path option points at the phy
+radio_for_phy() {
+	devpath=$(readlink -f "/sys/class/ieee80211/$1/device") || return 1
+	uci show wireless 2>/dev/null | grep -F ".path='${devpath#/sys/devices/}'" | head -1 | cut -d. -f2
+}
+
+# --- role: ap2g ----------------------------------------------------------------
+# All `uci set`s are unconditional; uci records a change only when a value
+# actually differs, so `uci changes wireless` after the loop is the exact
+# "did we do anything" signal (=> commit+reload only when needed).
+configure_ap2g() {
+	r=$1
+
+	# Mirror the staged 2.4 GHz client AP identity (setup-wireless.sh renders
+	# clientap2g unconditionally); fall back to the 5 GHz AP, then defaults.
+	ssid=$(uci -q get wireless.clientap2g.ssid) \
+		|| ssid=$(uci -q get wireless.clientap.ssid) || ssid='Lightning Mesh'
+	key=$(uci -q get wireless.clientap2g.key) \
+		|| key=$(uci -q get wireless.clientap.key) || key='lightning!'
+	enc=$(uci -q get wireless.clientap2g.encryption) || enc='psk2'
+
+	# Far end of the band from the mesh backhaul channel (they're separate
+	# radios but same spectrum — don't sit on top of our own backhaul).
+	meshradio=$(uci -q get wireless.meshbh.device)
+	meshch=$(uci -q get "wireless.$meshradio.channel")
+	ch=11
+	[ "${meshch:-6}" -ge 7 ] 2>/dev/null && ch=1
+	country=$(uci -q get "wireless.$meshradio.country")
+
+	uci set "wireless.$r.channel=$ch"
+	[ -n "$country" ] && uci set "wireless.$r.country=$country"
+	uci set "wireless.$r.disabled=0"
+	# drop the disabled 'OpenWrt' placeholder iface `wifi config` generates
+	uci -q delete "wireless.default_$r"
+
+	uci set "wireless.dongle_$r=wifi-iface"
+	uci set "wireless.dongle_$r.device=$r"
+	uci set "wireless.dongle_$r.mode=ap"
+	uci set "wireless.dongle_$r.ssid=$ssid"
+	uci set "wireless.dongle_$r.network=lan"
+	uci set "wireless.dongle_$r.encryption=$enc"
+	if [ "$enc" = none ]; then
+		uci -q delete "wireless.dongle_$r.key"
+	else
+		uci set "wireless.dongle_$r.key=$key"
+	fi
+	uci set "wireless.dongle_$r.disabled=0"
+	log "$r (role ap2g): AP '$ssid' ch$ch enc=$enc -> br-lan"
+}
+
+# --- subcommands ----------------------------------------------------------------
+cmd_packages() {
+	supported_table | while read -r _vp kmods _role _notes; do
+		echo "$kmods" | tr ',' '\n'
+	done | sort -u | xargs
+}
+
+cmd_supports() {
+	v=${1%%/*}
+	rest=${1#*/}
+	p=${rest%%/*}
+	lookup "$v" "$p" >/dev/null
+}
+
+cmd_apply() {
+	NO_RELOAD=0
+	[ "$1" = "--no-reload" ] && NO_RELOAD=1
+
+	# single instance — a physical plug fires several hotplug events
+	if ! mkdir /tmp/mjolnir-dongle.lock 2>/dev/null; then
+		log "another instance is running — skipping"
+		exit 2
+	fi
+	trap 'rmdir /tmp/mjolnir-dongle.lock 2>/dev/null' EXIT
+
+	MATCHED=0
+	FAILED=0
+	for d in /sys/bus/usb/devices/*; do
+		[ -f "$d/idVendor" ] && [ -f "$d/idProduct" ] || continue
+		vid=$(cat "$d/idVendor")
+		pid=$(cat "$d/idProduct")
+		info=$(lookup "$vid" "$pid") || continue
+		MATCHED=1
+		kmods=${info% *}
+		role=${info#* }
+		usbdev=${d##*/}
+		log "supported dongle $vid:$pid at usb $usbdev (role $role)"
+
+		ok=1
+		for k in $(echo "$kmods" | tr ',' ' '); do
+			pkg_ensure "$k" || { log "ERROR: driver $k unavailable (feeds down, nothing staged)"; ok=0; }
+		done
+		[ "$ok" = 1 ] || { FAILED=1; continue; }
+
+		if ! phy=$(wait_phy "$usbdev"); then
+			log "ERROR: no wifi phy appeared for $usbdev after 20s (driver probe failed?)"
+			FAILED=1
+			continue
+		fi
+		# appends a wifi-device section for new phys; touches nothing existing
+		wifi config
+		radio=$(radio_for_phy "$phy")
+		if [ -z "$radio" ]; then
+			log "ERROR: no uci wifi-device for $phy after 'wifi config'"
+			FAILED=1
+			continue
+		fi
+		"configure_$role" "$radio"
+	done
+
+	if [ "$MATCHED" = 0 ]; then
+		log "no supported usb dongle present"
+		exit 2
+	fi
+	if [ -n "$(uci changes wireless)" ]; then
+		uci commit wireless
+		if [ "$NO_RELOAD" = 1 ]; then
+			log "committed (reload skipped — caller reloads wifi)"
+		else
+			log "committed — reloading wifi"
+			wifi reload
+		fi
+		exit 0
+	fi
+	[ "$FAILED" = 1 ] && exit 1
+	log "already configured — nothing to do"
+	exit 2
+}
+
+case "$1" in
+	apply)    shift; cmd_apply "$@" ;;
+	supports) shift; cmd_supports "${1:?usage: mjolnir-dongle supports <vid/pid/bcd>}" ;;
+	packages) cmd_packages ;;
+	*) echo "usage: mjolnir-dongle apply [--no-reload] | supports <PRODUCT> | packages" >&2; exit 2 ;;
+esac

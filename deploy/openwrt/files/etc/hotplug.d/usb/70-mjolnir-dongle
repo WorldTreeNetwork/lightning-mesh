@@ -1,0 +1,12 @@
+# Auto-configure supported USB wifi dongles the moment they're plugged in
+# (mjolnir-dongle owns the supported-hardware table and all the logic).
+#
+# Fires for EVERY usb event, so gate cheaply: only device-level add events,
+# only $PRODUCT values in the table. The real work (driver probe wait, uci,
+# wifi reload) is backgrounded — hotplug handlers must not block, and the phy
+# only appears AFTER the driver binds, which happens after this event.
+[ "$ACTION" = add ] || exit 0
+[ "$DEVTYPE" = usb_device ] || exit 0
+[ -x /usr/sbin/mjolnir-dongle ] || exit 0
+/usr/sbin/mjolnir-dongle supports "$PRODUCT" 2>/dev/null || exit 0
+( sleep 2; /usr/sbin/mjolnir-dongle apply ) >/dev/null 2>&1 &

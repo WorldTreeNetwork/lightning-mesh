@@ -66,7 +66,33 @@ What lands on the node:
 | `/etc/config/mjolnir`             | UCI config (peers, backhaul_iface, mode, …) |
 | `/root/setup-wireless.sh`         | 802.11s backhaul + client-AP helper |
 | `/usr/sbin/mjolnir-apply`         | detached applier (snapshot → apply → health gate → rollback) |
+| `/usr/sbin/mjolnir-dongle`        | plug-and-play USB wifi (supported-hardware table + auto-config) |
+| `/etc/hotplug.d/usb/70-mjolnir-dongle` | configures a supported dongle the moment it's plugged in |
 | `/root/mjolnir-stage/`            | staged payload, prefetched packages, apply log + result |
+
+### USB wifi dongles are plug-and-play (`mjolnir-dongle`)
+
+Plug a **supported** USB wifi dongle into any fleet node and it configures
+itself — via hotplug on a running node, and during `setup-wireless.sh` /
+`mjolnir-apply` when one is already present. No per-node forethought needed:
+drivers for *every* device in the supported-hardware table are preinstalled on
+*every* node (and prefetched with dependencies into `pkg-cache/`), so a dongle
+works in the field even on a node with no internet.
+
+The table lives at the top of `files/usr/sbin/mjolnir-dongle`
+(`vid:pid → kmods → role`) — **adding a validated device there is the whole
+procedure**. Supported today:
+
+| device | vid:pid | role |
+|--------|---------|------|
+| Ralink RT5370 2.4 GHz | `148f:5370` | `ap2g` — dedicated 2.4 GHz client AP |
+
+The `ap2g` role brings the dongle up as a 2.4 GHz client AP bridged into
+`br-lan`, mirroring the staged `clientap2g` SSID/key (Lightning Mesh, WPA2 for
+IoT), on the far end of the band from the mesh backhaul channel. This is the
+practical answer to the `oaq` quirk: the internal radio can't safely run
+mesh-point + AP concurrently, so the dongle carries the 2.4 GHz clients.
+Manual runs/debug: `mjolnir-dongle apply`, `logread -e mjolnir-dongle`.
 
 ### babeld is supervised by procd, not meshd (mjolnir-mesh-m8t)
 

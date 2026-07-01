@@ -174,6 +174,18 @@ if ! pkg_ensure kmod-tun; then
 	log "WARN: kmod-tun install failed"
 fi
 
+# 2.5 drivers for every SUPPORTED usb dongle (table: mjolnir-dongle) — pre-
+#     installed fleet-wide so a dongle plugged in the FIELD (node possibly
+#     without internet) configures with no download. Non-fatal per package.
+if [ -f "$STAGE/mjolnir-dongle" ]; then
+	for p in $(sh "$STAGE/mjolnir-dongle" packages); do
+		if ! pkg_ensure "$p"; then
+			NOTES="$NOTES; WARNING: dongle driver $p failed to install — that usb device won't work until it's on the node"
+			log "WARN: dongle driver $p install failed"
+		fi
+	done
+fi
+
 # 3. wpad swap (802.11s SAE needs the mesh variant) — the wifi-bouncing step.
 #    Skipped entirely when wpad-mesh is already in place, so re-runs are
 #    non-disruptive. The variants PROVIDE/CONFLICT on `wpad`, so remove must
@@ -206,6 +218,11 @@ for f in mjolnir-meshd mjolnir-babeld; do
 done
 [ -f "$STAGE/setup-wireless.sh" ] && cp "$STAGE/setup-wireless.sh" /root/setup-wireless.sh && chmod +x /root/setup-wireless.sh
 [ -f "$STAGE/mjolnir-apply" ] && cp "$STAGE/mjolnir-apply" /usr/sbin/mjolnir-apply && chmod +x /usr/sbin/mjolnir-apply
+[ -f "$STAGE/mjolnir-dongle" ] && cp "$STAGE/mjolnir-dongle" /usr/sbin/mjolnir-dongle && chmod +x /usr/sbin/mjolnir-dongle
+if [ -f "$STAGE/hotplug-usb-mjolnir-dongle" ]; then
+	mkdir -p /etc/hotplug.d/usb
+	cp "$STAGE/hotplug-usb-mjolnir-dongle" /etc/hotplug.d/usb/70-mjolnir-dongle
+fi
 
 # 6. UCI config template — only if no meshd section exists (never clobber a
 #    customized config: that would wipe peers). An anonymous meshd section gets
@@ -239,6 +256,24 @@ if [ "$RUN_WIRELESS" = 1 ]; then
 		set -a; . "$STAGE/wireless.env"; set +a
 	fi
 	sh /root/setup-wireless.sh || rollback "setup-wireless.sh failed"
+fi
+
+# 8.5 usb dongles plugged in right now: configure them. Exit 0 means the
+#     wireless config changed (committed) -> ride the shared wifi reload +
+#     health gate below; 2 = nothing present / already configured; anything
+#     else is a warning, not a rollback (a broken dongle shouldn't take down
+#     a good apply). Skipped when RUN_WIRELESS already ran setup-wireless.sh
+#     — that script invokes mjolnir-dongle itself.
+if [ "$RUN_WIRELESS" != 1 ] && [ -x /usr/sbin/mjolnir-dongle ]; then
+	/usr/sbin/mjolnir-dongle apply --no-reload
+	case $? in
+		0) WIFI_TOUCHED=1; log "usb dongle configured" ;;
+		2) ;;
+		*)
+			NOTES="$NOTES; WARNING: mjolnir-dongle apply failed — see logread -e mjolnir-dongle"
+			log "WARN: mjolnir-dongle apply failed"
+			;;
+	esac
 fi
 
 # 9. activate. A running meshd is restarted not only for a new binary but

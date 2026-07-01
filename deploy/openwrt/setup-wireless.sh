@@ -197,6 +197,17 @@ esac
 HOTPLUG
 chmod +x /etc/hotplug.d/net/30-mesh-powersave
 
+# --- USB wifi dongles: configure any supported dongle already plugged in ------
+# mjolnir-dongle owns the supported-hardware table (vid:pid -> kmods -> role);
+# hotplug covers dongles plugged in LATER. --no-reload: the operator's (or
+# mjolnir-apply's) wifi reload below activates it together with everything
+# else. Silently skipped on a bare template run where the helper isn't
+# installed yet. `|| true`: exit 2 = no dongle/no-op, and even a dongle
+# failure shouldn't abort the radio setup this script exists for.
+if [ -x /usr/sbin/mjolnir-dongle ]; then
+	/usr/sbin/mjolnir-dongle apply --no-reload || true
+fi
+
 cat <<EOF
 >> committed. Now:
      wifi reload                              # brings up mesh0; hotplug auto-disables power-save on it
