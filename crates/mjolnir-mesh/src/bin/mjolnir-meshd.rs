@@ -1185,6 +1185,7 @@ async fn claim_and_publish<T: GossipTransport>(
             Err(e) => warn!(subnet = %net, "re-publishing held claim failed: {e}"),
         }
         assign_client_addr(net, client_iface).await;
+        reconcile_client_uci(net).await;
         return;
     }
     let net = match alloc::pick_subnet_or_smaller(
@@ -1225,6 +1226,7 @@ async fn claim_and_publish<T: GossipTransport>(
     // a concrete connected route to redistribute and inbound mesh traffic for the
     // /24 is delivered on-link (mjolnir-mesh-e4r, supersedes the df4 gateway route).
     assign_client_addr(net, client_iface).await;
+    reconcile_client_uci(net).await;
 }
 
 /// Release a claim this node owns but should no longer hold: drop it from the
@@ -1445,6 +1447,88 @@ async fn retract_client_addr(subnet: Ipv4Net, iface: &str) {
 
 #[cfg(not(target_os = "linux"))]
 async fn retract_client_addr(_subnet: Ipv4Net, _iface: &str) {}
+
+/// True when the lan config's PRIMARY (first) address is already the wanted
+/// gateway CIDR — the idempotence check for [`reconcile_client_uci`]. Pure so
+/// it's unit-tested below. `current` is `uci get network.lan.ipaddr` output:
+/// space-joined list entries, or the bare stock `192.168.1.1`.
+fn lan_uci_is_current(current: &str, want_primary: &str) -> bool {
+    current.split_whitespace().next() == Some(want_primary)
+}
+
+/// Make the claimed /24 own the OpenWrt lan config (mjolnir-mesh-659):
+/// `<gw>/24` becomes the FIRST (primary) entry of `network.lan.ipaddr`, so
+/// dnsmasq's `dhcp.lan` pool (subnet-relative start/limit) serves the claimed
+/// subnet instead of the stock 192.168.1.0/24. The stock subnet is identical
+/// on every node, so clients it leases black-hole across the mesh (replies
+/// exit the far node's own br-lan); the claimed /24 is what babel routes
+/// fleet-wide. 192.168.1.1/24 is kept as a SECOND alias: dnsmasq stops
+/// leasing from it, but the wired-recovery convention survives — a
+/// statically-addressed laptop on the LAN port still reaches the node.
+///
+/// Best-effort and OpenWrt-only: skips silently when `uci` or a `lan`
+/// interface is absent (RouterOS containers, desktops). Idempotent: no
+/// network-reload churn when the primary is already the claimed address —
+/// this runs on every claim publish, including anti-entropy-era re-claims.
+#[cfg(target_os = "linux")]
+async fn reconcile_client_uci(subnet: Ipv4Net) {
+    use tokio::process::Command;
+    let gw_cidr = format!(
+        "{}/{}",
+        Ipv4Addr::from(u32::from(subnet.network()) + 1),
+        subnet.prefix_len()
+    );
+    // No uci binary → not OpenWrt; no network.lan → nothing to own.
+    let lan_exists = Command::new("uci")
+        .args(["-q", "get", "network.lan"])
+        .output()
+        .await;
+    match lan_exists {
+        Err(_) => return, // uci not present
+        Ok(out) if !out.status.success() => return,
+        Ok(_) => {}
+    }
+    let current = Command::new("uci")
+        .args(["-q", "get", "network.lan.ipaddr"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if lan_uci_is_current(&current, &gw_cidr) {
+        return;
+    }
+    info!(%subnet, %gw_cidr, was = %current, "reconciling lan UCI: claimed /24 becomes primary (dnsmasq follows)");
+    let script = format!(
+        "uci -q delete network.lan.ipaddr; \
+         uci -q delete network.lan.netmask; \
+         uci add_list network.lan.ipaddr='{gw_cidr}'; \
+         uci add_list network.lan.ipaddr='192.168.1.1/24'; \
+         uci commit network && \
+         /etc/init.d/network reload && \
+         /etc/init.d/dnsmasq restart"
+    );
+    // Same lesson as babeld_service (qz9): a procd/ubus call can wedge — never
+    // let one stall the claim manager. Network reload takes a few seconds
+    // legitimately, so the cap is generous.
+    let run = Command::new("sh").args(["-c", &script]).output();
+    match tokio::time::timeout(Duration::from_secs(30), run).await {
+        Ok(Ok(out)) if out.status.success() => {
+            info!(%gw_cidr, "lan UCI reconciled — DHCP now serves the claimed /24 (192.168.1.1 kept as recovery alias)")
+        }
+        Ok(Ok(out)) => warn!(
+            %gw_cidr,
+            "lan UCI reconcile failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Ok(Err(e)) => warn!(%gw_cidr, "lan UCI reconcile could not run: {e}"),
+        Err(_) => warn!(%gw_cidr, "lan UCI reconcile timed out after 30s"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn reconcile_client_uci(_subnet: Ipv4Net) {}
 
 /// Self-assign this node's derived IPv4 backhaul address (`10.254.0.0/16`, host
 /// from the node id) to the shared-segment interface, so every node has a stable,
@@ -2936,6 +3020,38 @@ mod tests {
         assert!(keep.is_none());
         assert!(extras.is_empty());
         assert!(foreign.is_empty());
+    }
+
+    #[test]
+    fn stock_lan_config_needs_reconcile() {
+        // Fresh-from-flash: bare stock address, option form (no CIDR).
+        assert!(!lan_uci_is_current("192.168.1.1", "10.42.61.1/24"));
+        // Unset ipaddr (lan exists but empty) also reconciles.
+        assert!(!lan_uci_is_current("", "10.42.61.1/24"));
+    }
+
+    #[test]
+    fn reconciled_lan_config_is_idempotent() {
+        // Claimed primary + recovery alias, as this fix writes it.
+        assert!(lan_uci_is_current(
+            "10.42.61.1/24 192.168.1.1/24",
+            "10.42.61.1/24"
+        ));
+    }
+
+    #[test]
+    fn wrong_order_or_new_claim_needs_reconcile() {
+        // The manual bench renumber put the claimed addr FIRST — current.
+        // Stock-first ordering (the 659 bug state) is not.
+        assert!(!lan_uci_is_current(
+            "192.168.1.1/24 10.42.61.1/24",
+            "10.42.61.1/24"
+        ));
+        // Claim changed (conflict loss → re-claim): old primary must give way.
+        assert!(!lan_uci_is_current(
+            "10.42.242.1/24 192.168.1.1/24",
+            "10.42.243.1/24"
+        ));
     }
 
     #[tokio::test]
