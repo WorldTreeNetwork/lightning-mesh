@@ -15,10 +15,32 @@ STOP=09
 PROG=/usr/sbin/babeld
 CONF=/etc/mjolnir/babeld.conf
 
+# Kill any babeld on OUR config that procd does not own (mjolnir-mesh-nrr).
+# Interrupted/raced restarts have left a TERM-surviving babeld behind the new
+# procd instance — two babelds fight over kernel routes and the loser's stale
+# routes linger. Runs on every start: whatever race created the stray, the
+# next (re)start reaps it. procd-owned pids are excluded via ubus, so a plain
+# `start` on an already-running service never kills the healthy instance.
+reap_stray_babelds() {
+	local owned pid
+	owned=$(ubus call service list '{"name":"mjolnir-babeld"}' 2>/dev/null \
+		| jsonfilter -e '@["mjolnir-babeld"].instances[*].pid' 2>/dev/null)
+	for pid in $(pgrep -f "$PROG -c $CONF" 2>/dev/null); do
+		case " $owned " in
+			*" $pid "*) ;;
+			*)
+				logger -t mjolnir-babeld "reaping stray babeld pid $pid (not procd-owned)"
+				kill "$pid" 2>/dev/null
+				;;
+		esac
+	done
+}
+
 start_service() {
 	# meshd renders CONF and (re)starts us once it has an interface to route over.
 	# If it isn't there yet (early boot), do nothing — meshd will start us when it is.
 	[ -f "$CONF" ] || return 0
+	reap_stray_babelds
 	procd_open_instance
 	procd_set_param command "$PROG" -c "$CONF"
 	# procd watches the meshd-rendered config and restarts babeld on change

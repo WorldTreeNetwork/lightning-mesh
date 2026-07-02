@@ -1651,6 +1651,10 @@ fn enable_ip_forwarding() {}
 async fn babeld_service(action: &str) -> bool {
     let mut cmd = tokio::process::Command::new("/etc/init.d/mjolnir-babeld");
     cmd.arg(action);
+    // On timeout the future is dropped — without this the rc script keeps
+    // running detached and its stop/start completes LATER, racing whatever
+    // action the reconciler issues next (a stray-babeld source, nrr).
+    cmd.kill_on_drop(true);
     // Hard 10s timeout: a procd/ubus service call has wedged under rapid
     // invocation (qz9). Never let one stall the reconciler — bail and let procd
     // (which independently respawns + file-watches the config) sort itself out.
