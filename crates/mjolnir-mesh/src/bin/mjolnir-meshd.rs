@@ -200,6 +200,14 @@ enum Command {
         /// on the fleet.
         #[arg(long)]
         overlay: bool,
+        /// Internet gateway role (mjolnir-mesh-a8o): redistribute this node's
+        /// WAN default route into the mesh (`0.0.0.0/0`, metric 128) so other
+        /// nodes — and their clients — egress through it. Announcement follows
+        /// the kernel FIB: uplink lost => route withdrawn, nothing to unstick.
+        /// NAT needs no extra config: the mesh sits in the `lan` firewall zone,
+        /// and OpenWrt's `wan` zone already masquerades lan->wan forwards.
+        #[arg(long)]
+        gateway: bool,
     },
 }
 
@@ -330,6 +338,7 @@ async fn main() -> Result<()> {
             lan_tunnels,
             claims_file,
             overlay,
+            gateway,
         } => {
             // In LAN mode babel routes over the shared-L2 backhaul directly; pass
             // the resolved interface so the reconciler can add it as `type wired`
@@ -347,6 +356,7 @@ async fn main() -> Result<()> {
                 l2,
                 claims_file,
                 overlay,
+                gateway,
             )
             .await?
         }
@@ -517,6 +527,7 @@ async fn run_mesh(
     l2_backhaul: Option<String>,
     claims_file: PathBuf,
     overlay: bool,
+    gateway: bool,
 ) -> Result<()> {
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
@@ -722,13 +733,15 @@ async fn run_mesh(
         // per-peer interfaces means the config never churns (qz9 by construction).
         let claims = claims.clone();
         let me = self_id_str.clone();
-        tokio::spawn(async move { babel_reconciler_overlay(claims, me, babel_config).await })
+        tokio::spawn(async move { babel_reconciler_overlay(claims, me, babel_config, gateway).await })
     } else {
         let registry = registry.clone();
         let claims = claims.clone();
         let me = self_id_str.clone();
         let l2 = l2_backhaul.clone();
-        tokio::spawn(async move { babel_reconciler(registry, claims, me, babel_config, l2).await })
+        tokio::spawn(
+            async move { babel_reconciler(registry, claims, me, babel_config, l2, gateway).await },
+        )
     };
     if let Some(iface) = &l2_backhaul {
         info!(%iface, "LAN mode: routing babel over the shared-L2 backhaul (no per-peer iroh tunnels)");
@@ -1301,6 +1314,7 @@ async fn babel_reconciler(
     self_id: String,
     config_path: PathBuf,
     l2_backhaul: Option<String>,
+    gateway: bool,
 ) {
     // Debounce window: wait this long for the mesh state to settle before
     // (re)writing babeld.conf, so a convergence burst doesn't thrash babeld (qz9).
@@ -1337,8 +1351,9 @@ async fn babel_reconciler(
         };
 
         let iface_refs: Vec<&str> = ifaces.iter().map(String::as_str).collect();
-        let inputs =
-            BabelConfigInputs::new(local_subnet, &iface_refs).l2_interfaces(&l2_refs);
+        let inputs = BabelConfigInputs::new(local_subnet, &iface_refs)
+            .l2_interfaces(&l2_refs)
+            .gateway(gateway);
         let conf = render_babeld_conf(&inputs);
 
         // Debounce (qz9): when the desired config changes, let the mesh state
@@ -1827,7 +1842,12 @@ impl ProtocolHandler for OverlayHandler {
 /// `mjolnir0` config from the claim store. mjolnir0 is always up, so babeld runs
 /// continuously and the config only changes when our claimed /24 changes — no
 /// per-peer churn (qz9 dissolved by construction, no debounce needed).
-async fn babel_reconciler_overlay(claims: ClaimStore, self_id: String, config_path: PathBuf) {
+async fn babel_reconciler_overlay(
+    claims: ClaimStore,
+    self_id: String,
+    config_path: PathBuf,
+    gateway: bool,
+) {
     if let Some(parent) = config_path.parent()
         && !parent.as_os_str().is_empty()
         && let Err(e) = std::fs::create_dir_all(parent)
@@ -1846,7 +1866,8 @@ async fn babel_reconciler_overlay(claims: ClaimStore, self_id: String, config_pa
                     IpNet::V6(_) => None,
                 })
         };
-        let conf = render_overlay_babeld_conf(OVERLAY_IFACE, local_subnet, OverlayRtt::default());
+        let conf =
+            render_overlay_babeld_conf(OVERLAY_IFACE, local_subnet, OverlayRtt::default(), gateway);
         if last_rendered.as_deref() != Some(conf.as_str()) {
             match write_atomic_if_changed(&config_path, &conf) {
                 Ok(_) => {

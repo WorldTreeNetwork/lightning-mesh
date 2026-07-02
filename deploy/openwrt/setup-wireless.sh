@@ -180,6 +180,18 @@ if [ -n "$fw_lan_zone" ]; then
 	uci -q get firewall.$fw_lan_zone.network | grep -qw mesh || uci add_list firewall.$fw_lan_zone.network='mesh'
 fi
 
+# --- client DNS on non-egress nodes (a8o): dnsmasq forwards to public
+# resolvers, reachable once a gateway node advertises the mesh default route.
+# Without this a client on a WAN-less node gets a lease but no name
+# resolution (the node's own resolv.conf has no upstream). Harmless on the
+# gateway itself. del_list-then-add_list keeps re-runs from duplicating.
+uci -q del_list dhcp.@dnsmasq[0].server='9.9.9.9' 2>/dev/null || true
+uci -q del_list dhcp.@dnsmasq[0].server='1.1.1.1' 2>/dev/null || true
+uci add_list dhcp.@dnsmasq[0].server='9.9.9.9'
+uci add_list dhcp.@dnsmasq[0].server='1.1.1.1'
+uci commit dhcp
+/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+
 uci commit network
 uci commit wireless
 uci commit firewall
