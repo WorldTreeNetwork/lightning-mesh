@@ -341,7 +341,7 @@ async fn main() -> Result<()> {
             gateway,
         } => {
             // In LAN mode babel routes over the shared-L2 backhaul directly; pass
-            // the resolved interface so the reconciler can add it as `type wired`
+            // the resolved interface so the reconciler can add it as the wireless L2 iface
             // and skip the per-peer iroh tunnels (mjolnir-mesh-auu).
             let l2 = if lan { l2_backhaul } else { None };
             run_mesh(
@@ -1242,7 +1242,7 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) -> Option<String> {
         }
     }
     // The interface exists either way (the address may already be present); hand
-    // its resolved name back so babel can route over it as `type wired`.
+    // its resolved name back so babel can route over it as the wireless L2 iface.
     Some(target)
 }
 
@@ -1320,7 +1320,7 @@ async fn babel_reconciler(
     // (re)writing babeld.conf, so a convergence burst doesn't thrash babeld (qz9).
     const BABEL_SETTLE: Duration = Duration::from_secs(2);
 
-    // The shared-L2 backhaul interface, if any, is a permanent `type wired`
+    // The shared-L2 backhaul interface, if any, is a permanent wireless-type
     // babel link (mjolnir-mesh-auu) — present from startup, so babeld runs
     // continuously instead of flapping with the per-peer tunnels.
     let l2_refs: Vec<&str> = l2_backhaul.as_deref().into_iter().collect();
