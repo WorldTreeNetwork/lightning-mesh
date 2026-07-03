@@ -37,7 +37,23 @@ const BACKHAUL_BLOCK: [u8; 2] = [10, 254];
 /// TUN /31s. The host part is clamped off the `/16` network (`.0.0`) and
 /// broadcast (`.255.255`) addresses.
 pub fn backhaul_addr(node_id: &str) -> Ipv4Addr {
-    let hash = blake3::hash(node_id.as_bytes());
+    backhaul_addr_salted(node_id, 0)
+}
+
+/// Derive the `attempt`-th candidate backhaul address for a node.
+///
+/// Attempt 0 is byte-identical to [`backhaul_addr`] (the pre-pt9 derivation, so
+/// deployed nodes keep their addresses). Higher attempts re-hash with the
+/// attempt number mixed in — the deterministic "next slot" a node moves to when
+/// it loses a backhaul-address claim conflict (mjolnir-mesh-pt9). 16 bits of
+/// host space makes collisions rare but real at fleet scale (~50% odds by ~300
+/// nodes); the claim CRDT detects them and the HLC loser re-derives here.
+pub fn backhaul_addr_salted(node_id: &str, attempt: u32) -> Ipv4Addr {
+    let hash = if attempt == 0 {
+        blake3::hash(node_id.as_bytes())
+    } else {
+        blake3::hash(format!("{node_id}#backhaul-{attempt}").as_bytes())
+    };
     let bytes = hash.as_bytes();
     let mut host = u16::from_be_bytes([bytes[0], bytes[1]]);
     if host == 0 {
@@ -47,6 +63,14 @@ pub fn backhaul_addr(node_id: &str) -> Ipv4Addr {
     }
     let [h, l] = host.to_be_bytes();
     Ipv4Addr::new(BACKHAUL_BLOCK[0], BACKHAUL_BLOCK[1], h, l)
+}
+
+/// Whether a claimed net lives in the backhaul block `10.254.0.0/16` — i.e. it
+/// is a backhaul *address* claim (pt9), not a client-subnet claim. The two kinds
+/// share the CRDT store and gossip lane; every consumer that means "client /24"
+/// must exclude these.
+pub fn in_backhaul_block(net: &ipnet::Ipv4Net) -> bool {
+    net.prefix_len() >= BACKHAUL_PREFIX_LEN && net.network().octets()[..2] == BACKHAUL_BLOCK
 }
 
 /// Derive a /31 for a peer-pair, symmetrically.
@@ -158,6 +182,43 @@ mod tests {
         // Never the /16 network or broadcast address.
         assert_ne!(a, Ipv4Addr::new(10, 254, 0, 0));
         assert_ne!(a, Ipv4Addr::new(10, 254, 255, 255));
+    }
+
+    #[test]
+    fn salted_attempt_zero_matches_unsalted() {
+        // Wire/deploy compat: attempt 0 must be byte-identical to the pre-pt9
+        // derivation so already-deployed nodes keep their addresses.
+        let id = "fd7691128f2bb615d56cf2f0e202fa01472890dd8af89f9132d34d566776ed45";
+        assert_eq!(backhaul_addr_salted(id, 0), backhaul_addr(id));
+    }
+
+    #[test]
+    fn salted_attempts_are_distinct_and_in_block() {
+        use std::collections::HashSet;
+        let id = "some-node";
+        let mut seen = HashSet::new();
+        for attempt in 0..8 {
+            let a = backhaul_addr_salted(id, attempt);
+            assert_eq!(&a.octets()[..2], &[10, 254]);
+            assert_ne!(a, Ipv4Addr::new(10, 254, 0, 0));
+            assert_ne!(a, Ipv4Addr::new(10, 254, 255, 255));
+            seen.insert(a);
+        }
+        // 8 attempts in a 16-bit space: all distinct, statistically certain.
+        assert_eq!(seen.len(), 8, "salted attempts must yield distinct addresses");
+    }
+
+    #[test]
+    fn backhaul_block_membership() {
+        use std::str::FromStr;
+        let yes = ipnet::Ipv4Net::from_str("10.254.3.43/32").unwrap();
+        let whole = ipnet::Ipv4Net::from_str("10.254.0.0/16").unwrap();
+        let client = ipnet::Ipv4Net::from_str("10.42.1.0/24").unwrap();
+        let link = ipnet::Ipv4Net::from_str("10.255.0.0/31").unwrap();
+        assert!(in_backhaul_block(&yes));
+        assert!(in_backhaul_block(&whole));
+        assert!(!in_backhaul_block(&client));
+        assert!(!in_backhaul_block(&link));
     }
 
     #[test]

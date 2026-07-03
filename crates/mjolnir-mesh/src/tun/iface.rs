@@ -172,14 +172,15 @@ where
 /// with [`crate::tun::overlay::spawn_overlay`].
 #[cfg(target_os = "linux")]
 pub async fn spawn_overlay_tun(
-    node_id: &str,
+    self_addr: std::net::Ipv4Addr,
     iface_name: &str,
 ) -> Result<(tun::AsyncDevice, OverlayLink), IfaceError> {
     use futures_util::stream::TryStreamExt;
     use rtnetlink::new_connection;
     use rtnetlink::packet_route::link::LinkFlags;
 
-    let self_addr = crate::tun::link::backhaul_addr(node_id);
+    // `self_addr` is the node's effective backhaul address — usually the
+    // node-id derivation, but claim-aware after a lost collision (pt9).
     let link_local = overlay_link_local(self_addr);
 
     // 1. Create the async TUN device (retained for the node's lifetime), MTU set.
@@ -409,7 +410,8 @@ mod tests {
         use futures_util::stream::TryStreamExt;
         use rtnetlink::packet_route::link::LinkFlags;
 
-        let (device, link) = spawn_overlay_tun("test-node-buw2", "mjtest0")
+        let addr = crate::tun::link::backhaul_addr("test-node-buw2");
+        let (device, link) = spawn_overlay_tun(addr, "mjtest0")
             .await
             .expect("overlay TUN up");
         assert_eq!(link.iface_name, "mjtest0");

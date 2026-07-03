@@ -31,7 +31,8 @@ fn render_and_write_round_trip() {
     assert_eq!(on_disk, body);
 
     // Required structural elements present.
-    assert!(on_disk.contains("redistribute ip 10.42.1.0/24 ge 24 le 24 allow"));
+    // No ge/le qualifiers (kf7): they silently defeat the match in babeld 1.13.
+    assert!(on_disk.contains("redistribute ip 10.42.1.0/24 allow"));
     assert!(on_disk.contains("interface mj-peer-aabbccdd type tunnel"));
     assert!(on_disk.contains("interface mj-peer-eeff0011 type tunnel"));
     assert!(on_disk.contains("in ip 10.255.0.0/16 deny"));

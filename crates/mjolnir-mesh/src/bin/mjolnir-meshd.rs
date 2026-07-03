@@ -287,11 +287,20 @@ async fn main() -> Result<()> {
     // announces it to peers (mjolnir-mesh-4pk). Assigning after bind misses the
     // initial address scan — and with no DHCP the iface has no other address.
     let secret = load_or_create_secret(cli.secret_file.as_deref())?;
+    // pt9: load the persisted claim map BEFORE deriving the backhaul address, so
+    // a node that previously lost a backhaul-address collision derives around
+    // the winner's persisted claim instead of re-colliding at every boot. The
+    // map is handed onward as the claim store seed (was loaded later, s9v).
+    let restored_claims = match &cli.command {
+        Command::Mesh { claims_file, .. } => load_claims(claims_file),
+        _ => HashMap::new(),
+    };
+    let backhaul_ip = pick_backhaul_addr(&restored_claims, &secret.public().to_string());
     let l2_backhaul = match &cli.command {
         // Overlay mode: mjolnir0 carries the backhaul address, so don't put it on
         // the underlay iface too. (Overlay also ignores the l2 wired backhaul.)
         Command::Mesh { backhaul_iface, .. } if !overlay_mode => {
-            assign_backhaul_addr(backhaul_iface, &secret.public().to_string()).await
+            assign_backhaul_addr(backhaul_iface, backhaul_ip).await
         }
         _ => None,
     };
@@ -310,10 +319,11 @@ async fn main() -> Result<()> {
         // Overlay mode binds the underlay normally (mjolnir0 owns 10.254.x); only
         // the per-peer LAN path pins iroh to the derived backhaul address.
         None if lan && mesh_mode && !overlay_mode => {
-            let ip = mjolnir_mesh::tun::backhaul_addr(&secret.public().to_string());
             // Pin a well-known port so peers can dial us at a fully-derived
             // address (backhaul_addr + MESH_IROH_PORT), no mDNS needed (0yb.1).
-            Some(SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT))
+            // `backhaul_ip` is claim-aware (pt9): a collision loser binds its
+            // re-derived address, and peers learn it from the gossiped claim.
+            Some(SocketAddr::new(std::net::IpAddr::V4(backhaul_ip), MESH_IROH_PORT))
         }
         None => None,
     };
@@ -358,6 +368,8 @@ async fn main() -> Result<()> {
                 claims_file,
                 overlay,
                 gateway,
+                backhaul_ip,
+                restored_claims,
             )
             .await?
         }
@@ -580,12 +592,15 @@ async fn run_mesh(
     claims_file: PathBuf,
     overlay: bool,
     gateway: bool,
+    backhaul_ip: Ipv4Addr,
+    restored_claims: HashMap<String, SubnetClaim>,
 ) -> Result<()> {
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
-    // NB: the derived IPv4 backhaul address was already assigned to the
-    // shared-segment iface in `main`, before the endpoint was built, so iroh
-    // picks it up at bind time and mDNS announces it (mjolnir-mesh-4pk).
+    // NB: the effective IPv4 backhaul address (`backhaul_ip`, claim-aware per
+    // pt9) was already assigned to the shared-segment iface in `main`, before
+    // the endpoint was built, so iroh picks it up at bind time and mDNS
+    // announces it (mjolnir-mesh-4pk).
 
     wait_until_addressable(&endpoint, no_relay).await;
     print_identity(&endpoint)?;
@@ -619,7 +634,7 @@ async fn run_mesh(
     // manager + inbound sender the accept handler and dialers register into.
     // When off, this is None and everything below takes the per-peer path.
     let overlay_state: Option<(ConnManager, tokio::sync::mpsc::Sender<Bytes>)> = if overlay {
-        let (device, link) = spawn_overlay_tun(&self_id_str, OVERLAY_IFACE)
+        let (device, link) = spawn_overlay_tun(backhaul_ip, OVERLAY_IFACE)
             .await
             .context("bringing up overlay TUN mjolnir0")?;
         info!(iface = %link.iface_name, addr = %link.self_addr, ll = %link.link_local, "overlay mode: single mjolnir0 up");
@@ -658,7 +673,9 @@ async fn run_mesh(
     // it for the local subnet to redistribute. Seeded from disk (mjolnir-mesh-s9v)
     // so a rebooting node has its own and any known peers' claims immediately,
     // before gossip has a chance to relearn them.
-    let restored = load_claims(&claims_file);
+    // Loaded once in `main` before backhaul-address derivation (pt9); reused
+    // here as the store seed so boot and claim state agree on one snapshot.
+    let restored = restored_claims;
     if !restored.is_empty() {
         info!(count = restored.len(), path = %claims_file.display(), "restored subnet claims from disk");
     }
@@ -721,10 +738,14 @@ async fn run_mesh(
             Ok(services) => {
                 let derived = MemoryLookup::new();
                 for id in &bootstrap {
-                    let addr = SocketAddr::new(
-                        std::net::IpAddr::V4(mjolnir_mesh::tun::backhaul_addr(&id.to_string())),
-                        MESH_IROH_PORT,
-                    );
+                    // Claim-aware (pt9): a peer that lost a backhaul collision
+                    // sits at a re-derived address, learned from its gossiped
+                    // (and persisted) /32 claim; derivation is the fallback.
+                    let ip = {
+                        let s = claims.lock().expect("claim store poisoned");
+                        peer_backhaul_hint(&s, &id.to_string())
+                    };
+                    let addr = SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT);
                     derived.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(addr));
                     info!(peer = %id, %addr, "seeded derived peer address (no-discovery dialing)");
                 }
@@ -764,6 +785,7 @@ async fn run_mesh(
                 let sync = sync.clone();
                 let store = claims.clone();
                 let me = self_id_str.clone();
+                let claims_path = claims_file.clone();
                 tokio::spawn(async move {
                     let result = sync
                         .run(move |msg| {
@@ -776,6 +798,19 @@ async fn run_mesh(
                             }
                             let mut s = store.lock().expect("claim store poisoned");
                             if let Some(lost) = apply_subnet_message(&mut s, &msg, &me) {
+                                if mjolnir_mesh::tun::in_backhaul_block(&lost) {
+                                    // Lost our backhaul /32 claim (pt9): the earlier
+                                    // claimant keeps 10.254.x. The address is baked
+                                    // into the bound iroh socket and interface config,
+                                    // so persist the winner's claim and exit — procd
+                                    // respawns meshd, and pick_backhaul_addr() derives
+                                    // around the persisted winner at next boot.
+                                    error!(addr = %lost,
+                                        "backhaul address collision lost — restarting to re-derive (pt9)");
+                                    persist_claims(&s, &claims_path);
+                                    drop(s);
+                                    std::process::exit(EXIT_BACKHAUL_COLLISION);
+                                }
                                 drop(s);
                                 let _ = reclaim_tx.send(lost);
                             }
@@ -792,8 +827,19 @@ async fn run_mesh(
                 let store = claims.clone();
                 let me = self_id_str.clone();
                 let neigh_rx = neigh_rx.clone();
+                let claims_path = claims_file.clone();
                 tokio::spawn(async move {
-                    claim_manager(sync, store, me, client_iface, reclaim_rx, neigh_rx).await
+                    claim_manager(
+                        sync,
+                        store,
+                        me,
+                        client_iface,
+                        backhaul_ip,
+                        claims_path,
+                        reclaim_rx,
+                        neigh_rx,
+                    )
+                    .await
                 })
             };
 
@@ -884,7 +930,10 @@ async fn run_mesh(
             // the underlay address (mjolnir-mesh-buw.8). Internet mode likewise
             // keeps discovery/relay resolution.
             let addr = if lan && overlay_state.is_none() {
-                let ip = mjolnir_mesh::tun::backhaul_addr(&peer.to_string());
+                let ip = {
+                    let s = claims.lock().expect("claim store poisoned");
+                    peer_backhaul_hint(&s, &peer.to_string())
+                };
                 addr.with_ip_addr(SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT))
             } else {
                 addr
@@ -1089,12 +1138,22 @@ async fn claim_manager<T: GossipTransport>(
     store: ClaimStore,
     self_id: String,
     client_iface: String,
+    backhaul_ip: Ipv4Addr,
+    claims_file: PathBuf,
     mut reclaim_rx: tokio::sync::mpsc::UnboundedReceiver<Ipv4Net>,
     neigh_rx: tokio::sync::watch::Receiver<usize>,
 ) {
+    // Backhaul /32 claim first (pt9): the address is already assigned and the
+    // socket bound to it, so publish immediately — no neighbor gating. FWW
+    // arbitrates any collision; the loser restarts and re-derives.
+    claim_backhaul_and_publish(&sync, &store, &self_id, backhaul_ip, &claims_file).await;
     let has_own_claim = {
         let s = store.lock().expect("claim store poisoned");
-        s.values().any(|c| c.owner_node_id == self_id)
+        // Backhaul /32 claims don't count — this gates the CLIENT /24 pick.
+        s.values().any(|c| {
+            c.owner_node_id == self_id
+                && matches!(c.cidr, IpNet::V4(n) if !mjolnir_mesh::tun::in_backhaul_block(&n))
+        })
     };
     if !has_own_claim {
         if wait_for_first_neighbor(neigh_rx, CLAIM_JOIN_WAIT_CAP).await {
@@ -1128,20 +1187,23 @@ fn partition_claims(
     Vec<Ipv4Net>,
     HashSet<Ipv4Net>,
 ) {
+    // Backhaul /32 claims (pt9) share the store but are NOT client subnets —
+    // exclude them from both sides so they can't be picked as the senior
+    // client claim, released as "extras", or fed to the /24 allocator.
     let mut own: Vec<(Ipv4Net, SubnetClaim)> = store
         .values()
         .filter(|c| c.owner_node_id == self_id)
         .filter_map(|c| match c.cidr {
-            IpNet::V4(n) => Some((n, c.clone())),
-            IpNet::V6(_) => None,
+            IpNet::V4(n) if !mjolnir_mesh::tun::in_backhaul_block(&n) => Some((n, c.clone())),
+            _ => None,
         })
         .collect();
     let foreign: HashSet<Ipv4Net> = store
         .values()
         .filter(|c| c.owner_node_id != self_id)
         .filter_map(|c| match c.cidr {
-            IpNet::V4(n) => Some(n),
-            IpNet::V6(_) => None,
+            IpNet::V4(n) if !mjolnir_mesh::tun::in_backhaul_block(&n) => Some(n),
+            _ => None,
         })
         .collect();
     own.sort_by(|a, b| a.1.claimed_at.cmp(&b.1.claimed_at));
@@ -1149,6 +1211,126 @@ fn partition_claims(
     let keep = own.next();
     let extras = own.map(|(n, _)| n).collect();
     (keep, extras, foreign)
+}
+
+/// Exit code used when this node loses its backhaul-address claim (pt9): the
+/// address is baked into the bound socket and interface config, so the clean
+/// resolution is a supervised restart — `pick_backhaul_addr` then derives
+/// around the persisted winner. procd respawns meshd on any nonzero exit.
+const EXIT_BACKHAUL_COLLISION: i32 = 86;
+
+/// How many salted derivations to try before giving up on avoidance and letting
+/// FWW arbitrate at runtime. 64 misses in a ~65k slot space would take a mesh of
+/// thousands of pathologically colliding nodes — effectively unreachable.
+const BACKHAUL_PICK_ATTEMPTS: u32 = 64;
+
+/// Pick this node's effective backhaul address (pt9). Prefers a backhaul /32
+/// claim we already own in the (restored) claim map — the address survives
+/// restarts with its first-writer seniority intact, including a re-derived one
+/// after a lost collision. Otherwise walks the salted derivation sequence,
+/// skipping addresses another node is known to have claimed; attempt 0 is the
+/// legacy `backhaul_addr` derivation, so the common case is unchanged.
+fn pick_backhaul_addr(store: &HashMap<String, SubnetClaim>, self_id: &str) -> Ipv4Addr {
+    let mut own: Vec<&SubnetClaim> = store
+        .values()
+        .filter(|c| c.owner_node_id == self_id)
+        .filter(|c| matches!(c.cidr, IpNet::V4(n) if mjolnir_mesh::tun::in_backhaul_block(&n)))
+        .collect();
+    own.sort_by(|a, b| a.claimed_at.cmp(&b.claimed_at));
+    if let Some(c) = own.first()
+        && let IpNet::V4(n) = c.cidr
+    {
+        return n.addr();
+    }
+    let taken: HashSet<Ipv4Addr> = store
+        .values()
+        .filter(|c| c.owner_node_id != self_id)
+        .filter_map(|c| match c.cidr {
+            IpNet::V4(n) if mjolnir_mesh::tun::in_backhaul_block(&n) && n.prefix_len() == 32 => {
+                Some(n.addr())
+            }
+            _ => None,
+        })
+        .collect();
+    for attempt in 0..BACKHAUL_PICK_ATTEMPTS {
+        let addr = mjolnir_mesh::tun::backhaul_addr_salted(self_id, attempt);
+        if !taken.contains(&addr) {
+            return addr;
+        }
+    }
+    mjolnir_mesh::tun::backhaul_addr(self_id)
+}
+
+/// Resolve the address to dial a roster peer at: its gossiped backhaul /32
+/// claim if we know one (a collision loser sits at a re-derived address), else
+/// the attempt-0 derivation — the pre-pt9 behavior (0yb.1 derived seeding).
+fn peer_backhaul_hint(store: &HashMap<String, SubnetClaim>, peer_id: &str) -> Ipv4Addr {
+    let mut owned: Vec<&SubnetClaim> = store
+        .values()
+        .filter(|c| c.owner_node_id == peer_id)
+        .filter(|c| matches!(c.cidr, IpNet::V4(n) if mjolnir_mesh::tun::in_backhaul_block(&n)))
+        .collect();
+    owned.sort_by(|a, b| a.claimed_at.cmp(&b.claimed_at));
+    if let Some(c) = owned.first()
+        && let IpNet::V4(n) = c.cidr
+    {
+        return n.addr();
+    }
+    mjolnir_mesh::tun::backhaul_addr(peer_id)
+}
+
+/// Record and gossip this node's backhaul /32 claim (pt9). Reuses an existing
+/// own claim on the address (restored across restarts — preserves first-writer
+/// seniority, mirroring the eon rule for client /24s). If another node already
+/// holds a claim on this address, the deterministic merge decides: if we would
+/// lose, exit for a supervised restart (pick_backhaul_addr avoids the winner);
+/// if we would win (e.g. the other claim is wall-clock-skewed into our future),
+/// claim anyway — the other node is the one that must move.
+async fn claim_backhaul_and_publish<T: GossipTransport>(
+    sync: &GossipSync<T>,
+    store: &ClaimStore,
+    self_id: &str,
+    addr: Ipv4Addr,
+    claims_file: &Path,
+) {
+    let net = Ipv4Net::new(addr, 32).expect("/32 prefix is always valid");
+    let key = IpNet::V4(net).to_string();
+    let claim = {
+        let mut s = store.lock().expect("claim store poisoned");
+        let fresh = SubnetClaim {
+            cidr: IpNet::V4(net),
+            owner_node_id: self_id.to_string(),
+            site_name: None,
+            claimed_at: now_hlc(self_id),
+        };
+        match merge_subnet_claim(s.get(&key), &fresh) {
+            MergeResult::Conflict { winner, .. } if winner.owner_node_id != self_id => {
+                error!(%addr, winner = %winner.owner_node_id,
+                    "backhaul address already claimed by an earlier writer — restarting to re-derive (pt9)");
+                persist_claims(&s, claims_file);
+                drop(s);
+                std::process::exit(EXIT_BACKHAUL_COLLISION);
+            }
+            _ => {
+                let entry = match s.get(&key) {
+                    Some(c) if c.owner_node_id == self_id => c.clone(),
+                    _ => fresh,
+                };
+                s.insert(key.clone(), entry.clone());
+                entry
+            }
+        }
+    };
+    match sync
+        .publish(GossipMessage::SubnetClaimUpdate {
+            cidr: key,
+            entry: claim,
+        })
+        .await
+    {
+        Ok(()) => info!(%addr, "published backhaul address claim (pt9)"),
+        Err(e) => warn!(%addr, "backhaul claim publish failed: {e}"),
+    }
 }
 
 /// Publish this node's subnet claim. A claim we already own — typically
@@ -1544,10 +1726,9 @@ async fn reconcile_client_uci(_subnet: Ipv4Net) {}
 /// fallback below). Callers use it as babel's wireless L2 interface
 /// (mjolnir-mesh-auu). `None` means no usable interface was found.
 #[cfg(target_os = "linux")]
-async fn assign_backhaul_addr(iface: &str, self_id: &str) -> Option<String> {
+async fn assign_backhaul_addr(iface: &str, addr: Ipv4Addr) -> Option<String> {
     use rtnetlink::new_connection;
 
-    let addr = mjolnir_mesh::tun::backhaul_addr(self_id);
     let prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN;
 
     let (connection, handle, _) = match new_connection() {
@@ -1622,7 +1803,7 @@ async fn assign_backhaul_addr(iface: &str, self_id: &str) -> Option<String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn assign_backhaul_addr(_iface: &str, _self_id: &str) -> Option<String> {
+async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
     None
 }
 
@@ -1722,10 +1903,12 @@ async fn babel_reconciler(
         let local_subnet: Option<Ipv4Net> = {
             let c = claims.lock().expect("claim store poisoned");
             c.values()
-                .find(|claim| claim.owner_node_id == self_id)
-                .and_then(|claim| match claim.cidr {
-                    IpNet::V4(n) => Some(n),
-                    IpNet::V6(_) => None,
+                .filter(|claim| claim.owner_node_id == self_id)
+                .find_map(|claim| match claim.cidr {
+                    // Skip backhaul /32 claims (pt9) — babel redistributes the
+                    // client /24, never the backhaul address claim.
+                    IpNet::V4(n) if !mjolnir_mesh::tun::in_backhaul_block(&n) => Some(n),
+                    _ => None,
                 })
         };
 
@@ -2239,10 +2422,12 @@ async fn babel_reconciler_overlay(
         let local_subnet: Option<Ipv4Net> = {
             let c = claims.lock().expect("claim store poisoned");
             c.values()
-                .find(|claim| claim.owner_node_id == self_id)
-                .and_then(|claim| match claim.cidr {
-                    IpNet::V4(n) => Some(n),
-                    IpNet::V6(_) => None,
+                .filter(|claim| claim.owner_node_id == self_id)
+                .find_map(|claim| match claim.cidr {
+                    // Skip backhaul /32 claims (pt9) — babel redistributes the
+                    // client /24, never the backhaul address claim.
+                    IpNet::V4(n) if !mjolnir_mesh::tun::in_backhaul_block(&n) => Some(n),
+                    _ => None,
                 })
         };
         let conf =
@@ -2587,14 +2772,23 @@ fn print_identity(endpoint: &Endpoint) -> Result<()> {
 async fn run_status(secret_file: Option<&std::path::Path>) -> Result<()> {
     let secret = load_or_create_secret(secret_file)?;
     let id = secret.public().to_string();
-    let backhaul = mjolnir_mesh::tun::backhaul_addr(&id);
+    // Claim-aware (pt9): a node that lost a backhaul collision runs at a
+    // re-derived address recorded in the persisted claim map — report THAT,
+    // not the naive derivation, or the diagnosis chases the wrong address.
+    let restored = load_claims(Path::new("/etc/mjolnir/claims.state"));
+    let backhaul = pick_backhaul_addr(&restored, &id);
+    let derived = mjolnir_mesh::tun::backhaul_addr(&id);
     let prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN;
 
     println!("mjolnir-meshd status");
     println!("  build:    {}", env!("MJOLNIR_BUILD"));
     println!("  version:  {}", env!("CARGO_PKG_VERSION"));
     println!("  node id:  {id}");
-    println!("  backhaul: {backhaul}/{prefix}  (derived from node id)");
+    if backhaul == derived {
+        println!("  backhaul: {backhaul}/{prefix}  (derived from node id)");
+    } else {
+        println!("  backhaul: {backhaul}/{prefix}  (RE-DERIVED after collision, pt9; naive derivation would be {derived})");
+    }
     println!();
     print_system_status(backhaul).await;
     Ok(())
@@ -2875,6 +3069,88 @@ fn parse_peer(arg: &str) -> Result<EndpointAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn store_of(claims: &[SubnetClaim]) -> HashMap<String, SubnetClaim> {
+        claims
+            .iter()
+            .map(|c| (c.cidr.to_string(), c.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn pick_backhaul_prefers_own_restored_claim() {
+        // A node that moved to a re-derived address after a lost collision
+        // keeps that address across restarts via its persisted claim.
+        let moved = claim("10.254.9.9/32", "me", 500);
+        let store = store_of(&[moved]);
+        assert_eq!(pick_backhaul_addr(&store, "me"), "10.254.9.9".parse::<Ipv4Addr>().unwrap());
+    }
+
+    #[test]
+    fn pick_backhaul_avoids_foreign_claim_on_attempt_zero() {
+        let derived0 = mjolnir_mesh::tun::backhaul_addr("me");
+        let foreign = claim(&format!("{derived0}/32"), "them", 100);
+        let store = store_of(&[foreign]);
+        let picked = pick_backhaul_addr(&store, "me");
+        assert_ne!(picked, derived0, "must derive around the persisted winner");
+        assert_eq!(picked, mjolnir_mesh::tun::backhaul_addr_salted("me", 1));
+    }
+
+    #[test]
+    fn pick_backhaul_default_is_legacy_derivation() {
+        // Empty store (fresh mesh): byte-identical to the pre-pt9 address.
+        let store = HashMap::new();
+        assert_eq!(pick_backhaul_addr(&store, "me"), mjolnir_mesh::tun::backhaul_addr("me"));
+    }
+
+    #[test]
+    fn peer_hint_uses_gossiped_claim_else_derivation() {
+        let moved = claim("10.254.7.7/32", "peer-a", 100);
+        let store = store_of(&[moved]);
+        assert_eq!(
+            peer_backhaul_hint(&store, "peer-a"),
+            "10.254.7.7".parse::<Ipv4Addr>().unwrap()
+        );
+        assert_eq!(
+            peer_backhaul_hint(&store, "peer-b"),
+            mjolnir_mesh::tun::backhaul_addr("peer-b")
+        );
+    }
+
+    #[test]
+    fn partition_claims_ignores_backhaul_claims() {
+        // Own backhaul /32 must not become the senior client claim (or an
+        // "extra" to be released); foreign backhaul /32s must not reach the
+        // /24 allocator's avoid set.
+        let own_backhaul = claim("10.254.9.9/32", "me", 100);
+        let own_client = claim("10.42.5.0/24", "me", 200);
+        let foreign_backhaul = claim("10.254.1.1/32", "them", 50);
+        let store = store_of(&[own_backhaul, own_client, foreign_backhaul]);
+        let (keep, extras, foreign) = partition_claims(&store, "me");
+        let (net, _) = keep.expect("client claim must be kept");
+        assert_eq!(net, "10.42.5.0/24".parse::<Ipv4Net>().unwrap());
+        assert!(extras.is_empty(), "backhaul claim must not be an 'extra'");
+        assert!(foreign.is_empty(), "foreign backhaul claim must not reach the allocator");
+    }
+
+    #[test]
+    fn losing_backhaul_conflict_is_classified_by_block() {
+        // The dispatch loop distinguishes a lost backhaul /32 (restart to
+        // re-derive) from a lost client /24 (retract + re-claim) purely by
+        // block membership of the returned net.
+        let mut store = HashMap::new();
+        let mine = claim("10.254.3.3/32", "me", 2_000); // later writer — loses
+        store.insert(mine.cidr.to_string(), mine.clone());
+        let theirs = claim("10.254.3.3/32", "them", 1_000); // first writer — wins
+        let lost = apply_subnet_message(&mut store, &update(&theirs), "me")
+            .expect("we must lose the FWW conflict");
+        assert!(mjolnir_mesh::tun::in_backhaul_block(&lost));
+        assert_eq!(
+            store.get("10.254.3.3/32").unwrap().owner_node_id,
+            "them",
+            "winner's claim must replace ours in the store"
+        );
+    }
 
     fn claim(cidr: &str, owner: &str, wall: u64) -> SubnetClaim {
         SubnetClaim {
