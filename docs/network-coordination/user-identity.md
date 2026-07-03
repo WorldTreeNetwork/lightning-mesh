@@ -1,4 +1,4 @@
-# User Identity & the Captive Portal (IdentiKey on the Mesh)
+# User Identity & the Identity Surface (`id.mesh`)
 
 **Status:** Design spec — decided at the principle level, build sequenced after `0yb`/`e21`
 **Bead:** `mjolnir-mesh-rp9` | **Date:** 2026-07-03
@@ -10,6 +10,18 @@ This spec extends identity-by-key from **nodes** to **people**. It is the design
 that makes "the network is a projection of a set of keys" user-facing: membership,
 service access, and publish rights answered by keys and webs of trust — never by
 MAC filters, shared passwords, or a server the protocol depends on.
+
+> **Why not a captive portal?** An earlier draft framed the enrollment surface as
+> a captive portal. That was the wrong mechanism, structurally: a captive portal
+> only *appears* by blocking — the OS pops the login sheet when its connectivity
+> probe is intercepted — so on a genuinely open network it never surfaces at all.
+> And when it does surface, the Captive Network Assistant is the worst browser
+> context on the device: sandboxed, storage-evicting, deep-link-hostile — exactly
+> where key material shouldn't live. Deeper than the mechanics: a captive portal
+> is the architecture of networks that treat users as suspects at a checkpoint.
+> This mesh treats them as **guests who can walk up to the front desk whenever
+> they choose**. The front desk is `id.mesh` (§4). True captive behavior survives
+> only as the enforcement face of an *optional* per-node gated policy (§4.4).
 
 ---
 
@@ -34,6 +46,9 @@ MAC filters, shared passwords, or a server the protocol depends on.
 5. **One trust machinery.** User identity reuses the `met` web-of-trust CRDT
    shapes (endorsements, revocations, per-device allow/block/threshold). Users
    are one more kind of subject, not a second system.
+6. **Front desk, not checkpoint.** The identity surface is a well-known place
+   users visit by choice, never an interception they must clear. Nothing is
+   ever injected into a user's traffic to summon it.
 
 ## 2. Identity model — the Papyrus/identikey-core attestation chain
 
@@ -42,7 +57,7 @@ ported into `identikey-core` on its own track:
 
 - A **user identity** is an Ed25519 keypair (the IdentiKey root).
 - A **device** holds its own keypair (iroh `EndpointId` for mesh-speaking
-  devices; a portal-session key for legacy devices, §4).
+  devices; a surface-session key for legacy devices, §4).
 - The identity key signs an **attestation over the device key**:
   `sig(identity, canonical(device_pubkey, issued_at, epoch, caps))` — a
   verifiable, offline-checkable link from *person* to *device*.
@@ -71,50 +86,77 @@ what a compromise costs.
 | Rung | Who holds the key | UX | What it's for |
 |---|---|---|---|
 | **0 · Anonymous** | Nobody — no key | Connect and surf; nothing to set up | Permissionless baseline. A right, not a fallback. |
-| **1 · Ephemeral key** | The device/browser session, throwaway | One tap: "continue with a temporary identity" (Web3 temp-wallet pattern) | Session continuity, ephemeral service use, venue demos. Discarded without ceremony. |
+| **1 · Ephemeral key** | The device/browser session, throwaway | One tap at `id.mesh`: "continue with a temporary identity" (Web3 temp-wallet pattern) | Session continuity, ephemeral service use, venue demos. Discarded without ceremony. |
 | **2 · Node-custodied session key** | The router, on the device's behalf, bound to the lease | Zero-install; honest label: a **guest badge**, not an identity | Legacy devices that need a stable-for-the-visit handle. |
-| **3 · Custodial identity** | A key manager the user *consciously chose to trust* as their signing authority, fronted by standard service-based auth every device supports (username/password/OIDC → the custodian signs on your behalf) | Ordinary web login; nothing to install | "Identity for free" for every service, without self-custody burden. The hosted `identikey-core` stack is *one such custodian* — never a protocol dependency. A custodian outage degrades *its* users' signing, not the mesh. |
-| **4 · Self-custodied** | The user's own hardware — IdentiKey app / hardware-backed device key (Secure Enclave / TPM per SP-02) | Scan a QR at the portal (§4); biometric-gated signing | Full sovereignty: endorse others, publish services, own `.mesh` names, multi-device via HD derivation. |
+| **3 · Custodial identity** | A key manager the user *consciously chose to trust* as their signing authority, fronted by standard service-based auth every device supports (username/password/OIDC → the custodian signs on your behalf) | Ordinary web login at `id.mesh`; nothing to install | "Identity for free" for every service, without self-custody burden. The hosted `identikey-core` stack is *one such custodian* — never a protocol dependency. A custodian outage degrades *its* users' signing, not the mesh. |
+| **4 · Self-custodied** | The user's own hardware — IdentiKey app / hardware-backed device key (Secure Enclave / TPM per SP-02) | Scan a QR at `id.mesh` (§4); biometric-gated signing | Full sovereignty: endorse others, publish services, own `.mesh` names, multi-device via HD derivation. |
 
 Users can climb: an ephemeral or custodied identity can be *upgraded* by
 cross-signing from a higher-rung key (the old key endorses the new, service
 bindings migrate). Climbing down is just abandonment.
 
-## 4. The captive portal — an enrollment surface, not a wall
+## 4. The identity surface — `id.mesh`, the front desk
 
-Per the IPv6 decision: IP is access plumbing, and the portal is the
+Per the IPv6 decision: IP is access plumbing, and the identity surface is the
 **legacy-device bridge for identity**, exactly as the HTTP gateway is the
-legacy bridge for services. Each node runs the portal for its own /24
-(sovereignty is structural — no shared portal authority).
+legacy bridge for services. Each node serves `id.mesh` for its own /24
+(sovereignty is structural — no shared surface, no shared authority). It is a
+**well-known place, not an interception**: users arrive in their *real*
+browser — full WebCrypto, persistent storage, working camera and app
+deep-links — not in a captive-portal sandbox.
 
-**Flow on connect (any device):**
+### 4.1 How users find it
 
-1. Device associates, gets a lease, has internet (rung 0). No wall.
-2. First HTTP hit gets the familiar portal interstitial — dismissible —
-   offering the identity rungs:
-   - **"Just browse"** → done (rung 0).
-   - **"Temporary identity"** → browser generates a throwaway keypair in
-     `localStorage`/WebCrypto (rung 1), or the node mints and custodies one
-     bound to the lease (rung 2) for devices whose browsers can't.
-   - **"Sign in"** → standard web auth against the user's chosen custodian
-     (rung 3); the custodian returns an attestation binding this
-     session/device to the user's identity key.
-   - **"Scan with IdentiKey"** → portal shows a QR carrying a challenge +
-     the node's `EndpointId`; the app signs with the user's real key and
-     delivers the attestation over the mesh (mirrors the `met` enrollment
-     handshake, roles reversed) (rung 4).
-   - **Operator guest QRs** (venue mode): pre-minted, scoped, expiring guest
-     identities printed on paper — scan to join as that guest. Composes with
-     rungs 1–2.
-3. The node writes the resulting attestation into `/users/…` (or a
-   lease-scoped ephemeral record for rungs 1–2) and binds the device's
-   IP/lease to the identity for the visit.
+- **`id.mesh`** resolves on every node — the stable, memorable front-desk
+  address. Signage-friendly, sayable out loud at a venue.
+- **RFC 8910 + RFC 8908** (DHCP option 114 / RA option + Captive Portal API):
+  the network *advertises* the surface's URL at lease time, so the OS can show
+  a **non-blocking affordance** — "this network has a venue page" — without a
+  single packet ever being intercepted. Discovery without gating; the
+  standards world's own correction of the captive-portal mechanism.
+- **Printed QR on the router** and operator signage encoding
+  `http://id.mesh` — the physical front desk.
 
-**Honesty requirements.** The portal page is served by the node over plain
-HTTP inside the mesh (no hosted TLS domain exists, and must not need to).
-Rung 2 keys are custodied by the node — the UI must say so ("guest badge").
-Rung 1 browser keys are as strong as the browser profile. Neither may be
-presented as self-sovereign identity.
+### 4.2 What's on offer (any device, any time — not just at join)
+
+- **"Just browse"** → nothing to do; the net was never gated (rung 0).
+- **"Temporary identity"** → the browser generates a throwaway keypair via
+  WebCrypto in local storage (rung 1); for browsers that can't, the node
+  mints and custodies one bound to the lease (rung 2).
+- **"Sign in"** → standard web auth against the user's chosen custodian
+  (rung 3); the custodian returns an attestation binding this session/device
+  to the user's identity key.
+- **"Scan with IdentiKey"** → the page shows a QR carrying a challenge + the
+  node's `EndpointId`; the app signs with the user's real key and delivers
+  the attestation over the mesh (mirrors the `met` enrollment handshake,
+  roles reversed) (rung 4). Rung-4 users never *need* the surface — the app
+  speaks mesh natively — but the QR makes any browser session upgradeable.
+- **Operator guest QRs** (venue mode): pre-minted, scoped, expiring guest
+  identities printed on paper — scan to join as that guest. Composes with
+  rungs 1–2.
+
+The node writes the resulting attestation into `/users/…` (or a lease-scoped
+ephemeral record for rungs 1–2) and binds the device's IP/lease to the
+identity for the visit. Because the surface is a real site and not a join-time
+sheet, enrollment, upgrades, and identity management are available for the
+whole session — the front desk doesn't close after check-in.
+
+### 4.3 Honesty requirements
+
+The surface is served by the node over plain HTTP inside the mesh (no hosted
+TLS domain exists, and must not need to). Rung-2 keys are custodied by the
+node — the UI must say so ("guest badge"). Rung-1 browser keys are as strong
+as the browser profile. Neither may be presented as self-sovereign identity.
+
+### 4.4 Gated mode — the one honest captive portal
+
+A mesh (or a single node, for its own /24) may *choose* an identity-required
+policy — a private community network. Only there does true captive behavior
+turn on: connectivity probes are answered with the redirect, the OS sheet
+points at the same `id.mesh` surface, and access opens when an acceptable
+rung is presented. Blocking is legitimate exactly when blocking *is* the
+chosen policy — the checkpoint exists only where the community has decided to
+have a door. Open mode remains the default and the ethos.
 
 ## 5. What identity unlocks
 
@@ -146,22 +188,25 @@ on its own track; this spec consumes its `identikey-client` crate
 **Open items for the build-phase design pass:**
 
 1. Rung-1 browser key mechanics: WebCrypto Ed25519 availability across stock
-   mobile browsers vs. a tiny portal-served signer; what happens on
+   mobile browsers vs. a tiny surface-served signer; what happens on
    private-browsing eviction.
 2. Custodian protocol (rung 3): the attestation-request/response wire format a
    custodian implements — must be simple enough that a self-hosted custodian
    is an afternoon project (that's the anti-lock-in test).
 3. Lease↔identity binding lifetime and re-auth cadence; roaming a binding
-   across nodes within an island (dovetails with the 802.11r/FT key spike,
-   bead `9o3`-class hunch).
+   across nodes within an island (dovetails with the 802.11r/FT key-management
+   spike).
 4. Guest-QR minting UX and scoping vocabulary (time, bandwidth, service set).
 5. Whether rung-2 node-custodied keys are worth shipping at all once rung-1
    WebCrypto is proven — prefer fewer rungs if one is redundant.
 6. Privacy: ephemeral identities must not be linkable across visits unless
    the user upgrades them deliberately; address-book records for rungs 1–2
    are island-local, never gossiped mesh-wide.
+7. RFC 8910/8908 client behavior survey: which OSes render the non-blocking
+   affordance today, and how it degrades where unsupported (answer: signage
+   and `id.mesh` still work — the affordance is progressive enhancement).
 
-**DWeb demo slice** (when build begins): portal on each node, all rungs
+**DWeb demo slice** (when build begins): `id.mesh` on each node, all rungs
 present (anonymous, temp key, QR handshake; custodian mocked), identity
 visible in the address book, one key-gated capability — publish `wiki.mesh` —
 exercised live from a phone. The moment "projection of a set of keys" becomes
