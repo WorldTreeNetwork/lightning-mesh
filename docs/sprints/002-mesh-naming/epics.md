@@ -6,6 +6,16 @@ Beads mode: ON — beads is the source of truth once materialized; this file is 
 
 Dependency spine: E2 (lane substrate) ⊥ E1.1–1.3 (responder) can proceed in parallel; E1.4 (UCI) after E1.1–1.2; E3 after E2; E4 last.
 
+> **BASELINE NOTE (2026-07-03, post-planning audit):** bead `7jb` (bc7 session) shipped a v1
+> service-gossip lane before this sprint starts: `ServiceUpdate` variant, LWW `merge_service`,
+> `ServiceBook` + anti-entropy + persist (commit 37befe0). E2 is therefore an **upgrade**, not
+> greenfield: S2.1 replaces LWW with owner-bound semantics, S2.2 appends v2 variants after the
+> now-fleet-decoded `ServiceUpdate` (never mutate it), S2.3 ports the existing wiring to the v2
+> book. Details in the bead notes.
+
+Bead mapping: S1.1–S1.4 → `e21.1.1`–`e21.1.4` · S2.1–S2.4 → `e21.2.1`–`e21.2.4` ·
+S3.1–S3.3 → `e21.2.5`–`e21.2.7` · S4.1–S4.3 → `e21.6`–`e21.8`.
+
 ---
 
 ## E1 — Embedded .mesh DNS responder + well-known names + dnsmasq wiring
