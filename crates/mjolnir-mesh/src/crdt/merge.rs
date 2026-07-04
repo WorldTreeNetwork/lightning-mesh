@@ -1,5 +1,5 @@
 use crate::crdt::peer_addr::PeerAddrEntry;
-use crate::crdt::service::ServiceEntry;
+use crate::crdt::service::{is_reserved_service_name, ServiceEntry, ServiceEntryV2};
 use crate::crdt::subnet::SubnetClaim;
 use crate::crdt::users::UserEntry;
 use std::cmp::Ordering;
@@ -136,6 +136,82 @@ pub fn merge_service(
             _ => MergeResult::Unchanged,
         },
     }
+}
+
+/// Error returned by [`merge_service_v2`] when `name` is one of
+/// [`RESERVED_SERVICE_NAMES`](crate::crdt::service::RESERVED_SERVICE_NAMES).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("service name {0:?} is reserved and cannot be claimed")]
+pub struct ReservedServiceName(pub String);
+
+/// First-writer-wins tie-break for owner-bound service conflicts (bead
+/// e21.2.1): lower `first_claimed_at` = original claimant wins.
+///
+/// Mirrors [`resolve_subnet_conflict`]'s shape (Ord on the HLC, then a
+/// deterministic `owner_node_id` lexicographic tie-break when the HLCs are
+/// exactly equal) so two routers merging the same pair always agree,
+/// regardless of argument order.
+pub fn resolve_service_conflict_v2<'a>(
+    a: &'a ServiceEntryV2,
+    b: &'a ServiceEntryV2,
+) -> (&'a ServiceEntryV2, &'a ServiceEntryV2) {
+    match a.first_claimed_at.cmp(&b.first_claimed_at) {
+        Ordering::Less => (a, b),
+        Ordering::Greater => (b, a),
+        Ordering::Equal => {
+            // Identical first-claim HLC → tie-break on owner_node_id.
+            if a.owner_node_id <= b.owner_node_id {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        }
+    }
+}
+
+/// Owner-bound merge for v2 service records (bead e21.2.1) — the upgrade over
+/// [`merge_service`]'s pure LWW, per PRD FR18-FR20.
+///
+/// - Same `owner_node_id`, newer `updated_at` → `Updated` (the owner is
+///   refreshing its own entry; `first_claimed_at` is never touched by a
+///   refresh).
+/// - Same owner, older-or-equal `updated_at` → `Unchanged`.
+/// - Different owner → `Conflict`, resolved first-writer-wins on the
+///   *original* `first_claimed_at` (not `updated_at`), so that an owner
+///   refreshing its entry can neither weaken nor strengthen its claim.
+///   Deterministic `owner_node_id` tie-break when `first_claimed_at` is
+///   exactly equal. The result is the same regardless of which side is
+///   `local` vs `incoming` — see [`resolve_service_conflict_v2`].
+///
+/// `name` is the service's map key (not stored on the entry, same convention
+/// as [`merge_service`]); entries for
+/// [reserved names](crate::crdt::service::RESERVED_SERVICE_NAMES) are
+/// rejected outright, before any comparison against `local`.
+///
+/// Note: as with the other merge fns, this does not enforce that `local` was
+/// looked up by `name` — the caller must do that lookup first.
+pub fn merge_service_v2(
+    name: &str,
+    local: Option<&ServiceEntryV2>,
+    incoming: &ServiceEntryV2,
+) -> Result<MergeResult<ServiceEntryV2>, ReservedServiceName> {
+    if is_reserved_service_name(name) {
+        return Err(ReservedServiceName(name.to_string()));
+    }
+    Ok(match local {
+        None => MergeResult::Inserted,
+        Some(existing) => {
+            if existing.owner_node_id == incoming.owner_node_id {
+                match incoming.updated_at.cmp(&existing.updated_at) {
+                    Ordering::Greater => MergeResult::Updated,
+                    _ => MergeResult::Unchanged,
+                }
+            } else {
+                let (winner, loser) = resolve_service_conflict_v2(existing, incoming);
+                MergeResult::Conflict { winner: winner.clone(), loser: loser.clone() }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -452,5 +528,209 @@ mod tests {
         let local = service("printer", 631, 1_000, 0, "aaa");
         let incoming = service("printer", 9100, 1_000, 0, "zzz");
         assert!(matches!(merge_service(Some(&local), &incoming), MergeResult::Updated));
+    }
+
+    // --- merge_service_v2 tests (bead e21.2.1) ---
+
+    fn service_v2(
+        owner: &str,
+        first_claimed: (u64, u32, &str),
+        updated: (u64, u32, &str),
+    ) -> ServiceEntryV2 {
+        ServiceEntryV2 {
+            owner_node_id: owner.to_string(),
+            first_claimed_at: HLC {
+                wall_clock: first_claimed.0,
+                counter: first_claimed.1,
+                node_id: first_claimed.2.to_string(),
+            },
+            updated_at: HLC {
+                wall_clock: updated.0,
+                counter: updated.1,
+                node_id: updated.2.to_string(),
+            },
+            ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 50)),
+            port: 631,
+            protocol: "_ipp._tcp".to_string(),
+            txt: BTreeMap::new(),
+            host_mac: Some([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]),
+        }
+    }
+
+    #[test]
+    fn v2_inserted_when_no_local() {
+        let incoming = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        assert!(matches!(
+            merge_service_v2("printer", None, &incoming),
+            Ok(MergeResult::Inserted)
+        ));
+    }
+
+    // -- same owner, older/newer/equal updated_at --
+
+    #[test]
+    fn v2_same_owner_newer_updated_at_is_updated() {
+        let local = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        let incoming = service_v2("router-a", (1_000, 0, "router-a"), (2_000, 0, "router-a"));
+        assert!(matches!(
+            merge_service_v2("printer", Some(&local), &incoming),
+            Ok(MergeResult::Updated)
+        ));
+    }
+
+    #[test]
+    fn v2_same_owner_older_updated_at_is_unchanged() {
+        let local = service_v2("router-a", (1_000, 0, "router-a"), (2_000, 0, "router-a"));
+        let incoming = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        assert!(matches!(
+            merge_service_v2("printer", Some(&local), &incoming),
+            Ok(MergeResult::Unchanged)
+        ));
+    }
+
+    #[test]
+    fn v2_same_owner_equal_updated_at_is_unchanged() {
+        let entry = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        assert!(matches!(
+            merge_service_v2("printer", Some(&entry), &entry),
+            Ok(MergeResult::Unchanged)
+        ));
+    }
+
+    #[test]
+    fn v2_same_owner_refresh_does_not_change_first_claimed_at() {
+        // Refreshing bumps updated_at but must leave first_claimed_at alone;
+        // the merge fn doesn't mutate first_claimed_at itself, but a refresh
+        // performed by the same owner should still merge as Updated even
+        // when the incoming refresh's own first_claimed_at field matches the
+        // original (the caller is responsible for carrying it forward
+        // unchanged — this test documents that expectation).
+        let local = service_v2("router-a", (500, 0, "router-a"), (1_000, 0, "router-a"));
+        let incoming = service_v2("router-a", (500, 0, "router-a"), (2_000, 0, "router-a"));
+        assert_eq!(local.first_claimed_at, incoming.first_claimed_at);
+        assert!(matches!(
+            merge_service_v2("printer", Some(&local), &incoming),
+            Ok(MergeResult::Updated)
+        ));
+    }
+
+    // -- different owner: conflict resolved on first_claimed_at --
+
+    #[test]
+    fn v2_different_owner_lower_first_claimed_wins() {
+        let local = service_v2("router-a", (1_000, 0, "router-a"), (5_000, 0, "router-a"));
+        let incoming = service_v2("router-b", (2_000, 0, "router-b"), (2_000, 0, "router-b"));
+        match merge_service_v2("printer", Some(&local), &incoming) {
+            Ok(MergeResult::Conflict { winner, loser }) => {
+                assert_eq!(winner.owner_node_id, "router-a");
+                assert_eq!(loser.owner_node_id, "router-b");
+            }
+            other => panic!("expected Conflict, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v2_different_owner_ignores_updated_at_uses_first_claimed_at() {
+        // router-b has a much newer updated_at (a later refresh) but its
+        // first_claimed_at is still later than router-a's original claim, so
+        // router-a (the earlier claimant) must still win.
+        let local = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        let incoming = service_v2("router-b", (9_000, 0, "router-b"), (100_000, 0, "router-b"));
+        match merge_service_v2("printer", Some(&local), &incoming) {
+            Ok(MergeResult::Conflict { winner, loser }) => {
+                assert_eq!(winner.owner_node_id, "router-a");
+                assert_eq!(loser.owner_node_id, "router-b");
+            }
+            other => panic!("expected Conflict, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn v2_different_owner_equal_first_claimed_tiebreaks_on_owner_node_id() {
+        let a = service_v2("aaa-owner", (1_000, 0, "shared-node"), (1_000, 0, "shared-node"));
+        let b = service_v2("zzz-owner", (1_000, 0, "shared-node"), (1_000, 0, "shared-node"));
+        match merge_service_v2("printer", Some(&a), &b) {
+            Ok(MergeResult::Conflict { winner, loser }) => {
+                assert_eq!(winner.owner_node_id, "aaa-owner");
+                assert_eq!(loser.owner_node_id, "zzz-owner");
+            }
+            other => panic!("expected Conflict, got {:?}", other),
+        }
+    }
+
+    // -- reserved names --
+
+    #[test]
+    fn v2_reserved_name_rejected_case_insensitively() {
+        let incoming = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        assert_eq!(
+            merge_service_v2("hello", None, &incoming),
+            Err(ReservedServiceName("hello".to_string()))
+        );
+        assert_eq!(
+            merge_service_v2("HELLO", None, &incoming),
+            Err(ReservedServiceName("HELLO".to_string()))
+        );
+        assert_eq!(
+            merge_service_v2("Id", None, &incoming),
+            Err(ReservedServiceName("Id".to_string()))
+        );
+        assert!(merge_service_v2("printer", None, &incoming).is_ok());
+    }
+
+    #[test]
+    fn v2_reserved_name_rejected_even_with_local_present() {
+        // Reserved-name rejection happens before any local/incoming
+        // comparison, regardless of whether a local entry exists.
+        let local = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        let incoming = service_v2("router-b", (2_000, 0, "router-b"), (2_000, 0, "router-b"));
+        assert_eq!(
+            merge_service_v2("hello", Some(&local), &incoming),
+            Err(ReservedServiceName("hello".to_string()))
+        );
+    }
+
+    // -- argument-order symmetry property --
+    //
+    // For every (a, b) pair, merging a-as-local/b-as-incoming and
+    // b-as-local/a-as-incoming must select the same surviving entry (NFR7:
+    // every node computes the identical winner regardless of gossip order).
+
+    fn assert_symmetric_conflict(a: &ServiceEntryV2, b: &ServiceEntryV2) {
+        let a_local = merge_service_v2("printer", Some(a), b).unwrap();
+        let b_local = merge_service_v2("printer", Some(b), a).unwrap();
+        let winner_from_a_local = match a_local {
+            MergeResult::Conflict { winner, .. } => winner.owner_node_id,
+            other => panic!("expected Conflict, got {:?}", other),
+        };
+        let winner_from_b_local = match b_local {
+            MergeResult::Conflict { winner, .. } => winner.owner_node_id,
+            other => panic!("expected Conflict, got {:?}", other),
+        };
+        assert_eq!(winner_from_a_local, winner_from_b_local);
+    }
+
+    #[test]
+    fn v2_conflict_resolution_is_symmetric_distinct_first_claimed() {
+        let a = service_v2("router-a", (1_000, 0, "router-a"), (5_000, 0, "router-a"));
+        let b = service_v2("router-b", (2_000, 0, "router-b"), (2_000, 0, "router-b"));
+        assert_symmetric_conflict(&a, &b);
+    }
+
+    #[test]
+    fn v2_conflict_resolution_is_symmetric_equal_first_claimed() {
+        let a = service_v2("aaa-owner", (1_000, 0, "shared-node"), (1_000, 0, "shared-node"));
+        let b = service_v2("zzz-owner", (1_000, 0, "shared-node"), (9_000, 0, "shared-node"));
+        assert_symmetric_conflict(&a, &b);
+    }
+
+    #[test]
+    fn v2_resolve_service_conflict_v2_symmetric_helper() {
+        let a = service_v2("router-a", (1_000, 0, "router-a"), (1_000, 0, "router-a"));
+        let b = service_v2("router-b", (2_000, 0, "router-b"), (2_000, 0, "router-b"));
+        let (w1, l1) = resolve_service_conflict_v2(&a, &b);
+        let (w2, l2) = resolve_service_conflict_v2(&b, &a);
+        assert_eq!(w1.owner_node_id, w2.owner_node_id);
+        assert_eq!(l1.owner_node_id, l2.owner_node_id);
     }
 }
