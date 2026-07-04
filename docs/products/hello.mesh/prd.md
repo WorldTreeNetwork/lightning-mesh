@@ -24,11 +24,14 @@ A key-based mesh is invisible and unusable to the one device that shows up most 
 
 **Journey 2 — Acquire a soft identity (Venue attendee).** The same attendee taps "create an identity." The browser generates an Ed25519 keypair in pure JavaScript (the page is an insecure context, so WebCrypto is unavailable), stores it locally, requests a challenge, signs it, and submits it. The page confirms the identity and shows an honest label that this is a soft, browser-held key. Their identity appears in this node's directory. Outcome: a one-tap, self-sovereign-ish identity with no install, honestly scoped.
 
-**Journey 3 — Plug in a router (Node operator).** Mid-event, the operator plugs in another router. It joins the mesh and, within seconds, appears in the directory on every attendee's open `hello.mesh` page. Outcome: the mesh's growth is visible live, with zero configuration — the demo's headline moment.
+**Journey 3 — Plug in a router (Node operator).** Mid-event, the operator plugs in another router. It joins the mesh and, within seconds, appears in the directory on every attendee's open `hello.mesh` page. Outcome: the mesh's growth is visible live, with zero configuration.
+
+**Journey 4 — A friend comes online, a remote service is found (the gold).** Two attendees are on *different* nodes of the mesh. One creates an identity at their node's front desk; within seconds it appears in the other attendee's directory, on a different node, reached across the 802.11s island (and, across sites, over the iroh overlay). Separately, someone publishes a service (e.g. `wiki.mesh`) at one node; it becomes visible and reachable from every other node's directory. Outcome: the mesh makes distant people and services present — the actual product, and the demo's headline moment. A directory that showed only the local node would be a Raspberry Pi in a closet; this is what makes it a mesh.
 
 ## Success Metrics
 
-- **Demo landing (headline, binary):** at DWeb, on stage, a phone loads `hello.mesh` with no internet, the neighbor directory populates, a newly plugged-in node appears in it live, and one-tap soft identity completes — observed end-to-end in front of the audience. Target: all four occur in a single run; timeframe: week of 2026-07-06.
+- **Demo landing (headline, binary):** at DWeb, on stage, an identity or service created at one node becomes visible in the `hello.mesh` directory at a *different* node — reached across the 802.11s island — with no internet; and a newly plugged-in node appears live. Target: cross-node propagation observed end-to-end in a single run; timeframe: week of 2026-07-06. (Cross-site propagation over the iroh overlay is a stretch within the same run.)
+- **Cross-mesh propagation latency:** an identity or service created at node A appears in `directory.json` at node B within 15 seconds across the 802.11s island. Measured by timestamped creation vs. remote API poll; timeframe: at MVP.
 - **Page load:** initial `hello.mesh` load completes in under 2 seconds over local WiFi on the target aarch64 router (mt7986-class). Measured with browser devtools / `curl` timing; timeframe: at MVP.
 - **Directory freshness:** a node join or leave is reflected in `/api/directory` within 10 seconds. Measured by timestamped join/leave vs. API poll; timeframe: at MVP.
 - **Concurrency:** a single node's front desk serves at least 50 concurrent browser clients (static page + directory poll) with zero 5xx responses. Measured by a load-generation script; timeframe: at MVP.
@@ -38,7 +41,7 @@ A key-based mesh is invisible and unusable to the one device that shows up most 
 
 FR1. [MVP] The system shall serve a static HTML/CSS/JS bundle over HTTP from each node.
 FR2. [MVP] The system shall load and execute the bundle with no internet connectivity, referencing no external hosts.
-FR3. [MVP] The system shall render a directory of mesh neighbors (nodes currently present) obtained from the directory API.
+FR3. [MVP] The system shall render a directory of mesh-wide neighbors (all nodes currently present across the mesh, not only the local node) obtained from the directory API.
 FR4. [MVP] The system shall display the local node's own summary (node id, claimed client subnet, backhaul address) as a "you are here" header.
 FR5. [MVP] The system shall provide an anonymous path that grants full page and directory access without creating any identity.
 FR6. [MVP] The system shall generate an Ed25519 keypair in the browser using a pure-JavaScript implementation (not WebCrypto) on explicit user request, and store it in browser-local storage.
@@ -55,10 +58,12 @@ FR16. [MVP] The mesh daemon shall periodically write a read-only `directory.json
 FR17. [MVP] The `directory.json` document shall include a schema version field.
 FR18. [MVP] The front desk shall be reachable by the node's LAN IP address independent of `.mesh` name resolution.
 FR19. [MVP] The server shall hold no user private key and shall perform no verification of any server, certificate authority, or remote issuer.
-FR20. [Growth] The mesh daemon shall include published services (from the service registry) in `directory.json` when the registry is populated.
-FR21. [Growth] The front desk shall render published services in the directory, each with name, address, and port.
-FR22. [Growth] The mesh daemon shall ingest identity submissions from the spool directory and replicate them into the `/users` gossip records so an identity created at one node appears in other nodes' directories.
+FR20. [MVP] The mesh daemon shall replicate published services across the mesh via gossip and include every mesh-wide service in `directory.json`.
+FR21. [MVP] The front desk shall render mesh-wide published services in the directory, each with name, address, and port.
+FR22. [MVP] The mesh daemon shall ingest identity submissions from the spool directory and replicate them into the `/users` gossip records so an identity created at one node appears in other nodes' directories across the 802.11s island.
+FR28. [MVP] The directory shall present identities and services that originate at remote nodes (not only the local node), sourced from converged gossip state.
 FR23. [Growth] The system shall advertise the front-desk URL via the RFC 8910 DHCP Captive Portal API option so the OS presents a non-blocking affordance.
+FR29. [Growth] The mesh daemon shall replicate identities and services across sites over the iroh overlay so they appear in remote-site directories.
 FR24. [Vision] The system shall support signing in against a user-chosen custodial signing service (rung 3) via an OAuth/OIDC-style redirect.
 FR25. [Vision] The system shall accept hard-custody identities from a browser extension (rung 1e) or native app (rung 4) linked via an on-screen QR, ticket, or NFC.
 FR26. [Vision] The system shall issue a stateless, service-verifiable token to other `.mesh` origins so a single browser identity is usable across mesh sites.
@@ -80,15 +85,16 @@ NFR8. [Portability] The server builds and runs as a standalone workspace binary 
 ### In Scope
 - A SvelteKit static-site-generated (SSG) frontend bundle, served over plain HTTP, offline-capable.
 - A new `crates/mjolnir-hello` server binary serving the embedded bundle plus a read-only JSON API and one identity-ingest endpoint.
-- The neighbor directory rendered from mesh state available today (address book + subnet claims).
-- Anonymous access and one-tap soft (browser-held, pure-JS) rung-1 identity, held node-local.
+- A **mesh-wide** directory: neighbors, identities, and services that originate at any node, sourced from converged gossip state (across the 802.11s island).
+- Anonymous access and one-tap soft (browser-held, pure-JS) rung-1 identity, propagated mesh-wide via `/users` gossip.
+- Mesh-wide service replication and rendering (the focused gossip/registry slice of `e21` needed for the directory).
 - Two additive daemon seams: a written `directory.json` projection and a read identity spool directory.
 - LAN-IP reachability independent of `.mesh` name resolution.
 
 ### Out of Scope
 - `.mesh` name resolution / DNS propagation and the RFC 8910 advertisement (owned by a separate track; FR23 depends on it).
-- Services in the directory (FR20, FR21 — depends on the `e21` service-registry work).
-- Mesh-wide gossip propagation of user identities (FR22 — the spool-ingest write path).
+- Cross-*site* replication over the iroh overlay (FR29) as a committed MVP item — pursued as a demo stretch, since gossip already spans sites, but not a gate.
+- The full `e21` service-mesh architecture beyond what the directory needs (conflict-resolution depth, ACLs).
 - Custodial sign-in (FR24), browser-extension and app hard-custody linking (FR25), cross-origin tokens for other `.mesh` sites (FR26), and gated mode (FR27).
 - Non-extractable WebCrypto keys (unavailable in the plain-HTTP insecure context).
 
@@ -100,14 +106,16 @@ NFR8. [Portability] The server builds and runs as a standalone workspace binary 
 - FR5–FR8 — Anonymous access; one-tap soft browser identity with honest custody labeling.
 - FR9–FR13 — The read-only JSON API plus challenge and identity-ingest endpoints.
 - FR14–FR15 — Server reads `directory.json`; runs independently of the daemon.
-- FR16–FR17 — Daemon writes the versioned `directory.json` neighbor projection.
+- FR16–FR17 — Daemon writes the versioned `directory.json` projection.
 - FR18 — LAN-IP reachability without `.mesh` resolution.
 - FR19 — No private-key custody and no server/CA verification.
+- FR20–FR21 — Mesh-wide services replicated via gossip and rendered in the directory.
+- FR22 — Spool ingest replicating identities into mesh-wide `/users` gossip (the "friend comes online" gold).
+- FR28 — Directory presents remote-origin identities and services from converged gossip.
 
 ### Growth
-- FR20–FR21 — Services in `directory.json` and rendered in the directory (`e21`).
-- FR22 — Spool ingest replicating identities into mesh-wide `/users` gossip.
 - FR23 — RFC 8910 non-blocking affordance advertisement.
+- FR29 — Cross-site (over-iroh) replication into remote-site directories (demo stretch; likely near-free since gossip already spans sites).
 
 ### Vision
 - FR24 — Custodial (rung 3) OAuth/OIDC sign-in.
@@ -121,15 +129,16 @@ NFR8. [Portability] The server builds and runs as a standalone workspace binary 
 - **Insecure context:** the front desk is served over plain HTTP, which is not a secure context; WebCrypto, Service Workers, and WebTransport are therefore unavailable, so MVP identity uses pure-JS Ed25519 only.
 - **Offline-first:** the venue may have no internet; the bundle references no external hosts.
 - **Daemon stability:** `mjolnir-meshd` must remain untouched except for the two additive, non-breaking file seams.
-- **Timeline:** the DWeb demo the week of 2026-07-06 is a hard deadline that caps MVP scope.
+- **Timeline:** the DWeb demo the week of 2026-07-06 is a hard deadline. The MVP is scoped so that cross-mesh propagation *across the 802.11s island* is the committed target and cross-*site* over iroh is a stretch. This is a deliberate tension: mesh-wide propagation is the product (a node-local directory is worthless), so it is in MVP even though it pulls the `/users` gossip path (`rp9`) and a service-registry slice (`e21`) onto the critical path.
+- **Critical-path dependency (foundations):** MVP now rides on gossiped `/users` records and gossiped service records. The gossip/CRDT *transport* is already built and field-validated (subnet claims converge mesh-wide, including cross-site), so the remaining work is record-type definition + spool ingest + directory wiring — not new distributed-systems transport.
 - **Cross-track dependency:** `.mesh` name resolution is designed and owned by a separate track; MVP must not block on it (hence FR18).
 
 ## Assumptions & Risks
 
 - **[Assumption] The daemon can cheaply project its live gossip snapshot to `directory.json`.** Impact if false: the read seam needs a heavier mechanism. Mitigation: the daemon already snapshots and atomically persists claims and the address book; reuse that pattern. (Low risk — validated by existing `persist_*` code.)
 - **[Risk — data] The neighbor list may be sparse until multi-hop discovery (`0yb`) is complete.** Impact: a thin directory at the demo. Mitigation: the address book is already seeded and persisted today; validate directory density on the real fleet before the demo.
-- **[Risk — dependency] Services in the directory depend on `e21`, which is unbuilt.** Impact: no services shown. Mitigation: FR20/FR21 are Growth; the MVP demo degrades gracefully to neighbors + identity, which is still a strong stage moment.
-- **[Risk — dependency] Mesh-wide identity propagation depends on the spool-ingest write path (`e21`/`rp9`).** Impact: a created identity may not appear on other nodes. Mitigation: MVP holds identities node-local (FR22 is Growth); decide early whether the demo needs cross-node identity visibility.
+- **[Risk — critical path] Mesh-wide propagation is now MVP and depends on unbuilt record types (`/users` per `rp9`; a service-registry slice per `e21`).** Impact: if these slip, the headline gold (a friend appearing across the mesh, a remote service found) does not land. Mitigation: the gossip transport is already validated mesh-wide, so scope the demo to island-local propagation over that proven layer and treat the record-type + wiring work as the focused critical path; cut cross-site (FR29) to a stretch. This is the single biggest schedule risk and should be de-risked first with a spike that gossips one new record type end-to-end.
+- **[Risk — scope] The service slice needed for the directory could pull in the full `e21` architecture.** Impact: scope creep. Mitigation: scope to replicate + render service entries only; defer conflict-resolution depth and ACLs.
 - **[Risk — dependency] `.mesh` resolution is a separate track that could slip.** Impact: the front desk is reachable only by LAN IP, weakening the `hello.mesh` UX. Mitigation: FR18 keeps MVP functional by IP; signage can carry the IP as a fallback.
 - **[Risk — technical] Binary size with embedded assets plus the HTTP library on aarch64 is unmeasured.** Impact: image bloat. Mitigation: measure early; fall back to serving assets from a staged directory if the embed exceeds NFR5.
 - **[Assumption] Pure-JS Ed25519 with `crypto.getRandomValues` works across stock mobile browsers in an insecure context.** Impact if false: no soft identity on some devices. Mitigation: `getRandomValues` is available in insecure contexts; verify on representative venue devices before the demo.
@@ -139,12 +148,13 @@ NFR8. [Portability] The server builds and runs as a standalone workspace binary 
 - What is the daemon's write cadence for `directory.json` (on-change vs. fixed interval), and does the server stat-poll the file or does the daemon signal freshness?
 - What is the actual binary-size cost of `rust-embed` plus the chosen HTTP library on the target, and does it fit NFR5?
 - For the spool-ingest write path (Growth), does the daemon watch the directory (inotify) or sweep on a timer, and what are the validation and de-duplication rules?
-- Is node-local identity presence sufficient for the demo, or does the headline moment require cross-node identity visibility (promoting FR22 into the demo path)?
+- **Decided (2026-07-04):** cross-mesh propagation is required — node-local is out. Open sub-question: does the demo commit to cross-*site* (over-iroh, FR29) or hold it as a stretch? Current call: stretch.
+- What is the smallest spike that proves one new gossip record type (`/users`) propagating end-to-end across two nodes, to de-risk the critical path first?
 - Is the 50-concurrent-client target (NFR3) realistic on the target router hardware, or should it be recalibrated after a first measurement?
 
 ## Existing System Context
 
-- **`mjolnir-meshd`** (`crates/mjolnir-mesh`, `daemon` feature) — the OpenWrt router daemon: iroh transport, gossip, CRDT. It persists `claims.state` and the address book as postcard binaries via atomic `persist_claims`/`persist_addr_book`; it has no HTTP server today. A `status` subcommand provides a read-only inspection precedent.
+- **`mjolnir-meshd`** (`crates/mjolnir-mesh`, `daemon` feature) — the OpenWrt router daemon: iroh transport, gossip, CRDT. It persists `claims.state` and the address book as postcard binaries via atomic `persist_claims`/`persist_addr_book`; it has no HTTP server today. A `status` subcommand provides a read-only inspection precedent. **The CRDT gossip layer is field-validated to converge mesh-wide, including cross-site over the iroh overlay** (subnet claims propagate across the fleet today) — the substrate the new `/users` and service records ride, so cross-mesh propagation reuses proven transport rather than building new.
 - **`mjolnir-mesh` library** — exposes iroh-free CRDT types (`AddrBook`/`PeerAddrEntry`, `SubnetClaim`, `ServiceEntry`, `DnsEntry`); `mjolnir-hello` will depend on these for decoding and serving state without pulling the daemon's iroh stack.
 - **OpenWrt integration** — procd services, `/etc/config/mjolnir` UCI configuration, and `uhttpd` available on the box (not used; the front desk is self-serving).
 - **Design docs & tracking** — `docs/network-coordination/hello-mesh-service.md` (this build's implementation design), `docs/network-coordination/user-identity.md` (the identity spec, bead `rp9`), and beads epic `bc7` with children `gad` (frontend), `bl2` (server), `avs` (`directory.json` seam), and `p6u` (spool ingest).
