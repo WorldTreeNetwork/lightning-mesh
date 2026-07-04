@@ -73,12 +73,19 @@ name), and "the front desk is always the node you're standing next to" is the
 product behavior. The reserved list is a compiled constant; the merge layer
 rejects CRDT claims on reserved names outright.
 
-Everything else is arbitrated the same way subnets are: **first-writer-wins on
-HLC**. Two nodes publish `wiki.mesh` during a partition → when gossip meets, both
-run the identical rule, the earlier HLC wins everywhere, the loser's daemon
-surfaces a loud "name lost to conflict" and stops answering. No registrar, no
-vote. Squatting is real and accepted for now — the durable answer is identity
-(below), not hierarchy.
+Everything else is **owner-bound** (decided in the PRD pass, 2026-07-03 — the
+TOFU/addr-book pattern applied to names): the first claim binds a name to its
+`owner_node_id`; updates are accepted only from that key (newer HLC); a
+*different* key claiming the name is a `Conflict`, resolved first-writer-wins on
+the **first-claim** HLC — the original owner keeps the name, deterministic
+node-id tiebreak for true partition races. The loser's daemon stops answering
+immediately, `status` shows the lost name with the winner's node-id, and a
+re-publish attempt errors naming the winner. Provenance is visible everywhere:
+`status` and the hello.mesh directory show the owner's key next to every name.
+No registrar, no vote. Squatting is still possible (first claim is cheap) — the
+durable answer is web-of-trust identity arbitration, punted to its own bead
+with the discovered needs recorded. Full requirements:
+`../prd-mesh-naming-first-stone.md`.
 
 ## Local *and* internet access: free, by construction
 
