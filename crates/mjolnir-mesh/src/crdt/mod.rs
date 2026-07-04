@@ -5,6 +5,7 @@ pub mod lease;
 pub mod merge;
 pub mod peer_addr;
 pub mod service;
+pub mod service_apply;
 pub mod subnet;
 pub mod sync;
 pub mod users;

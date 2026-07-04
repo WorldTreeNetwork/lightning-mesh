@@ -95,6 +95,28 @@ pub struct ServiceEntryV2 {
 /// record. Same key convention as [`ServiceBook`].
 pub type ServiceBookV2 = BTreeMap<String, ServiceEntryV2>;
 
+/// Tombstone recording that `owner_node_id` unpublished a v2 service name at
+/// `hlc` (bead e21.2.2, decision D-004).
+///
+/// Tombstones are retained indefinitely once written — GC is deferred to
+/// bead 99f, so unbounded retention is accepted for now — and gate future
+/// publishes to the same name via
+/// [`apply_service_publish_v2`](crate::crdt::service_apply::apply_service_publish_v2):
+/// a publish older than the tombstone's `hlc` loses (FR31), and only the
+/// SAME `owner_node_id` publishing with a newer `hlc` than the tombstone may
+/// revive the name. A different owner cannot claim a tombstoned name until
+/// the tombstone is GC'd — the owner-bound TOFU model from v2's merge
+/// semantics extends past unpublish, not just past publish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceTombstone {
+    pub owner_node_id: String,
+    pub hlc: HLC,
+}
+
+/// Tombstone store keyed by service name, same convention as
+/// [`ServiceBookV2`].
+pub type ServiceTombstoneBook = BTreeMap<String, ServiceTombstone>;
+
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
@@ -186,6 +208,19 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&original).unwrap();
         let decoded: ServiceEntryV2 = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(original, decoded);
+    }
+
+    // --- ServiceTombstone (bead e21.2.2) ---
+
+    #[test]
+    fn tombstone_postcard_roundtrip() {
+        let original = ServiceTombstone {
+            owner_node_id: "router-a-node-id".to_string(),
+            hlc: hlc(1_700_000_020_000, 0, "router-a-node-id"),
+        };
+        let bytes = postcard::to_allocvec(&original).unwrap();
+        let decoded: ServiceTombstone = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(original, decoded);
     }
 
