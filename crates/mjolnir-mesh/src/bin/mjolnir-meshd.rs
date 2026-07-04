@@ -627,6 +627,22 @@ async fn run_mesh(
     backhaul_ip: Ipv4Addr,
     restored_claims: HashMap<String, SubnetClaim>,
 ) -> Result<()> {
+    // .mesh DNS responder (e21.1.1): bind BEFORE any UCI/dnsmasq reconcile
+    // (FR14) — first thing in `run_mesh` so dnsmasq's `.mesh` upstream
+    // (`server=/mesh/127.0.0.1#5335`) is answerable the instant it's
+    // configured, however early that reconcile step lands. Runs
+    // unconditionally under the daemon feature; NoAnswers is this story's
+    // table, replaced with a CRDT-backed one in e21.1.2/.3.
+    let dns_responder = mjolnir_mesh::dns_responder::start(
+        SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            mjolnir_mesh::dns_responder::DEFAULT_DNS_PORT,
+        ),
+        Arc::new(mjolnir_mesh::dns_responder::NoAnswers),
+    )
+    .await
+    .context("binding .mesh DNS responder")?;
+
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
     // NB: the effective IPv4 backhaul address (`backhaul_ip`, claim-aware per
@@ -1160,6 +1176,7 @@ async fn run_mesh(
     if let Some(t) = &rejoin_task {
         t.abort();
     }
+    dns_responder.abort();
     babel_task.abort();
     // babeld runs as its own procd service (mjolnir-babeld); intentionally NOT
     // stopped here so a meshd restart doesn't churn it (mjolnir-mesh-m8t).

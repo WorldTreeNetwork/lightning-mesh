@@ -11,6 +11,8 @@
 //! - [`tun`] — per-peer TUN lifecycle and Iroh-datagram encap/decap loops
 //! - [`babel`] — babeld config rendering (babeld's process lifecycle is owned by
 //!   procd via the `mjolnir-babeld` service, not this crate — mjolnir-mesh-m8t)
+//! - [`dns_responder`] (daemon feature) — the `.mesh` zone UDP responder
+//!   (sprint-002 e21.1.x)
 //!
 //! See `docs/network-coordination/` in the repo root for the design specs.
 
@@ -18,6 +20,8 @@ pub mod alloc;
 pub mod babel;
 pub mod claim_cooldown;
 pub mod crdt;
+#[cfg(feature = "daemon")]
+pub mod dns_responder;
 pub mod roster;
 pub mod tun;
 
