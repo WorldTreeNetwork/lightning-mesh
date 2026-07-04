@@ -83,10 +83,28 @@ gad ─┬─▶ S5
 Parallel at start (once `2xd` passes): Track A (S1/S2), `bl2`, and `gad` run
 concurrently. `gad`/frontend can develop against a mocked API until S3/S4 land.
 
+## Status (2026-07-04)
+
+- **Spike `2xd`: DONE ✅** (commit `ed011d2`). The `/users` record type, gossip
+  `UserUpdate`, `merge_user()` LWW, and the e2e convergence/LWW/stale-discard
+  tests all landed in the **lib** — Mac-testable, no daemon feature. `S1` (`zhg`)
+  is therefore shrunk to **daemon wiring only** (apply `UserUpdate` → `UserBook`
+  + anti-entropy re-broadcast in the meshd run loop).
+- **Ready now:** `zhg` (S1 wiring), `7jb` (S2), `bl2`, `gad`.
+- **Build constraint (`hg0`):** `mjolnir-meshd` is **Linux-only** (deep
+  rtnetlink/tun deps) — daemon-track stories build/test on Linux or via
+  `deploy/openwrt/build.sh`; their record/merge/projection *logic* lives in the
+  lib and is Mac-testable (as the spike proved). `mjolnir-hello` + frontend build
+  on any host (the lib is iroh-free). `hg0`'s "rename" diagnosis was wrong (a
+  platform-cfg papercut, not a regression); left for the user to wontfix-by-design.
+- **Field validation** of `/users` on physical 802.11s is filed as `2uq` (the
+  analog of what `0yb` got for the address book), depending on the daemon-wiring
+  stories.
+
 ## Readiness
 
-- **Gate:** nothing executes until spike `2xd` confirms `/users` gossips A→B and
-  the user confirms. If `2xd` struggles, fall back to talk-leads + island-local
+- **Gate:** the spike gate is cleared. Execution proceeds on user confirmation.
+  If daemon wiring hits trouble, the fallback remains: talk leads + island-local
   directory-only demo (drop S1/p6u/S2 from the demo path).
 - **FR coverage:** every MVP FR (FR1–22, FR28) maps to ≥1 story — see the
   traceability note on epic `bc7`.
