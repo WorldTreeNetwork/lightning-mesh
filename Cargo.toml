@@ -11,25 +11,9 @@ license = "MIT OR Apache-2.0"
 # iroh networking
 iroh = "1.0"
 iroh-gossip = "0.101"
-web-transport-iroh = "0.6"
-
-# MoQ protocol
-moq-lite = "0.15"
-
-# audio
-opus = "0.3"
-cpal = "0.17"
-rtrb = "0.3"
-
-# pure-Rust ONNX inference for neural PLC backends. Sonos's runtime —
-# designed for on-device real-time DSP, no dynamic library, smaller op
-# coverage than ort but a better fit for the audio thread's allocation
-# and latency constraints. See docs/research/audio-models-for-neural-plc/.
-tract-onnx = { version = "0.22", default-features = false }
 
 # async runtime
 tokio = { version = "1", features = ["full"] }
-n0-future = "0.3"
 
 # serialization
 postcard = { version = "1", features = ["alloc"] }

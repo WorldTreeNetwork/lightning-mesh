@@ -42,14 +42,6 @@ for how this composes with the broader Mjolnir microVM platform.
 ├──────────────────────────────────────────────────────────────┤
 │  mjolnir-meshctl → meshctl                                    │
 │  Operator-side RouterOS reconciler                            │
-├──────────────────────────────────────────────────────────────┤
-│  mjolnir-node → mjolnir-mesh (binary)                         │
-│  Desktop/VM mesh daemon: membership, gossip, room/peer       │
-│  management, transport setup                                  │
-├──────────────────────────────────────────────────────────────┤
-│  mjolnir-audio · mjolnir-media · mjolnir-moq                  │
-│  Voice/media subsystem (dormant): Opus pipeline, PLC         │
-│  backends, jitter buffer, Media-over-QUIC scaffolding        │
 └──────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -62,34 +54,11 @@ for how this composes with the broader Mjolnir microVM platform.
 |------------------------------------------------|-----------------|----------------------------------------------------------------------|
 | [`mjolnir-mesh`](crates/mjolnir-mesh)          | `mjolnir-meshd` | **The deployed OpenWrt router daemon** — CRDT, gossip, babel, overlay TUN |
 | [`mjolnir-meshctl`](crates/mjolnir-meshctl)    | `meshctl`       | Operator-side RouterOS reconciler                                     |
-| [`mjolnir-node`](crates/mjolnir-node)          | `mjolnir-mesh`  | Desktop/VM mesh daemon — membership, rooms, gossip, transport wiring  |
-| [`mjolnir-audio`](crates/mjolnir-audio)        | —               | Voice pipeline — Opus codec, PLC backends, mixer, capture/playback    |
-| [`mjolnir-media`](crates/mjolnir-media)        | —               | Transport-agnostic media primitives — jitter, `Recover`, self-healing buffer |
-| [`mjolnir-moq`](crates/mjolnir-moq)            | —               | Media-over-QUIC broadcast transport (one-to-many)                     |
 
-Note the naming wrinkle: the crate `mjolnir-node` builds a binary named
-`mjolnir-mesh`, while the crate `mjolnir-mesh` builds `mjolnir-meshd` (the
-router daemon). When this README names a binary, it means the binary.
-
-## The audio side-quest
-
-Voice was the original entry point into this project — a decentralized mesh
-is exactly the network where real-time audio breaks in ways single-uplink
-VoIP never sees, and building for that adversarial wire produced the jitter
-buffer, the `Recover` decode-and-conceal seam, and the PLC backend designs.
-That track is now **dormant**: the mesh data plane is the product, and the
-audio crates are a subsystem that will matter again once the service-mesh
-phase gives them a network worth streaming over.
-
-What exists: a sequence-keyed jitter buffer with a self-healing pull path
-([`mjolnir-media`](crates/mjolnir-media), design in
-[`docs/architecture/self-healing-jitter-buffer.md`](docs/architecture/self-healing-jitter-buffer.md)),
-Opus decode with FEC and codec-native concealment behind the `Recover` trait
-([`mjolnir-audio`](crates/mjolnir-audio)), and a forward-looking design for
-long-burst neural concealment
-([`docs/architecture/neural-bridge-plc.md`](docs/architecture/neural-bridge-plc.md),
-survey in
-[`docs/research/audio-models-for-neural-plc/synthesis.md`](docs/research/audio-models-for-neural-plc/synthesis.md)).
+> **Voice/media lives elsewhere.** The audio side-quest (Opus pipeline, PLC
+> backends, jitter buffer, Media-over-QUIC scaffolding, and the desktop voice
+> node) was extracted to its own repository, `mjolnir-voice`. This repo is the
+> router mesh only.
 
 ## How it composes with the broader vision
 
@@ -128,8 +97,6 @@ and AI agents all coexist on the same fabric.
 - [Network architecture (CRDT, routing, subnet allocation)](docs/network-coordination/network-architecture.md)
 - [Radio backhaul & multi-hop discovery decisions](docs/network-coordination/radio-backhaul-and-discovery.md)
 - [P2P resilience](docs/network-coordination/p2p-resilience.md)
-- [Self-healing jitter buffer](docs/architecture/self-healing-jitter-buffer.md)
-- [Neural bridge PLC design](docs/architecture/neural-bridge-plc.md)
 - Archived early designs: [mesh coordination overview](docs/archive/network-coordination/mesh-network-coordination.md),
   [DHCP CRDT](docs/archive/network-coordination/dhcp-crdt.md),
   [dnsmasq integration](docs/archive/network-coordination/dnsmasq-integration.md)
@@ -139,7 +106,9 @@ and AI agents all coexist on the same fabric.
 - [OpenWrt node deploy runbook](deploy/openwrt/README.md)
 
 ### Research
-- [Audio models for neural PLC — deployment-focused synthesis](docs/research/audio-models-for-neural-plc/synthesis.md)
+- [MANET dynamic addressing](docs/research/manet-dynamic-addressing/README.md)
+- [OpenWrt mesh hardware](docs/research/openwrt-mesh-hardware/synthesis.md)
+- [Asset pipeline & version control](docs/research/asset-pipeline-version-control/synthesis.md)
 
 ## Status
 
@@ -175,12 +144,10 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Binaries (note the crate/binary naming wrinkle): `mjolnir-meshd` comes
-from `crates/mjolnir-mesh` (the OpenWrt router daemon — cross-built
-static aarch64 with `deploy/openwrt/build.sh` and pushed with
-`deploy/openwrt/install-node.sh`); `meshctl` comes from
-`crates/mjolnir-meshctl`; and the desktop/VM daemon binary `mjolnir-mesh`
-comes from `crates/mjolnir-node`.
+Binaries: `mjolnir-meshd` comes from `crates/mjolnir-mesh` (the OpenWrt
+router daemon — cross-built static aarch64 with `deploy/openwrt/build.sh`
+and pushed with `deploy/openwrt/install-node.sh`); `meshctl` comes from
+`crates/mjolnir-meshctl`.
 
 ## License
 
