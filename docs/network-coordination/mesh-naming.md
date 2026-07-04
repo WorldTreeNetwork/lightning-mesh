@@ -44,6 +44,19 @@ records, which a hosts file cannot express. The responder is a **pure projection
 of the in-memory CRDT** — a gossip merge is visible on the next query, no reload
 step.
 
+The same reconcile **must also whitelist `.mesh` from dnsmasq's rebind
+protection** (`uci add_list dhcp.@dnsmasq[0].rebind_domain='/mesh/'`). OpenWrt
+ships `stop-dns-rebind` on by default, which drops any upstream answer carrying
+an RFC1918 address — and *every* `.mesh` answer is RFC1918, so without the
+whitelist dnsmasq forwards the query, gets the right `10.42.x.1` back, and
+silently discards it (`possible DNS-rebind attack detected`). This was found the
+hard way on the first fleet rollout (bead `e21.8`): the forward line, DoH canary,
+and option 114 were all correct and `hello.mesh` still resolved to an empty
+answer. No unit or multi-node test caught it — it only manifests against real
+dnsmasq. (Aside: dnsmasq's own cache at `:53` can briefly serve a just-unpublished
+name as empty NODATA up to the 30s TTL even after the responder returns NXDOMAIN
+— normal cache behavior, not a bug.)
+
 Answer discipline:
 
 - `A` for every name class below; **TTL 30s** everywhere (the substrate is
