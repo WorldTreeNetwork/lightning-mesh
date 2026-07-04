@@ -31,11 +31,19 @@ pub use crdt::{
     hlc::HLC,
     lease::LeaseEntry,
     merge::{
-        merge_peer_addr, merge_service, merge_subnet_claim, merge_user, resolve_subnet_conflict,
-        MergeResult,
+        merge_peer_addr, merge_service, merge_service_v2, merge_subnet_claim, merge_user,
+        resolve_subnet_conflict, MergeResult, ReservedServiceName,
     },
     peer_addr::{AddrBook, PeerAddrEntry},
-    service::{ServiceBook, ServiceEntry},
+    service::{
+        is_reserved_service_name, LostName, LostNameMap, ServiceBook, ServiceBookV2, ServiceEntry,
+        ServiceEntryV2, ServiceTombstone, ServiceTombstoneBook, RESERVED_SERVICE_NAMES,
+    },
+    service_apply::{
+        apply_service_publish_v2, apply_service_publish_v2_tracking_loss,
+        apply_service_unpublish_v2, publish_service_v2, PublishOutcome, ServicePublishError,
+        UnpublishOutcome,
+    },
     subnet::SubnetClaim,
     sync::{GossipError, GossipSync, GossipTransport},
     users::{UserBook, UserEntry},

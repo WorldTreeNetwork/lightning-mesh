@@ -28,7 +28,10 @@
 //!   records a fresh one.
 
 use crate::crdt::merge::{merge_service_v2, MergeResult, ReservedServiceName};
-use crate::crdt::service::{ServiceBookV2, ServiceEntryV2, ServiceTombstone, ServiceTombstoneBook};
+use crate::crdt::service::{
+    is_reserved_service_name, LostName, LostNameMap, ServiceBookV2, ServiceEntryV2,
+    ServiceTombstone, ServiceTombstoneBook,
+};
 
 /// Outcome of applying a `ServicePublishV2` message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +118,90 @@ fn apply_merge_result(
         }
         MergeResult::Unchanged => {}
     }
+}
+
+/// Error returned by [`publish_service_v2`] — the typed result S3.1's control
+/// API surfaces to a caller attempting to claim a service name (bead
+/// e21.2.4, FR34).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ServicePublishError {
+    /// `name` is one of [`RESERVED_SERVICE_NAMES`](crate::crdt::service::RESERVED_SERVICE_NAMES).
+    #[error("service name {0:?} is reserved and cannot be claimed")]
+    Reserved(String),
+    /// `name` was already lost to a conflicting claim by `winner_node_id`
+    /// (see [`LostName`]) — a different owner cannot reclaim it until the
+    /// tombstone/loss record is GC'd (deferred, bead 99f).
+    #[error("service name lost to a conflicting claim by node {winner_node_id:?}")]
+    LostToPeer { winner_node_id: String },
+}
+
+/// If `outcome` is a `Conflict` where `self_id` is the loser, record the win
+/// in `lost_names` (bead e21.2.4, FR32/FR33). The book itself already carries
+/// the winner (see [`apply_merge_result`]) — this only updates the
+/// local-only bookkeeping that gates future publish attempts and will back a
+/// future status/API surface.
+fn track_conflict_loss(
+    lost_names: &mut LostNameMap,
+    self_id: &str,
+    name: &str,
+    outcome: &PublishOutcome,
+) {
+    let PublishOutcome::Merged(boxed) = outcome else {
+        return;
+    };
+    let MergeResult::Conflict { winner, loser } = boxed.as_ref() else {
+        return;
+    };
+    if loser.owner_node_id == self_id {
+        lost_names.insert(
+            name.to_string(),
+            LostName { winner_node_id: winner.owner_node_id.clone(), hlc: winner.first_claimed_at.clone() },
+        );
+    }
+}
+
+/// Like [`apply_service_publish_v2`], but also updates `lost_names` when the
+/// merge conflicts and `self_id` is the loser (bead e21.2.4). Used by the
+/// gossip dispatch arm, which must always apply what a peer announces
+/// (gossip is authoritative merge input) — unlike [`publish_service_v2`],
+/// this does NOT gate on an existing `lost_names` entry, since a peer's
+/// gossiped claim is not a local publish attempt.
+pub fn apply_service_publish_v2_tracking_loss(
+    book: &mut ServiceBookV2,
+    tombstones: &ServiceTombstoneBook,
+    lost_names: &mut LostNameMap,
+    self_id: &str,
+    name: &str,
+    incoming: ServiceEntryV2,
+) -> Result<PublishOutcome, ReservedServiceName> {
+    let outcome = apply_service_publish_v2(book, tombstones, name, incoming)?;
+    track_conflict_loss(lost_names, self_id, name, &outcome);
+    Ok(outcome)
+}
+
+/// Daemon-facing local publish (bead e21.2.3 FR25, e21.2.4 FR34): the seam
+/// S3.1's control API calls to claim/refresh a service name on behalf of
+/// THIS node. Rejects reserved names and names already known lost to a
+/// different owner's conflicting claim before touching the store; otherwise
+/// behaves like [`apply_service_publish_v2_tracking_loss`]. Callers are
+/// responsible for the gossip broadcast + persistence side effects (this
+/// function only mutates the in-memory stores it's given).
+pub fn publish_service_v2(
+    book: &mut ServiceBookV2,
+    tombstones: &ServiceTombstoneBook,
+    lost_names: &mut LostNameMap,
+    self_id: &str,
+    name: &str,
+    incoming: ServiceEntryV2,
+) -> Result<PublishOutcome, ServicePublishError> {
+    if is_reserved_service_name(name) {
+        return Err(ServicePublishError::Reserved(name.to_string()));
+    }
+    if let Some(lost) = lost_names.get(name) {
+        return Err(ServicePublishError::LostToPeer { winner_node_id: lost.winner_node_id.clone() });
+    }
+    apply_service_publish_v2_tracking_loss(book, tombstones, lost_names, self_id, name, incoming)
+        .map_err(|ReservedServiceName(n)| ServicePublishError::Reserved(n))
 }
 
 /// Apply an incoming `ServiceUnpublishV2` (`name`, `owner_node_id`, `hlc`) to
@@ -447,5 +534,119 @@ mod tests {
         let r5 = apply_service_publish_v2(&mut book, &tombstones, "printer", revived.clone()).unwrap();
         assert_eq!(r5, PublishOutcome::Revived);
         assert_eq!(book.get("printer"), Some(&revived));
+    }
+
+    // --- conflict-loss tracking (bead e21.2.4) ---
+
+    #[test]
+    fn tracking_loss_records_lost_name_when_self_is_loser() {
+        let mut book = ServiceBookV2::new();
+        let local = entry("self-node", 2_000, 0, "self-node"); // later first_claimed_at -> loses
+        book.insert("printer".to_string(), local);
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+
+        let incoming = entry("peer-node", 1_000, 0, "peer-node"); // earlier -> wins
+        let outcome = apply_service_publish_v2_tracking_loss(
+            &mut book, &tombstones, &mut lost_names, "self-node", "printer", incoming,
+        )
+        .unwrap();
+        assert!(matches!(outcome, PublishOutcome::Merged(ref boxed) if matches!(**boxed, MergeResult::Conflict { .. })));
+        let lost = lost_names.get("printer").expect("self should be recorded as loser");
+        assert_eq!(lost.winner_node_id, "peer-node");
+        assert_eq!(lost.hlc, hlc(1_000, 0, "peer-node"));
+    }
+
+    #[test]
+    fn tracking_loss_does_not_record_when_self_is_winner() {
+        let mut book = ServiceBookV2::new();
+        let local = entry("self-node", 1_000, 0, "self-node"); // earlier -> wins
+        book.insert("printer".to_string(), local);
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+
+        let incoming = entry("peer-node", 2_000, 0, "peer-node"); // later -> loses
+        apply_service_publish_v2_tracking_loss(
+            &mut book, &tombstones, &mut lost_names, "self-node", "printer", incoming,
+        )
+        .unwrap();
+        assert!(lost_names.get("printer").is_none());
+    }
+
+    #[test]
+    fn tracking_loss_does_not_record_for_non_conflict_outcomes() {
+        let mut book = ServiceBookV2::new();
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+
+        let incoming = entry("self-node", 1_000, 0, "self-node");
+        apply_service_publish_v2_tracking_loss(
+            &mut book, &tombstones, &mut lost_names, "self-node", "printer", incoming,
+        )
+        .unwrap();
+        assert!(lost_names.get("printer").is_none());
+    }
+
+    // --- publish_service_v2 (bead e21.2.3/e21.2.4 daemon-facing seam) ---
+
+    #[test]
+    fn publish_service_v2_rejects_reserved_name() {
+        let mut book = ServiceBookV2::new();
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+        let incoming = entry("self-node", 1_000, 0, "self-node");
+
+        let err = publish_service_v2(&mut book, &tombstones, &mut lost_names, "self-node", "hello", incoming)
+            .unwrap_err();
+        assert_eq!(err, ServicePublishError::Reserved("hello".to_string()));
+    }
+
+    #[test]
+    fn publish_service_v2_rejects_name_already_lost() {
+        let mut book = ServiceBookV2::new();
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+        lost_names.insert(
+            "printer".to_string(),
+            LostName { winner_node_id: "peer-node".to_string(), hlc: hlc(1_000, 0, "peer-node") },
+        );
+
+        let incoming = entry("self-node", 5_000, 0, "self-node");
+        let err = publish_service_v2(&mut book, &tombstones, &mut lost_names, "self-node", "printer", incoming)
+            .unwrap_err();
+        assert_eq!(err, ServicePublishError::LostToPeer { winner_node_id: "peer-node".to_string() });
+        // The gated attempt never touched the book.
+        assert!(book.get("printer").is_none());
+    }
+
+    #[test]
+    fn publish_service_v2_conflict_records_loss_and_returns_outcome() {
+        let mut book = ServiceBookV2::new();
+        let local = entry("peer-node", 1_000, 0, "peer-node"); // earlier -> wins
+        book.insert("printer".to_string(), local.clone());
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+
+        let incoming = entry("self-node", 2_000, 0, "self-node"); // later -> self loses
+        let outcome = publish_service_v2(&mut book, &tombstones, &mut lost_names, "self-node", "printer", incoming)
+            .unwrap();
+        assert!(matches!(outcome, PublishOutcome::Merged(ref boxed) if matches!(**boxed, MergeResult::Conflict { .. })));
+        assert_eq!(lost_names.get("printer").unwrap().winner_node_id, "peer-node");
+        // Book keeps the winner's entry, not self's losing claim.
+        assert_eq!(book.get("printer"), Some(&local));
+    }
+
+    #[test]
+    fn publish_service_v2_succeeds_for_a_fresh_name() {
+        let mut book = ServiceBookV2::new();
+        let tombstones = ServiceTombstoneBook::new();
+        let mut lost_names = LostNameMap::new();
+
+        let incoming = entry("self-node", 1_000, 0, "self-node");
+        let outcome = publish_service_v2(&mut book, &tombstones, &mut lost_names, "self-node", "printer", incoming.clone())
+            .unwrap();
+        assert_eq!(outcome, PublishOutcome::Merged(Box::new(MergeResult::Inserted)));
+        assert_eq!(book.get("printer"), Some(&incoming));
+        assert!(lost_names.is_empty());
     }
 }

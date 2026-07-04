@@ -117,6 +117,31 @@ pub struct ServiceTombstone {
 /// [`ServiceBookV2`].
 pub type ServiceTombstoneBook = BTreeMap<String, ServiceTombstone>;
 
+/// Local-only bookkeeping (bead e21.2.4, FR32/FR34): recorded whenever a
+/// merge [`Conflict`](crate::crdt::merge::MergeResult::Conflict) makes THIS
+/// node the loser for a service name — i.e. some other node's claim on the
+/// name is first-writer-wins-earlier than ours. Never gossiped (it is derived
+/// purely from local merge outcomes, and every node reaches the same verdict
+/// independently from the same CRDT data); persisted alongside the v2
+/// book/tombstones purely so a restart doesn't forget a name is lost and
+/// briefly allow a doomed republish.
+///
+/// Gates future local publish attempts to the same name
+/// ([`publish_service_v2`](crate::crdt::service_apply::publish_service_v2))
+/// so they fail synchronously naming the winner (FR34) instead of silently
+/// losing another conflict round-trip, and is kept accessible for a future
+/// status/API surface (FR32; not wired to `status` output by this story).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LostName {
+    pub winner_node_id: String,
+    /// The winner's `first_claimed_at` HLC — the arbitration clock, not
+    /// necessarily its latest refresh.
+    pub hlc: HLC,
+}
+
+/// Lost-name map keyed by service name, same convention as [`ServiceBookV2`].
+pub type LostNameMap = BTreeMap<String, LostName>;
+
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
