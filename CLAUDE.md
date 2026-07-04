@@ -69,10 +69,10 @@ overlay (iroh + babeld + CRDT) is the product, the radio is plumbing**.
   802.11s backhaul (`br-mesh`), derived `10.254.<blake3(node_id)>/16`
   overlay addressing, babel routing, single overlay TUN `mjolnir0` for
   cross-site iroh traffic (bead `buw`).
-- `crates/mjolnir-node` — desktop/VM mesh daemon (membership, gossip, rooms).
 - `crates/mjolnir-meshctl` — `meshctl`, operator-side RouterOS reconciler.
-- `crates/mjolnir-audio`, `mjolnir-media`, `mjolnir-moq` — voice/media over
-  the mesh.
+- Voice/media (the desktop `mjolnir-node` daemon plus `mjolnir-audio`,
+  `mjolnir-media`, `mjolnir-moq`) was extracted to the separate `mjolnir-voice`
+  repository; this repo is the router mesh only.
 - `deploy/openwrt/` — fleet install/update: staged payload + detached apply
   with health-gated rollback (in-band safe; ethernet at `192.168.1.1` is
   recovery of last resort). See `docs/deploy/node-operations.md`.

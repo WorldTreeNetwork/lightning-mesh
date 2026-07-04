@@ -228,6 +228,8 @@ becomes optional.
 ## References
 
 - Membership control roadmap: `network-architecture.md` §Security → Future Work
-- Identity & gossip: `crates/mjolnir-node/src/mesh.rs`
+- Identity & gossip: `crates/mjolnir-node/src/mesh.rs` (in the `mjolnir-voice`
+  repo, where the desktop node was extracted)
 - Ticket envelope (reused for `EnrollmentTicket`): `crates/mjolnir-node/src/ticket.rs`
+  (likewise in the `mjolnir-voice` repo)
 - Wi-Fi Easy Connect / DPP: Wi-Fi Alliance, <https://www.wi-fi.org/access>

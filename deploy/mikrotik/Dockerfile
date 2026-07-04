@@ -7,10 +7,11 @@
 # Produces a minimal scratch-based image holding a single static-musl binary,
 # keeping the image tiny for the 128MB NAND / 256MB RAM budget.
 #
-# BIN: the headless router daemon. This binary does not exist yet — it is
-# tracked by beads mjolnir-mesh-tr6. Do NOT point this at the audio example
-# client (the current `mjolnir-mesh` bin in crates/mjolnir-node), which pulls
-# cpal/ALSA + tract-onnx and is the wrong thing for a headless router.
+# BIN: the headless router daemon (`mjolnir-meshd` from crates/mjolnir-mesh).
+# NOTE: the old audio example client (`mjolnir-node`, which pulled
+# cpal/ALSA + tract-onnx) lived in this workspace but was extracted to the
+# separate `mjolnir-voice` repo — it was never the right thing for a headless
+# router. Build only the daemon bin below.
 ARG BIN=mjolnir-meshd
 ARG RUST_TARGET=armv7-unknown-linux-musleabihf
 # The mjolnir-meshd bin is gated behind the `daemon` feature (keeps the
