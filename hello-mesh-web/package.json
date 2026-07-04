@@ -44,6 +44,7 @@
 		"vitest-browser-svelte": "^2.1.1"
 	},
 	"dependencies": {
-		"@noble/ed25519": "^3.1.0"
+		"@noble/ed25519": "^3.1.0",
+		"@noble/hashes": "^2.2.0"
 	}
 }
