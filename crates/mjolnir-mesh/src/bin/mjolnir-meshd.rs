@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -627,18 +627,28 @@ async fn run_mesh(
     backhaul_ip: Ipv4Addr,
     restored_claims: HashMap<String, SubnetClaim>,
 ) -> Result<()> {
+    // Client-gateway IP for the well-known `.mesh` names (e21.1.2): `None`
+    // until this node's client /24 claim lands, at which point `claim_manager`
+    // writes the claimed `.1` address through this handle. The responder
+    // table only ever reads it, so the claim can land at any point after
+    // `run_mesh` starts without re-plumbing the table.
+    let gateway_handle: mjolnir_mesh::dns_responder::GatewayHandle = Arc::new(RwLock::new(None));
     // .mesh DNS responder (e21.1.1): bind BEFORE any UCI/dnsmasq reconcile
     // (FR14) — first thing in `run_mesh` so dnsmasq's `.mesh` upstream
     // (`server=/mesh/127.0.0.1#5335`) is answerable the instant it's
-    // configured, however early that reconcile step lands. Runs
-    // unconditionally under the daemon feature; NoAnswers is this story's
-    // table, replaced with a CRDT-backed one in e21.1.2/.3.
+    // configured, however early that reconcile step lands. The table is a
+    // `CompositeTable` (e21.1.2) so the future CRDT-projected service table
+    // (e21.1.3) can be appended to the chain without touching this call site.
+    let dns_table: Arc<dyn mjolnir_mesh::dns_responder::NameTable> =
+        Arc::new(mjolnir_mesh::dns_responder::CompositeTable::new(vec![Arc::new(
+            mjolnir_mesh::dns_responder::WellKnownTable::new(gateway_handle.clone()),
+        )]));
     let dns_responder = mjolnir_mesh::dns_responder::start(
         SocketAddr::new(
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             mjolnir_mesh::dns_responder::DEFAULT_DNS_PORT,
         ),
-        Arc::new(mjolnir_mesh::dns_responder::NoAnswers),
+        dns_table,
     )
     .await
     .context("binding .mesh DNS responder")?;
@@ -1005,6 +1015,7 @@ async fn run_mesh(
                 let me = self_id_str.clone();
                 let neigh_rx = neigh_rx.clone();
                 let claims_path = claims_file.clone();
+                let gateway = gateway_handle.clone();
                 tokio::spawn(async move {
                     claim_manager(
                         sync,
@@ -1015,6 +1026,7 @@ async fn run_mesh(
                         claims_path,
                         reclaim_rx,
                         neigh_rx,
+                        gateway,
                     )
                     .await
                 })
@@ -1332,6 +1344,7 @@ async fn wait_for_first_neighbor(
 /// for a neighbor, then a full anti-entropy period so existing claims arrive —
 /// the old blind 8s warmup claimed 13s before the first peer claim landed and
 /// re-collided by construction (deterministic preferred slot).
+#[allow(clippy::too_many_arguments)] // one more thread-through param (gateway) on an already-cohesive set
 async fn claim_manager<T: GossipTransport>(
     sync: Arc<GossipSync<T>>,
     store: ClaimStore,
@@ -1341,6 +1354,7 @@ async fn claim_manager<T: GossipTransport>(
     claims_file: PathBuf,
     mut reclaim_rx: tokio::sync::mpsc::UnboundedReceiver<Ipv4Net>,
     neigh_rx: tokio::sync::watch::Receiver<usize>,
+    gateway: mjolnir_mesh::dns_responder::GatewayHandle,
 ) {
     // Backhaul /32 claim first (pt9): the address is already assigned and the
     // socket bound to it, so publish immediately — no neighbor gating. FWW
@@ -1364,13 +1378,17 @@ async fn claim_manager<T: GossipTransport>(
             );
         }
     }
-    claim_and_publish(&sync, &store, &self_id, &client_iface).await;
+    claim_and_publish(&sync, &store, &self_id, &client_iface, &gateway).await;
     while let Some(lost) = reclaim_rx.recv().await {
         // Brief pause so a conflict storm settles before we re-pick.
         tokio::time::sleep(Duration::from_secs(1)).await;
         info!(subnet = %lost, "lost our subnet claim in a conflict — retracting its address and re-claiming");
         retract_client_addr(lost, &client_iface).await;
-        claim_and_publish(&sync, &store, &self_id, &client_iface).await;
+        // No claim held between retraction and re-claim: the well-known
+        // names fall back to the pre-claim gateway (D-003) rather than keep
+        // answering on a /24 this node no longer owns.
+        *gateway.write().expect("gateway handle poisoned") = None;
+        claim_and_publish(&sync, &store, &self_id, &client_iface, &gateway).await;
     }
 }
 
@@ -1546,6 +1564,7 @@ async fn claim_and_publish<T: GossipTransport>(
     store: &ClaimStore,
     self_id: &str,
     client_iface: &str,
+    gateway: &mjolnir_mesh::dns_responder::GatewayHandle,
 ) {
     let (keep, extras, foreign) = {
         let s = store.lock().expect("claim store poisoned");
@@ -1567,6 +1586,7 @@ async fn claim_and_publish<T: GossipTransport>(
         }
         assign_client_addr(net, client_iface).await;
         reconcile_client_uci(net).await;
+        *gateway.write().expect("gateway handle poisoned") = Some(client_gateway_addr(net));
         return;
     }
     let net = match alloc::pick_subnet_or_smaller(
@@ -1608,6 +1628,7 @@ async fn claim_and_publish<T: GossipTransport>(
     // /24 is delivered on-link (mjolnir-mesh-e4r, supersedes the df4 gateway route).
     assign_client_addr(net, client_iface).await;
     reconcile_client_uci(net).await;
+    *gateway.write().expect("gateway handle poisoned") = Some(client_gateway_addr(net));
 }
 
 /// Release a claim this node owns but should no longer hold: drop it from the
@@ -2546,11 +2567,19 @@ async fn announce_service_book<T: GossipTransport>(
 /// gateway — the router is itself on the client L2. Idempotent in effect: an
 /// already-present address (EEXIST) is fine. Best-effort: a missing interface is
 /// logged, not fatal.
+/// The gateway address (`.1`) of a claimed client /24 — the address this
+/// node assigns to its client interface (e4r) and answers as `hello.mesh`/
+/// `id.mesh` once the claim lands (e21.1.2). Single source of truth for the
+/// formula so the interface assignment and the DNS answer never diverge.
+fn client_gateway_addr(subnet: Ipv4Net) -> Ipv4Addr {
+    Ipv4Addr::from(u32::from(subnet.network()) + 1)
+}
+
 #[cfg(target_os = "linux")]
 async fn assign_client_addr(subnet: Ipv4Net, iface: &str) {
     use rtnetlink::new_connection;
     // The router takes `.1` of its claimed /24.
-    let gw = Ipv4Addr::from(u32::from(subnet.network()) + 1);
+    let gw = client_gateway_addr(subnet);
     let prefix = subnet.prefix_len();
     let index = match std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
         .ok()
@@ -2598,7 +2627,7 @@ async fn retract_client_addr(subnet: Ipv4Net, iface: &str) {
     use futures_util::stream::TryStreamExt;
     use rtnetlink::new_connection;
     use rtnetlink::packet_route::address::AddressAttribute;
-    let gw = Ipv4Addr::from(u32::from(subnet.network()) + 1);
+    let gw = client_gateway_addr(subnet);
     let prefix = subnet.prefix_len();
     let index = match std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
         .ok()

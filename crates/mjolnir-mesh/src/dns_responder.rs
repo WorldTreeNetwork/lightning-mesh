@@ -12,12 +12,14 @@
 //! responder must never take its recv loop down over a bad client.
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use simple_dns::rdata::{RData, A, SOA};
-use simple_dns::{Name, Packet, PacketFlag, ResourceRecord, CLASS, RCODE};
+use simple_dns::{Name, Packet, PacketFlag, ResourceRecord, CLASS, QTYPE, RCODE, TYPE};
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
+
+use crate::crdt::service::is_reserved_service_name;
 
 /// Default bind port for the `.mesh` responder (loopback-only — dnsmasq is
 /// the only client). Configurable so tests can bind an ephemeral port
@@ -43,6 +45,16 @@ pub trait NameTable: Send + Sync {
     /// SRV/TXT lookups will be added as their own methods on this trait when
     /// e21.1.3 lands, rather than overloading this one.
     fn lookup_a(&self, name: &str) -> Option<Vec<Ipv4Addr>>;
+
+    /// Whether `name` is known to this table at all, independent of the
+    /// queried record type. Distinguishes NODATA ("name exists, wrong type"
+    /// — NOERROR, empty answer) from NXDOMAIN ("name unknown" — see
+    /// [`handle_query`]). Defaults to "known iff an A answer exists", which
+    /// is correct for an A-only table; a table serving other record types
+    /// (e.g. the future SRV/TXT service table) overrides this.
+    fn exists(&self, name: &str) -> bool {
+        self.lookup_a(name).is_some()
+    }
 }
 
 /// This story's table: every name falls through to NXDOMAIN+SOA. Later
@@ -53,6 +65,94 @@ pub struct NoAnswers;
 impl NameTable for NoAnswers {
     fn lookup_a(&self, _name: &str) -> Option<Vec<Ipv4Addr>> {
         None
+    }
+}
+
+/// Shared, dynamically-updated client-gateway IP (S1.2, bead e21.1.2): the
+/// `.1` address of this node's claimed client /24, or `None` before a claim
+/// has landed. A [`RwLock`] (not a constructor-time constant) because the
+/// subnet claim can land well after this table is built and handed to the
+/// responder — `mjolnir-meshd` writes through this handle every time
+/// `assign_client_addr`/`retract_client_addr` runs (fresh claim, restored
+/// claim, or a conflict re-claim).
+pub type GatewayHandle = Arc<RwLock<Option<Ipv4Addr>>>;
+
+/// Pre-claim fallback gateway (decision D-003): before this node has claimed
+/// a client /24, `hello.mesh`/`id.mesh` answer the stock recovery address
+/// instead of NXDOMAIN, matching the address a fresh, unclaimed router
+/// answers DHCP/UI on.
+pub const PRE_CLAIM_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
+
+/// Answers the reserved well-known `.mesh` names
+/// ([`crate::crdt::service::RESERVED_SERVICE_NAMES`] — `hello`, `id`) with
+/// this node's own client gateway IP: the claimed /24's `.1` once a subnet
+/// claim lands, or [`PRE_CLAIM_GATEWAY`] before one does.
+#[derive(Clone)]
+pub struct WellKnownTable {
+    gateway: GatewayHandle,
+}
+
+impl WellKnownTable {
+    /// Build a table backed by `gateway`. The caller keeps its own clone of
+    /// the handle and writes the current gateway IP into it as the subnet
+    /// claim changes.
+    pub fn new(gateway: GatewayHandle) -> Self {
+        Self { gateway }
+    }
+
+    fn current_gateway(&self) -> Ipv4Addr {
+        match self.gateway.read() {
+            Ok(guard) => guard.unwrap_or(PRE_CLAIM_GATEWAY),
+            Err(_) => PRE_CLAIM_GATEWAY,
+        }
+    }
+}
+
+impl NameTable for WellKnownTable {
+    fn lookup_a(&self, name: &str) -> Option<Vec<Ipv4Addr>> {
+        if is_well_known_name(name) {
+            Some(vec![self.current_gateway()])
+        } else {
+            None
+        }
+    }
+
+    fn exists(&self, name: &str) -> bool {
+        is_well_known_name(name)
+    }
+}
+
+/// True if `name` (a wire-format qname, e.g. `"hello.mesh."`) is one of the
+/// reserved well-known service names under the `.mesh` apex, case-insensitive.
+fn is_well_known_name(name: &str) -> bool {
+    let lower = name.trim_end_matches('.').to_ascii_lowercase();
+    match lower.strip_suffix(".mesh") {
+        Some(label) => is_reserved_service_name(label),
+        None => false,
+    }
+}
+
+/// Chains multiple [`NameTable`]s: the first table that answers wins, and a
+/// name `exists` if any table in the chain claims it. Lets `mjolnir-meshd`
+/// stack the well-known table (S1.2) ahead of the future CRDT-projected
+/// service table (S1.3) without either table knowing about the other.
+pub struct CompositeTable {
+    tables: Vec<Arc<dyn NameTable>>,
+}
+
+impl CompositeTable {
+    pub fn new(tables: Vec<Arc<dyn NameTable>>) -> Self {
+        Self { tables }
+    }
+}
+
+impl NameTable for CompositeTable {
+    fn lookup_a(&self, name: &str) -> Option<Vec<Ipv4Addr>> {
+        self.tables.iter().find_map(|t| t.lookup_a(name))
+    }
+
+    fn exists(&self, name: &str) -> bool {
+        self.tables.iter().any(|t| t.exists(name))
     }
 }
 
@@ -138,24 +238,44 @@ fn handle_query(query_bytes: &[u8], table: &dyn NameTable) -> Option<Vec<u8>> {
     match query.questions.into_iter().next() {
         Some(question) => {
             let qname = question.qname.to_string();
-            let answers = table.lookup_a(&qname).filter(|a| !a.is_empty()).map(|addrs| {
-                addrs
-                    .into_iter()
-                    .map(|addr| {
-                        ResourceRecord::new(
-                            question.qname.clone(),
-                            CLASS::IN,
-                            30,
-                            RData::A(A { address: addr.into() }),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            });
+            let is_a_query = matches!(question.qtype, QTYPE::TYPE(TYPE::A));
+
+            // Only an A query can produce A answers; any other qtype falls
+            // through to the NODATA/NXDOMAIN dispatch below untouched, per
+            // this story's "NODATA, never NXDOMAIN for a known name" rule.
+            let answers = if is_a_query {
+                table.lookup_a(&qname).filter(|a| !a.is_empty()).map(|addrs| {
+                    addrs
+                        .into_iter()
+                        .map(|addr| {
+                            ResourceRecord::new(
+                                question.qname.clone(),
+                                CLASS::IN,
+                                30,
+                                RData::A(A { address: addr.into() }),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+            } else {
+                None
+            };
+
+            // Independent of qtype: does the table know this name at all?
+            // Distinguishes "name exists, wrong type" (NODATA) from "name
+            // unknown" (NXDOMAIN) — a non-A query, or an A query the table
+            // has no A answer for, still gets NODATA if the name exists.
+            let name_exists = table.exists(&qname);
 
             reply.questions.push(question);
 
             match answers {
                 Some(records) => reply.answers = records,
+                None if name_exists => {
+                    // NODATA (RFC 2308): NOERROR, no answers, no SOA — the
+                    // reply's rcode already defaults to NoError from
+                    // `Packet::new_reply`.
+                }
                 None => {
                     *reply.rcode_mut() = RCODE::NameError;
                     reply.name_servers.push(mesh_soa_record());
@@ -214,7 +334,7 @@ fn mesh_soa_record() -> ResourceRecord<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simple_dns::{QCLASS, TYPE};
+    use simple_dns::QCLASS;
     use std::net::{IpAddr, SocketAddr};
     use std::time::Duration;
 
@@ -264,6 +384,82 @@ mod tests {
         truncated_header[5] = 1; // QDCOUNT = 1, but no question bytes follow
         assert!(handle_query(&truncated_header, &NoAnswers).is_none());
         assert!(handle_query(&[0xAA; 200], &NoAnswers).is_none());
+    }
+
+    #[test]
+    fn well_known_names_answer_pre_claim_gateway() {
+        let table = WellKnownTable::new(Arc::new(RwLock::new(None)));
+        for name in ["hello.mesh.", "id.mesh.", "HELLO.MESH.", "Id.Mesh."] {
+            let bytes = build_query(name, TYPE::A);
+            let reply_bytes = handle_query(&bytes, &table).expect("should build a reply");
+            let reply = Packet::parse(&reply_bytes).expect("reply should parse");
+            assert_eq!(reply.rcode(), RCODE::NoError, "name={name}");
+            assert_eq!(reply.answers.len(), 1, "name={name}");
+            match &reply.answers[0].rdata {
+                RData::A(a) => assert_eq!(Ipv4Addr::from(a.address), PRE_CLAIM_GATEWAY),
+                other => panic!("expected A record, got {other:?}"),
+            }
+            assert_eq!(reply.answers[0].ttl, 30);
+        }
+    }
+
+    #[test]
+    fn well_known_names_answer_claimed_gateway_once_set() {
+        let gateway = Arc::new(RwLock::new(None));
+        let table = WellKnownTable::new(gateway.clone());
+        let claimed: Ipv4Addr = "10.42.61.1".parse().unwrap();
+        *gateway.write().unwrap() = Some(claimed);
+
+        let bytes = build_query("hello.mesh.", TYPE::A);
+        let reply_bytes = handle_query(&bytes, &table).expect("should build a reply");
+        let reply = Packet::parse(&reply_bytes).expect("reply should parse");
+        assert_eq!(reply.rcode(), RCODE::NoError);
+        assert_eq!(reply.answers.len(), 1);
+        match &reply.answers[0].rdata {
+            RData::A(a) => assert_eq!(Ipv4Addr::from(a.address), claimed),
+            other => panic!("expected A record, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn well_known_name_non_a_qtype_is_nodata_not_nxdomain() {
+        let table = WellKnownTable::new(Arc::new(RwLock::new(None)));
+        let bytes = build_query("hello.mesh.", TYPE::AAAA);
+        let reply_bytes = handle_query(&bytes, &table).expect("should build a reply");
+        let reply = Packet::parse(&reply_bytes).expect("reply should parse");
+        assert_eq!(reply.rcode(), RCODE::NoError, "NODATA must be NOERROR, not NXDOMAIN");
+        assert_eq!(reply.answers.len(), 0);
+        assert_eq!(reply.name_servers.len(), 0, "NODATA carries no SOA in this dispatch");
+    }
+
+    #[test]
+    fn unreserved_name_is_still_nxdomain_through_well_known_table() {
+        let table = WellKnownTable::new(Arc::new(RwLock::new(None)));
+        let bytes = build_query("printer.mesh.", TYPE::A);
+        let reply_bytes = handle_query(&bytes, &table).expect("should build a reply");
+        let reply = Packet::parse(&reply_bytes).expect("reply should parse");
+        assert_eq!(reply.rcode(), RCODE::NameError);
+        assert_eq!(reply.name_servers.len(), 1);
+    }
+
+    #[test]
+    fn composite_table_stacks_well_known_ahead_of_no_answers() {
+        let gateway = Arc::new(RwLock::new(Some("10.42.7.1".parse().unwrap())));
+        let composite = CompositeTable::new(vec![
+            Arc::new(WellKnownTable::new(gateway)),
+            Arc::new(NoAnswers),
+        ]);
+
+        let hello = build_query("hello.mesh.", TYPE::A);
+        let hello_reply_bytes = handle_query(&hello, &composite).unwrap();
+        let reply = Packet::parse(&hello_reply_bytes).unwrap();
+        assert_eq!(reply.rcode(), RCODE::NoError);
+        assert_eq!(reply.answers.len(), 1);
+
+        let unknown = build_query("unknown.mesh.", TYPE::A);
+        let unknown_reply_bytes = handle_query(&unknown, &composite).unwrap();
+        let reply = Packet::parse(&unknown_reply_bytes).unwrap();
+        assert_eq!(reply.rcode(), RCODE::NameError);
     }
 
     #[test]
