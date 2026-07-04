@@ -49,7 +49,10 @@ config meshd 'meshd'
 # OPTIONAL — the mesh runs fine without it (S7, bead mjolnir-mesh-eei). Reload
 # after edits:  service mjolnir-hello restart
 config hello 'hello'
-	option enabled '0'
+	# Front desk runs wherever the mjolnir-hello binary is deployed. Set to '0'
+	# to keep a node mesh-only. mjolnir-apply moves uhttpd/LuCI off :80 -> :8080
+	# when this is enabled so hello can bind the LAN gateway :80.
+	option enabled '1'
 
 	# Logical netifd interface (see /etc/config/network) whose IP the init
 	# script binds to — the node's LAN gateway address, independent of .mesh

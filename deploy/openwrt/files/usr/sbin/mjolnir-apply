@@ -311,16 +311,46 @@ mkdir -p /etc/mjolnir
 /etc/init.d/mjolnir-babeld enable 2>/dev/null
 /etc/init.d/mjolnir-meshd enable 2>/dev/null
 
-# 7.5 mjolnir-hello (OPTIONAL front desk, mjolnir-mesh-eei): the apply NEVER
-#     unilaterally turns it on — only 'option enabled 1' in the 'hello'
-#     section of /etc/config/mjolnir does. Mirrors this m8t-style split so a
-#     node stays mesh-only unless the operator opts in.
+# 7.5 mjolnir-hello (front desk, mjolnir-mesh-eei/4ke): runs wherever the
+#     binary is deployed. mjolnir-apply preserves an existing
+#     /etc/config/mjolnir, so already-provisioned nodes lack the 'hello'
+#     section the template ships — add it (enabled: staging the binary IS the
+#     opt-in) if absent, so the front desk comes up hands-off. All of this is
+#     best-effort and NON-FATAL: a front-desk hiccup must never roll back the
+#     daemon apply.
+if [ -x /usr/bin/mjolnir-hello ] && [ -z "$(uci -q get mjolnir.hello 2>/dev/null)" ]; then
+	log "adding mjolnir 'hello' UCI section (front desk, enabled)"
+	{ uci set mjolnir.hello=hello
+	  uci set mjolnir.hello.enabled=1
+	  uci set mjolnir.hello.lan_iface=lan
+	  uci set mjolnir.hello.port=80
+	  uci set mjolnir.hello.directory_file=/var/run/mjolnir/directory.json
+	  uci set mjolnir.hello.spool_dir=/var/run/mjolnir/pending
+	  uci commit mjolnir; } 2>/dev/null || true
+fi
 HELLO_ENABLED=0
 [ "$(uci -q get mjolnir.hello.enabled 2>/dev/null)" = "1" ] && HELLO_ENABLED=1
 if [ "$HELLO_ENABLED" = 1 ] && [ -x /usr/bin/mjolnir-hello ]; then
-	/etc/init.d/mjolnir-hello enable 2>/dev/null
+	# The front desk binds the node's LAN gateway IP:80, but OpenWrt's uhttpd
+	# (LuCI) defaults to 0.0.0.0:80. Move uhttpd to :8080/:8443 so hello can
+	# bind :80 — idempotent (only when uhttpd is still on :80). LuCI stays
+	# reachable at :8080; SSH is the primary admin path regardless.
+	if uci -q get uhttpd.main.listen_http 2>/dev/null | grep -qE ':80($| )'; then
+		log "moving uhttpd (LuCI) :80 -> :8080 so the front desk can bind :80"
+		{ uci -q delete uhttpd.main.listen_http
+		  uci add_list uhttpd.main.listen_http='0.0.0.0:8080'
+		  uci add_list uhttpd.main.listen_http='[::]:8080'
+		  uci -q delete uhttpd.main.listen_https
+		  uci add_list uhttpd.main.listen_https='0.0.0.0:8443'
+		  uci add_list uhttpd.main.listen_https='[::]:8443'
+		  uci commit uhttpd
+		  /etc/init.d/uhttpd reload || /etc/init.d/uhttpd restart; } 2>/dev/null || true
+	fi
+	/etc/init.d/mjolnir-hello enable 2>/dev/null || true
+	/etc/init.d/mjolnir-hello restart 2>/dev/null || true
 else
-	/etc/init.d/mjolnir-hello disable 2>/dev/null
+	/etc/init.d/mjolnir-hello disable 2>/dev/null || true
+	/etc/init.d/mjolnir-hello stop 2>/dev/null || true
 fi
 
 # 8. optional radio (re)configuration — the other wifi-bouncing step.

@@ -109,6 +109,33 @@ impl RouteResponse {
     fn html(status: u16, body: Vec<u8>) -> Self {
         RouteResponse { status, content_type: "text/html; charset=utf-8", body }
     }
+
+    /// Serve a static asset with a Content-Type derived from its path
+    /// extension. Load-bearing for the SvelteKit bundle: a `.js` ES module
+    /// served as `text/html` is refused by the browser, leaving a blank page.
+    fn asset(status: u16, path: &str, body: Vec<u8>) -> Self {
+        RouteResponse { status, content_type: content_type_for(path), body }
+    }
+}
+
+/// Map a path's file extension to a Content-Type. Covers what the SvelteKit
+/// static build emits; unknown extensions fall back to octet-stream.
+fn content_type_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") | Some("map") | Some("webmanifest") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 /// `GET /api/health` — liveness for the deploy health-gate.
@@ -144,7 +171,7 @@ fn serve_static(path: &str, static_root: Option<&Path>) -> RouteResponse {
 
     if let Some(root) = static_root {
         if let Ok(bytes) = std::fs::read(root.join(asset_path)) {
-            return RouteResponse::html(200, bytes);
+            return RouteResponse::asset(200, asset_path, bytes);
         }
         if let Ok(bytes) = std::fs::read(root.join(INDEX_HTML)) {
             return RouteResponse::html(200, bytes);
@@ -153,7 +180,7 @@ fn serve_static(path: &str, static_root: Option<&Path>) -> RouteResponse {
     }
 
     if let Some(file) = StaticAssets::get(asset_path) {
-        return RouteResponse::html(200, file.data.into_owned());
+        return RouteResponse::asset(200, asset_path, file.data.into_owned());
     }
     match StaticAssets::get(INDEX_HTML) {
         Some(file) => RouteResponse::html(200, file.data.into_owned()),
@@ -328,9 +355,10 @@ mod tests {
         let resp = route("GET", "/", None, b"", &challenges, spool.path(), &DirectoryCache::new(), Path::new("/nonexistent"));
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "text/html; charset=utf-8");
-        let body = String::from_utf8(resp.body).unwrap();
-        assert!(body.contains("Lightning Mesh"));
-        assert!(body.contains("hello.mesh"));
+        // Assert the SPA shell, not specific copy — the embedded index is the
+        // placeholder in a plain build and the SvelteKit shell after build:embed.
+        let body = String::from_utf8(resp.body).unwrap().to_lowercase();
+        assert!(body.contains("<!doctype html") || body.contains("<html"));
     }
 
     #[test]
@@ -338,8 +366,20 @@ mod tests {
         let (challenges, spool) = no_state();
         let resp = route("GET", "/some/client/route", None, b"", &challenges, spool.path(), &DirectoryCache::new(), Path::new("/nonexistent"));
         assert_eq!(resp.status, 200);
-        let body = String::from_utf8(resp.body).unwrap();
-        assert!(body.contains("Lightning Mesh"));
+        assert_eq!(resp.content_type, "text/html; charset=utf-8");
+        let body = String::from_utf8(resp.body).unwrap().to_lowercase();
+        assert!(body.contains("<!doctype html") || body.contains("<html"));
+    }
+
+    #[test]
+    fn assets_get_correct_mime_not_html() {
+        // Regression: a .js ES module served as text/html is refused by browsers
+        // (blank page). serve_static must set Content-Type by extension.
+        assert_eq!(content_type_for("/_app/immutable/entry/start.abc.js"), "text/javascript; charset=utf-8");
+        assert_eq!(content_type_for("/_app/immutable/assets/0.abc.css"), "text/css; charset=utf-8");
+        assert_eq!(content_type_for("favicon.svg"), "image/svg+xml");
+        assert_eq!(content_type_for("index.html"), "text/html; charset=utf-8");
+        assert_eq!(content_type_for("robots.txt"), "text/plain; charset=utf-8");
     }
 
     #[test]
