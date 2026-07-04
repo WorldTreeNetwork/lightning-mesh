@@ -315,7 +315,7 @@ async fn recv_loop(socket: UdpSocket, table: Arc<dyn NameTable>) {
 /// reply. Returns `None` if the query fails to parse or the reply fails to
 /// serialize — callers treat that as "drop, don't respond, keep the loop
 /// alive."
-fn handle_query(query_bytes: &[u8], table: &dyn NameTable) -> Option<Vec<u8>> {
+pub(crate) fn handle_query(query_bytes: &[u8], table: &dyn NameTable) -> Option<Vec<u8>> {
     let query = match Packet::parse(query_bytes) {
         Ok(p) => p,
         Err(e) => {

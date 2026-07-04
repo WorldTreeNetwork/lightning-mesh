@@ -22,6 +22,8 @@ pub mod claim_cooldown;
 pub mod crdt;
 #[cfg(feature = "daemon")]
 pub mod dns_responder;
+#[cfg(all(test, feature = "daemon"))]
+mod dns_conformance_tests;
 pub mod roster;
 pub mod tun;
 
