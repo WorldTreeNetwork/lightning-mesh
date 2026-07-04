@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use crate::crdt::{dns::DnsEntry, hlc::HLC, lease::LeaseEntry, service::ServiceEntry, subnet::SubnetClaim};
+use crate::crdt::{
+    dns::DnsEntry,
+    hlc::HLC,
+    lease::LeaseEntry,
+    peer_addr::PeerAddrEntry,
+    service::ServiceEntry,
+    subnet::SubnetClaim,
+};
 
 /// Wire message enum for CRDT gossip replication.
 ///
@@ -30,17 +37,26 @@ pub enum GossipMessage {
         cidr: String,
         hlc: HLC,
     },
+    /// Self-announced peer address update, keyed by node_id.
+    ///
+    /// Appended last so existing discriminants are not disturbed; old nodes
+    /// that do not recognise this variant will decode-skip it.
+    PeerAddrUpdate {
+        node_id: String,
+        entry: PeerAddrEntry,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::str::FromStr;
 
     use ipnet::IpNet;
 
     use super::*;
+    use crate::crdt::peer_addr::PeerAddrEntry;
 
     fn make_hlc(wall_clock: u64, counter: u32, node_id: &str) -> HLC {
         HLC {
@@ -133,6 +149,42 @@ mod tests {
         let msg = GossipMessage::SubnetClaimRelease {
             cidr: "10.42.1.0_24".to_string(),
             hlc: make_hlc(1_700_000_003_000, 0, "router-c"),
+        };
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+    }
+
+    #[test]
+    fn postcard_roundtrip_peer_addr_update() {
+        let node_id = "abcd1234".repeat(8);
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: node_id.clone(),
+            entry: PeerAddrEntry {
+                node_id,
+                direct_addrs: vec![
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 7000),
+                ],
+                relay_url: Some("https://relay.example.com".to_string()),
+                announced_at: make_hlc(1_700_000_004_000, 0, "abcd1234abcd1234"),
+            },
+        };
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+    }
+
+    #[test]
+    fn postcard_roundtrip_peer_addr_update_no_relay() {
+        let node_id = "deadbeef".repeat(8);
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: node_id.clone(),
+            entry: PeerAddrEntry {
+                node_id,
+                direct_addrs: vec![],
+                relay_url: None,
+                announced_at: make_hlc(1_700_000_005_000, 1, "deadbeef"),
+            },
         };
         let bytes = postcard::to_allocvec(&msg).unwrap();
         let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();

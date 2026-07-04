@@ -38,8 +38,8 @@ use mjolnir_mesh::babel::{
     OverlayRtt,
 };
 use mjolnir_mesh::{
-    alloc, merge_subnet_claim, GossipError, GossipSync, GossipTransport, MergeResult, PeerEntry,
-    PeerRoster, SubnetClaim, HLC,
+    alloc, merge_peer_addr, merge_subnet_claim, AddrBook, GossipError, GossipSync, GossipTransport,
+    MergeResult, PeerAddrEntry, PeerEntry, PeerRoster, SubnetClaim, HLC,
 };
 use mjolnir_mesh::GossipMessage;
 use tracing::{error, info, warn};
@@ -688,6 +688,18 @@ async fn run_mesh(
     }
     let claims: ClaimStore = Arc::new(Mutex::new(restored));
 
+    // Gossip address book (mjolnir-mesh-0yb): node_id → self-announced reachable
+    // addresses. Seeded from disk so a rebooting node can dial known peers before
+    // gossip relearns them, then augmented as PeerAddrUpdate messages arrive.
+    // Persisted alongside the claims file (sibling addrbook.state) with the same
+    // tolerant load / tmp+rename write semantics.
+    let addr_book_file = addr_book_path(&claims_file);
+    let restored_book = load_addr_book(&addr_book_file);
+    if !restored_book.is_empty() {
+        info!(count = restored_book.len(), path = %addr_book_file.display(), "restored peer address book from disk");
+    }
+    let addr_book: Arc<Mutex<AddrBook>> = Arc::new(Mutex::new(restored_book));
+
     // CRDT gossip overlay (mjolnir-mesh-k8c): all mesh nodes join one fixed
     // topic and exchange CRDT updates best-effort, as a second protocol on the
     // same endpoint alongside the TUN data plane.
@@ -740,10 +752,18 @@ async fn run_mesh(
     // information available") and, with the one-shot join, left every node a
     // permanent gossip island (mjolnir-mesh-eon). Derivation needs no
     // discovery at all; mDNS stays as a second candidate source.
-    if lan {
-        match endpoint.address_lookup() {
-            Ok(services) => {
-                let derived = MemoryLookup::new();
+    // One MemoryLookup the daemon owns for the whole run (mjolnir-mesh-0yb):
+    // seeded at boot with every roster peer's DERIVED LAN address (unchanged
+    // pre-existing behavior) and with the restored address book, then augmented
+    // as gossiped PeerAddrUpdate entries arrive so dialing by node id works for
+    // peers that were never L2 neighbors (multi-hop / cross-site). Registered
+    // once with the endpoint's address-lookup services; a clone feeds the gossip
+    // dispatch loop. `None` if the services are unavailable — dialing then falls
+    // back to derived seeding / mDNS as before.
+    let addr_lookup: Option<MemoryLookup> = match endpoint.address_lookup() {
+        Ok(services) => {
+            let lookup = MemoryLookup::with_provenance("mjolnir_addrbook");
+            if lan {
                 for id in &bootstrap {
                     // Claim-aware (pt9): a peer that lost a backhaul collision
                     // sits at a re-derived address, learned from its gossiped
@@ -753,16 +773,26 @@ async fn run_mesh(
                         peer_backhaul_hint(&s, &id.to_string())
                     };
                     let addr = SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT);
-                    derived.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(addr));
+                    lookup.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(addr));
                     info!(peer = %id, %addr, "seeded derived peer address (no-discovery dialing)");
                 }
-                services.add(derived);
             }
-            Err(e) => {
-                warn!("address-lookup services unavailable — cannot seed derived peer addresses: {e}")
+            // Also seed from the restored address book (0yb): a rebooting node
+            // can dial peers it learned last run before gossip re-announces them.
+            {
+                let book = addr_book.lock().expect("address book poisoned");
+                for entry in book.values() {
+                    feed_addr_lookup(&lookup, entry);
+                }
             }
+            services.add(lookup.clone());
+            Some(lookup)
         }
-    }
+        Err(e) => {
+            warn!("address-lookup services unavailable — cannot seed peer addresses: {e}");
+            None
+        }
+    };
     let (gossip_dispatch, claim_task, anti_entropy_task, rejoin_task) = match gossip
         .subscribe(mesh_topic_id(), bootstrap.clone())
         .await
@@ -793,9 +823,36 @@ async fn run_mesh(
                 let store = claims.clone();
                 let me = self_id_str.clone();
                 let claims_path = claims_file.clone();
+                let book = addr_book.clone();
+                let book_path = addr_book_file.clone();
+                let lookup = addr_lookup.clone();
                 tokio::spawn(async move {
                     let result = sync
                         .run(move |msg| {
+                            // Address book (0yb): learn a peer's self-announced
+                            // addresses, feed them into iroh so we can dial the
+                            // peer by node id, persist, and log for field
+                            // validation. Own echoes and stale (LWW) updates are
+                            // dropped by apply_peer_addr_message. Handled first
+                            // with an early return so a PeerAddrUpdate never takes
+                            // the claim-store lock below.
+                            if matches!(msg, GossipMessage::PeerAddrUpdate { .. }) {
+                                let learned = {
+                                    let mut b = book.lock().expect("address book poisoned");
+                                    apply_peer_addr_message(&mut b, &msg, &me)
+                                };
+                                if let Some(entry) = learned {
+                                    let snapshot =
+                                        book.lock().expect("address book poisoned").clone();
+                                    persist_addr_book(&snapshot, &book_path);
+                                    if let Some(l) = &lookup {
+                                        feed_addr_lookup(l, &entry);
+                                    }
+                                    info!(peer = %entry.node_id, addrs = entry.direct_addrs.len(),
+                                        relay = ?entry.relay_url, "addrbook: learned peer address");
+                                }
+                                return;
+                            }
                             // Log peer claims received over gossip — proves CRDT
                             // convergence (a node seeing another's claim cross the mesh).
                             if let GossipMessage::SubnetClaimUpdate { cidr, entry } = &msg
@@ -858,7 +915,17 @@ async fn run_mesh(
                 let sync = sync.clone();
                 let store = claims.clone();
                 let path = claims_file.clone();
-                tokio::spawn(async move { anti_entropy_loop(sync, store, path).await })
+                let book = addr_book.clone();
+                let book_path = addr_book_file.clone();
+                let announce = SelfAnnounce {
+                    endpoint: endpoint.clone(),
+                    self_id: self_id_str.clone(),
+                    backhaul_ip,
+                    no_relay,
+                };
+                tokio::spawn(async move {
+                    anti_entropy_loop(sync, store, path, book, book_path, announce).await
+                })
             };
 
             (Some(dispatch), Some(claim), Some(anti_entropy), Some(rejoin))
@@ -1498,6 +1565,122 @@ fn persist_claims(snapshot: &HashMap<String, SubnetClaim>, path: &Path) {
     }
 }
 
+/// The address-book state file path (0yb): a sibling of the claims file
+/// (default `/etc/mjolnir/addrbook.state`). Derived rather than a new CLI flag
+/// so the fleet picks it up with no config change; follows however the claims
+/// file was configured.
+fn addr_book_path(claims_file: &Path) -> PathBuf {
+    claims_file.with_file_name("addrbook.state")
+}
+
+/// Load the persisted address book from `path`. Returns an empty book (not an
+/// error) if the file is absent — the normal case on first boot — or if it
+/// fails to decode, since the book is best-effort and relearns current state
+/// over gossip. Mirrors [`load_claims`].
+fn load_addr_book(path: &Path) -> AddrBook {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AddrBook::new(),
+        Err(e) => {
+            warn!(path = %path.display(), "failed to read persisted address book: {e}");
+            return AddrBook::new();
+        }
+    };
+    match postcard::from_bytes(&bytes) {
+        Ok(book) => book,
+        Err(e) => {
+            warn!(path = %path.display(), "failed to decode persisted address book: {e}");
+            AddrBook::new()
+        }
+    }
+}
+
+/// Persist an address-book snapshot to `path`, writing to a sibling temp file
+/// and renaming over the target so a crash or power loss mid-write can't leave
+/// a truncated, undecodable file. Best effort: a failure is logged, not fatal.
+/// Mirrors [`persist_claims`].
+fn persist_addr_book(snapshot: &AddrBook, path: &Path) {
+    let bytes = match postcard::to_allocvec(snapshot) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("failed to encode address book for persistence: {e}");
+            return;
+        }
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), "failed to create address book dir: {e}");
+        return;
+    }
+    let tmp_path = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        warn!(path = %tmp_path.display(), "failed to write address book tmp file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        warn!(path = %path.display(), "failed to rename address book tmp file into place: {e}");
+    }
+}
+
+/// Apply an inbound peer-address CRDT message to the address book. Returns the
+/// entry that was newly inserted or updated (so the caller can feed iroh,
+/// persist, and log), or `None` if the message was for another CRDT type, was
+/// our own self-announcement echoed back to us, or carried nothing newer (LWW).
+/// Pure over the map (no I/O) so it's unit-tested below — mirrors
+/// [`apply_subnet_message`].
+fn apply_peer_addr_message(
+    book: &mut AddrBook,
+    msg: &GossipMessage,
+    self_id: &str,
+) -> Option<PeerAddrEntry> {
+    let GossipMessage::PeerAddrUpdate { node_id, entry } = msg else {
+        return None;
+    };
+    // Never learn our own address from the mesh — we announce it authoritatively.
+    if node_id == self_id {
+        return None;
+    }
+    match merge_peer_addr(book.get(node_id), entry) {
+        MergeResult::Inserted | MergeResult::Updated => {
+            book.insert(node_id.clone(), entry.clone());
+            Some(entry.clone())
+        }
+        // Unchanged (stale/duplicate). merge_peer_addr never yields Conflict —
+        // a single node is the sole announcer of its own entry (pure LWW).
+        MergeResult::Unchanged | MergeResult::Conflict { .. } => None,
+    }
+}
+
+/// Feed a learned peer address-book entry into the daemon's [`MemoryLookup`] so
+/// iroh can dial the peer by node id even when it was never an L2 neighbor
+/// (multi-hop / cross-site — 0yb). Direct addresses are always added; the relay
+/// URL is attached when it parses as a [`RelayUrl`] (the iroh API supports this
+/// cleanly via `EndpointAddr::with_relay_url`). A node id that doesn't parse as
+/// an [`EndpointId`] is skipped and logged.
+fn feed_addr_lookup(lookup: &MemoryLookup, entry: &PeerAddrEntry) {
+    let id: EndpointId = match entry.node_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(node_id = %entry.node_id, "addrbook: peer id does not parse as EndpointId, not feeding iroh: {e}");
+            return;
+        }
+    };
+    let mut ep_addr = EndpointAddr::new(id);
+    for a in &entry.direct_addrs {
+        ep_addr = ep_addr.with_ip_addr(*a);
+    }
+    if let Some(url) = &entry.relay_url {
+        match url.parse::<RelayUrl>() {
+            Ok(r) => ep_addr = ep_addr.with_relay_url(r),
+            Err(e) => {
+                warn!(node_id = %entry.node_id, relay = %url, "addrbook: relay URL unparseable, skipping relay: {e}")
+            }
+        }
+    }
+    lookup.add_endpoint_info(ep_addr);
+}
+
 /// Anti-entropy loop (mjolnir-mesh-s9v): every [`ANTI_ENTROPY_INTERVAL`],
 /// re-broadcast every claim this node currently knows about — not just its
 /// own — and rewrite the on-disk claims file. Re-broadcasting the full map
@@ -1509,7 +1692,15 @@ async fn anti_entropy_loop<T: GossipTransport>(
     sync: Arc<GossipSync<T>>,
     store: ClaimStore,
     claims_file: PathBuf,
+    addr_book: Arc<Mutex<AddrBook>>,
+    addr_book_file: PathBuf,
+    self_announce: SelfAnnounce,
 ) {
+    // Self-announce our address once up front (0yb): unlike the claim map, whose
+    // initial publish is `claim_manager`'s warmup, the address book has no
+    // separate warmup publisher, so the first broadcast happens here before the
+    // ticker's immediately-consumed first tick.
+    announce_addr_book(&sync, &addr_book, &addr_book_file, &self_announce).await;
     let mut ticker = tokio::time::interval(ANTI_ENTROPY_INTERVAL);
     ticker.tick().await; // first tick fires immediately; the warmup claim publish already covered this
     loop {
@@ -1528,7 +1719,74 @@ async fn anti_entropy_loop<T: GossipTransport>(
         }
         info!(count = snapshot.len(), "anti-entropy: re-broadcast full claim map");
         persist_claims(&snapshot, &claims_file);
+        // Re-announce our own address and re-broadcast the full address book
+        // alongside the claim map, on the same cadence (0yb).
+        announce_addr_book(&sync, &addr_book, &addr_book_file, &self_announce).await;
     }
+}
+
+/// Inputs for rebuilding this node's own address-book entry each anti-entropy
+/// tick (0yb). Cloning is cheap — an [`Endpoint`] handle is internally an `Arc`.
+struct SelfAnnounce {
+    endpoint: Endpoint,
+    self_id: String,
+    backhaul_ip: Ipv4Addr,
+    no_relay: bool,
+}
+
+/// Build this node's self-announced address-book entry: our observed direct
+/// addresses (from the endpoint) plus the deterministic bound backhaul address
+/// every node binds in LAN mode (`backhaul_ip:MESH_IROH_PORT`), and our relay
+/// URL unless relays are disabled. Stamped with a fresh HLC each call so LWW
+/// always carries the latest snapshot — re-stamping every tick is simpler than
+/// diffing the address set and still converges, since a single node is the sole
+/// announcer of its own entry (no conflict arm). See mjolnir-mesh-0yb.
+fn build_self_addr_entry(ctx: &SelfAnnounce) -> PeerAddrEntry {
+    let observed = ctx.endpoint.addr();
+    let mut direct: Vec<SocketAddr> = observed.ip_addrs().copied().collect();
+    // Always include the derived bound backhaul address: in LAN mode this is the
+    // address peers dial, and it may not appear in the endpoint's observed set
+    // until discovery settles (PeerAddrEntry::new dedups if it does).
+    direct.push(SocketAddr::new(IpAddr::V4(ctx.backhaul_ip), MESH_IROH_PORT));
+    let relay_url = if ctx.no_relay {
+        None
+    } else {
+        observed.relay_urls().next().map(|u| u.to_string())
+    };
+    PeerAddrEntry::new(ctx.self_id.clone(), direct, relay_url, now_hlc(&ctx.self_id))
+}
+
+/// Refresh this node's own entry (fresh HLC), then re-broadcast the FULL known
+/// address book — ours and every peer's — and rewrite the on-disk book.
+/// Full-map anti-entropy mirroring the claim map, so a late joiner or a node
+/// that missed a packet still converges without a pull protocol (0yb). The lock
+/// is held only to insert-and-clone the snapshot; it is never held across an
+/// `.await`.
+async fn announce_addr_book<T: GossipTransport>(
+    sync: &GossipSync<T>,
+    addr_book: &Arc<Mutex<AddrBook>>,
+    addr_book_file: &Path,
+    self_announce: &SelfAnnounce,
+) {
+    let snapshot = {
+        let entry = build_self_addr_entry(self_announce);
+        let mut book = addr_book.lock().expect("address book poisoned");
+        book.insert(self_announce.self_id.clone(), entry);
+        book.clone()
+    };
+    for (node_id, entry) in &snapshot {
+        if let Err(e) = sync
+            .publish(GossipMessage::PeerAddrUpdate {
+                node_id: node_id.clone(),
+                entry: entry.clone(),
+            })
+            .await
+        {
+            warn!(%node_id, "addrbook anti-entropy: re-broadcast failed: {e}");
+        }
+    }
+    info!(count = snapshot.len(), "addrbook anti-entropy: re-broadcast full address book");
+    persist_addr_book(&snapshot, addr_book_file);
 }
 
 /// Assign this node's claimed /24 gateway address (`<net>.1/prefix`) to the local
@@ -2797,6 +3055,8 @@ async fn run_status(secret_file: Option<&std::path::Path>) -> Result<()> {
         // Interfaces/routes are still worth showing, but we have no derived
         // address to flag against.
         print_system_status(None).await;
+        println!();
+        print_addr_book_status(&addr_book_path(Path::new("/etc/mjolnir/claims.state")));
         return Ok(());
     };
 
@@ -2817,7 +3077,42 @@ async fn run_status(secret_file: Option<&std::path::Path>) -> Result<()> {
     }
     println!();
     print_system_status(Some(backhaul)).await;
+    println!();
+    print_addr_book_status(&addr_book_path(Path::new("/etc/mjolnir/claims.state")));
     Ok(())
+}
+
+/// Print the persisted gossip address book (0yb) for `status`: peer id →
+/// direct addrs, relay URL, and announced-at HLC. Reads the on-disk book only
+/// (never a running daemon) and prints an explicit absence marker when it is
+/// empty or missing — dbv discipline: report ground truth, never invent state.
+fn print_addr_book_status(path: &Path) {
+    let book = load_addr_book(path);
+    println!("address book (0yb): {}", path.display());
+    if book.is_empty() {
+        println!("  (none — no peer addresses learned yet, or file absent)");
+        return;
+    }
+    for (node_id, entry) in &book {
+        let relay = entry.relay_url.as_deref().unwrap_or("none");
+        let addrs = if entry.direct_addrs.is_empty() {
+            "none".to_string()
+        } else {
+            entry
+                .direct_addrs
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        println!("  {node_id}");
+        println!("    direct: {addrs}");
+        println!("    relay:  {relay}");
+        println!(
+            "    announced_at: wall={} counter={}",
+            entry.announced_at.wall_clock, entry.announced_at.counter
+        );
+    }
 }
 
 /// The secret-file path `status` reads when `--secret-file` is omitted. Mirrors
@@ -3521,5 +3816,108 @@ config meshd 'meshd'
         persist_claims(&snapshot, &path);
 
         assert_eq!(load_claims(&path).len(), 1);
+    }
+
+    // --- address book (mjolnir-mesh-0yb) --------------------------------------
+
+    fn addr_entry(node_id: &str, wall_clock: u64, addr: &str) -> PeerAddrEntry {
+        PeerAddrEntry::new(
+            node_id.to_string(),
+            vec![addr.parse().unwrap()],
+            None,
+            HLC { wall_clock, counter: 0, node_id: node_id.to_string() },
+        )
+    }
+
+    #[test]
+    fn addr_book_path_is_sibling_of_claims_file() {
+        assert_eq!(
+            addr_book_path(Path::new("/etc/mjolnir/claims.state")),
+            PathBuf::from("/etc/mjolnir/addrbook.state")
+        );
+        assert_eq!(
+            addr_book_path(Path::new("/var/run/mjolnir/claims.state")),
+            PathBuf::from("/var/run/mjolnir/addrbook.state")
+        );
+    }
+
+    #[test]
+    fn apply_peer_addr_inserts_new_peer_and_returns_it() {
+        let mut book = AddrBook::new();
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: "peer-a".to_string(),
+            entry: addr_entry("peer-a", 1_000, "10.254.1.1:49737"),
+        };
+        let learned = apply_peer_addr_message(&mut book, &msg, "me");
+        assert!(learned.is_some(), "a new peer entry is learned");
+        assert_eq!(book.len(), 1);
+        assert_eq!(book["peer-a"].direct_addrs.len(), 1);
+    }
+
+    #[test]
+    fn apply_peer_addr_skips_self_announcement() {
+        let mut book = AddrBook::new();
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: "me".to_string(),
+            entry: addr_entry("me", 1_000, "10.254.9.9:49737"),
+        };
+        assert!(apply_peer_addr_message(&mut book, &msg, "me").is_none());
+        assert!(book.is_empty(), "own echoed announcement must not enter the book");
+    }
+
+    #[test]
+    fn apply_peer_addr_updates_on_newer_and_ignores_stale() {
+        let mut book = AddrBook::new();
+        let older = GossipMessage::PeerAddrUpdate {
+            node_id: "peer-a".to_string(),
+            entry: addr_entry("peer-a", 1_000, "10.254.1.1:49737"),
+        };
+        let newer = GossipMessage::PeerAddrUpdate {
+            node_id: "peer-a".to_string(),
+            entry: addr_entry("peer-a", 2_000, "10.254.1.2:49737"),
+        };
+        assert!(apply_peer_addr_message(&mut book, &older, "me").is_some());
+        // Newer announcement wins (LWW).
+        assert!(apply_peer_addr_message(&mut book, &newer, "me").is_some());
+        assert_eq!(book["peer-a"].direct_addrs[0].to_string(), "10.254.1.2:49737");
+        // Replaying the older one is Unchanged -> None, and does not regress.
+        assert!(apply_peer_addr_message(&mut book, &older, "me").is_none());
+        assert_eq!(book["peer-a"].direct_addrs[0].to_string(), "10.254.1.2:49737");
+    }
+
+    #[test]
+    fn apply_peer_addr_ignores_non_peer_addr_messages() {
+        let mut book = AddrBook::new();
+        let msg = GossipMessage::SubnetClaimRelease {
+            cidr: "10.42.1.0/24".to_string(),
+            hlc: HLC { wall_clock: 1, counter: 0, node_id: "x".to_string() },
+        };
+        assert!(apply_peer_addr_message(&mut book, &msg, "me").is_none());
+        assert!(book.is_empty());
+    }
+
+    #[test]
+    fn load_addr_book_missing_or_corrupt_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_addr_book(&dir.path().join("nope.state")).is_empty());
+        let path = dir.path().join("addrbook.state");
+        std::fs::write(&path, b"not a valid postcard payload").unwrap();
+        assert!(load_addr_book(&path).is_empty());
+    }
+
+    #[test]
+    fn persist_then_load_addr_book_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("addrbook.state");
+        let mut book = AddrBook::new();
+        book.insert("peer-a".to_string(), addr_entry("peer-a", 100, "10.254.1.1:49737"));
+        book.insert("peer-b".to_string(), addr_entry("peer-b", 200, "10.254.2.2:49737"));
+
+        persist_addr_book(&book, &path);
+        assert!(path.exists(), "parent dir is created and file written");
+        let loaded = load_addr_book(&path);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded["peer-a"].announced_at.wall_clock, 100);
+        assert_eq!(loaded["peer-b"].direct_addrs[0].to_string(), "10.254.2.2:49737");
     }
 }

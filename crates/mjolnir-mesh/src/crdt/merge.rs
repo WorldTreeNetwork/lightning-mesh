@@ -1,3 +1,4 @@
+use crate::crdt::peer_addr::PeerAddrEntry;
 use crate::crdt::subnet::SubnetClaim;
 use std::cmp::Ordering;
 
@@ -67,6 +68,27 @@ pub fn merge_subnet_claim(
                 }
             }
         }
+    }
+}
+
+/// Last-writer-wins merge for self-announced peer address entries.
+///
+/// Since only the subject node announces its own entry, there is no conflict
+/// arm — a newer `announced_at` always wins outright.
+///
+/// Note: this function does not enforce that the map key matches
+/// `incoming.node_id` — the caller must look up local by `node_id` before
+/// calling.
+pub fn merge_peer_addr(
+    local: Option<&PeerAddrEntry>,
+    incoming: &PeerAddrEntry,
+) -> MergeResult<PeerAddrEntry> {
+    match local {
+        None => MergeResult::Inserted,
+        Some(existing) => match incoming.announced_at.cmp(&existing.announced_at) {
+            Ordering::Greater => MergeResult::Updated,
+            _ => MergeResult::Unchanged,
+        },
     }
 }
 
@@ -198,5 +220,79 @@ mod tests {
         let (w2, l2) = resolve_subnet_conflict(&b, &a);
         assert_eq!(w1.owner_node_id, w2.owner_node_id);
         assert_eq!(l1.owner_node_id, l2.owner_node_id);
+    }
+
+    // --- merge_peer_addr tests ---
+
+    fn peer(node_id: &str, wall_clock: u64, counter: u32) -> PeerAddrEntry {
+        PeerAddrEntry {
+            node_id: node_id.to_string(),
+            direct_addrs: vec![],
+            relay_url: None,
+            announced_at: HLC {
+                wall_clock,
+                counter,
+                node_id: node_id.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn peer_addr_inserted_when_no_local() {
+        let incoming = peer("node-a", 1_000, 0);
+        assert!(matches!(merge_peer_addr(None, &incoming), MergeResult::Inserted));
+    }
+
+    #[test]
+    fn peer_addr_updated_on_newer_announced_at() {
+        let local = peer("node-a", 1_000, 0);
+        let incoming = peer("node-a", 2_000, 0);
+        assert!(matches!(
+            merge_peer_addr(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
+    }
+
+    #[test]
+    fn peer_addr_unchanged_on_equal_announced_at() {
+        let entry = peer("node-a", 1_000, 0);
+        assert!(matches!(
+            merge_peer_addr(Some(&entry), &entry),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn peer_addr_unchanged_on_older_announced_at() {
+        let local = peer("node-a", 2_000, 0);
+        let incoming = peer("node-a", 1_000, 0);
+        assert!(matches!(
+            merge_peer_addr(Some(&local), &incoming),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn peer_addr_idempotent_same_message_twice() {
+        // Receiving the same announcement a second time is Unchanged, not Updated.
+        let entry = peer("node-a", 5_000, 3);
+        let result1 = merge_peer_addr(None, &entry);
+        assert!(matches!(result1, MergeResult::Inserted));
+        let result2 = merge_peer_addr(Some(&entry), &entry);
+        assert!(matches!(result2, MergeResult::Unchanged));
+    }
+
+    #[test]
+    fn peer_addr_hlc_counter_breaks_wall_clock_tie() {
+        // Same wall_clock, higher counter → newer.
+        let local = peer("node-a", 1_000, 0);
+        let incoming = PeerAddrEntry {
+            announced_at: HLC { wall_clock: 1_000, counter: 1, node_id: "node-a".to_string() },
+            ..peer("node-a", 1_000, 0)
+        };
+        assert!(matches!(
+            merge_peer_addr(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
     }
 }

@@ -3,6 +3,7 @@ pub mod gossip;
 pub mod hlc;
 pub mod lease;
 pub mod merge;
+pub mod peer_addr;
 pub mod service;
 pub mod subnet;
 pub mod sync;
