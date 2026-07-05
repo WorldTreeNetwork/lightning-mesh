@@ -74,6 +74,24 @@ pub enum GossipMessage {
         owner_node_id: String,
         hlc: HLC,
     },
+    /// Ephemeral per-node liveness beacon (bead e21.9). Carries no CRDT state:
+    /// it is authored fresh by the living origin about ITSELF once per
+    /// anti-entropy tick, and receivers use it only to refresh an in-memory
+    /// [`LivenessTracker`](crate::crdt::liveness::LivenessTracker) — never
+    /// merged into a book, never persisted, never relayed. `incarnation` is the
+    /// origin's boot wall-clock time (ms); `counter` is a per-boot tick
+    /// sequence. See `docs/network-coordination/lane-staleness.md`.
+    ///
+    /// Appended last so existing discriminants are undisturbed; same mixed-fleet
+    /// caveat as `ServicePublishV2` — a node that predates this variant
+    /// decode-errors on it, and the `GossipSync` recv loop log-and-skips (a
+    /// dropped beacon just means that peer looks stale to the old node, which
+    /// has no staleness logic anyway).
+    LivenessBeacon {
+        node_id: String,
+        incarnation: u64,
+        counter: u64,
+    },
 }
 
 #[cfg(test)]
@@ -273,6 +291,18 @@ mod tests {
             name: "printer._ipp._tcp".to_string(),
             owner_node_id: "router-a-node-id".to_string(),
             hlc: make_hlc(1_700_000_009_000, 0, "router-a-node-id"),
+        };
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+    }
+
+    #[test]
+    fn postcard_roundtrip_liveness_beacon() {
+        let msg = GossipMessage::LivenessBeacon {
+            node_id: "abcd1234".repeat(8),
+            incarnation: 1_700_000_020_000,
+            counter: 42,
         };
         let bytes = postcard::to_allocvec(&msg).unwrap();
         let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();

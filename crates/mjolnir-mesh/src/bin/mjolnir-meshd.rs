@@ -40,7 +40,8 @@ use mjolnir_mesh::babel::{
 use mjolnir_mesh::{
     alloc, apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, merge_peer_addr,
     merge_service, merge_subnet_claim, merge_user, publish_service_v2, AddrBook, GossipError,
-    GossipSync, GossipTransport, LostNameMap, MergeResult, PeerAddrEntry, PeerEntry, PeerRoster,
+    GossipSync, GossipTransport, LivenessTracker, LostNameMap, MergeResult, PeerAddrEntry,
+    PeerEntry, PeerRoster,
     PublishOutcome, ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError,
     ServiceTombstone, ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry,
     HLC,
@@ -696,6 +697,18 @@ async fn run_mesh(
         Arc::new(Mutex::new(restored_v2.tombstones));
     let lost_names_v2: Arc<Mutex<LostNameMap>> = Arc::new(Mutex::new(restored_v2.lost_names));
 
+    // Ephemeral liveness tracker (bead e21.9): the in-memory view of which
+    // nodes have beaconed recently, shared by the DNS read filter (below), the
+    // gossip dispatch (beacon ingest), and the anti-entropy sweep (emit +
+    // hard-expiry + tombstone GC). Never persisted — a fresh boot starts with
+    // everyone unknown-and-stale until their first post-boot beacon arrives,
+    // which is correct: a restart is not evidence any peer died, and each entry
+    // gets its full grace window as beacons resume.
+    let liveness: Arc<Mutex<LivenessTracker>> = Arc::new(Mutex::new(LivenessTracker::new(
+        LIVENESS_STALE_THRESHOLD.as_millis() as u64,
+        LIVENESS_HARD_EXPIRY.as_millis() as u64,
+    )));
+
     // .mesh DNS responder (e21.1.1): bind BEFORE any UCI/dnsmasq reconcile
     // (FR14) — first thing in `run_mesh` so dnsmasq's `.mesh` upstream
     // (`server=/mesh/127.0.0.1#5335`) is answerable the instant it's
@@ -705,7 +718,10 @@ async fn run_mesh(
     let dns_table: Arc<dyn mjolnir_mesh::dns_responder::NameTable> =
         Arc::new(mjolnir_mesh::dns_responder::CompositeTable::new(vec![
             Arc::new(mjolnir_mesh::dns_responder::WellKnownTable::new(gateway_handle.clone())),
-            Arc::new(mjolnir_mesh::dns_responder::ServiceTable::new(service_book_v2.clone())),
+            Arc::new(mjolnir_mesh::dns_responder::ServiceTable::with_liveness(
+                service_book_v2.clone(),
+                liveness.clone(),
+            )),
         ]));
     let dns_responder = mjolnir_mesh::dns_responder::start(
         SocketAddr::new(
@@ -726,6 +742,21 @@ async fn run_mesh(
 
     let self_id = endpoint.id();
     let self_id_str = self_id.to_string();
+    // Liveness: mark our own id fresh immediately (bead e21.9) so our own
+    // published names resolve from the moment the DNS responder is answering —
+    // we know we are alive without waiting to receive our own beacon. The
+    // anti-entropy loop re-touches self every tick to keep it fresh. `incarnation`
+    // is our boot wall-clock time; a later reboot yields a strictly greater one,
+    // so peers accept our post-restart beacons even though `counter` resets — no
+    // incarnation is persisted (see docs/network-coordination/lane-staleness.md).
+    let boot_incarnation = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    liveness
+        .lock()
+        .expect("liveness tracker poisoned")
+        .touch(&self_id_str, mjolnir_mesh::monotonic_now_ms());
     // NB: the effective IPv4 backhaul address (`backhaul_ip`, claim-aware per
     // pt9) was already assigned to the shared-segment iface in `main`, before
     // the endpoint was built, so iroh picks it up at bind time and mDNS
@@ -986,9 +1017,24 @@ async fn run_mesh(
                 let service_tombstones_v2 = service_tombstones_v2.clone();
                 let lost_names_v2 = lost_names_v2.clone();
                 let service_book_v2_persist_path = service_book_v2_file.clone();
+                let liveness = liveness.clone();
                 tokio::spawn(async move {
                     let result = sync
                         .run(move |msg| {
+                            // Liveness beacon (e21.9): purely refresh the
+                            // in-memory tracker — never merged, never persisted.
+                            // Handled first (cheapest, most frequent) with an
+                            // early return so it never takes any book lock. A
+                            // beacon older than or equal to what we hold is
+                            // ignored by `observe`, so a stale replay cannot
+                            // resurrect a dead node's freshness.
+                            if let GossipMessage::LivenessBeacon { node_id, incarnation, counter } = &msg {
+                                liveness
+                                    .lock()
+                                    .expect("liveness tracker poisoned")
+                                    .observe(node_id, *incarnation, *counter, mjolnir_mesh::monotonic_now_ms());
+                                return;
+                            }
                             // Address book (0yb): learn a peer's self-announced
                             // addresses, feed them into iroh so we can dial the
                             // peer by node id, persist, and log for field
@@ -1181,6 +1227,7 @@ async fn run_mesh(
                 let services_v2_path = service_book_v2_file.clone();
                 let directory_path = directory_file.clone();
                 let spool_path = spool_dir.clone();
+                let liveness = liveness.clone();
                 let announce = SelfAnnounce {
                     endpoint: endpoint.clone(),
                     self_id: self_id_str.clone(),
@@ -1191,7 +1238,8 @@ async fn run_mesh(
                     anti_entropy_loop(
                         sync, store, path, book, book_path, users, users_path, users_seed,
                         services, services_path, services_v2, tombstones_v2, lost_names_v2,
-                        services_v2_path, directory_path, spool_path, announce,
+                        services_v2_path, directory_path, spool_path, announce, liveness,
+                        boot_incarnation,
                     )
                     .await
                 })
@@ -1429,6 +1477,25 @@ const CLIENT_PREFIX_LEN: u8 = 24;
 /// late-joiner / dropped-packet / restart convergence without any new gossip
 /// protocol, just a resend of what `SubnetClaimUpdate` already carries.
 const ANTI_ENTROPY_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Self-announced lane staleness (bead e21.9). Liveness rides an ephemeral
+/// per-node [`LivenessBeacon`](mjolnir_mesh::crdt::gossip::GossipMessage::LivenessBeacon)
+/// emitted once per anti-entropy tick, tracked in-memory by a
+/// [`LivenessTracker`](mjolnir_mesh::crdt::liveness::LivenessTracker) — never
+/// persisted, so the durable CRDT only writes on real change (no flash churn;
+/// see `docs/network-coordination/lane-staleness.md`). Thresholds are multiples
+/// of the anti-entropy cadence:
+/// - `STALE`: an owner silent this long stops resolving / reads as stale
+///   (3 missed beacons of margin).
+const LIVENESS_STALE_THRESHOLD: Duration = Duration::from_secs(60);
+/// - `HARD_EXPIRY`: a still-silent owner's *service* records are dropped from
+///   the book entirely (unbounded-growth guard). Addr-book deletion is left to
+///   `f8b`, which needs the persisted book for rejoin bootstrap.
+const LIVENESS_HARD_EXPIRY: Duration = Duration::from_secs(3600);
+/// - `TOMBSTONE_RETENTION`: an unpublish tombstone is GC'd this long after the
+///   sweep first observes it — far longer than any in-flight stale replay could
+///   survive, so GC cannot cause resurrection (D-e21.9).
+const TOMBSTONE_RETENTION: Duration = Duration::from_secs(3600);
 
 /// Shared CRDT subnet-claim store: cidr string -> claim. Written by the gossip
 /// apply loop and the local claim routine; babeld (mjolnir-mesh-83k) will read
@@ -2691,6 +2758,8 @@ async fn anti_entropy_loop<T: GossipTransport>(
     directory_file: PathBuf,
     spool_dir: PathBuf,
     self_announce: SelfAnnounce,
+    liveness: Arc<Mutex<LivenessTracker>>,
+    boot_incarnation: u64,
 ) {
     // Self-announce our address once up front (0yb): unlike the claim map, whose
     // initial publish is `claim_manager`'s warmup, the address book has no
@@ -2734,10 +2803,47 @@ async fn anti_entropy_loop<T: GossipTransport>(
         self_announce.backhaul_ip,
         &directory_file,
     );
+    // Liveness beacon state (e21.9): a per-boot monotonic counter and the
+    // sweep's lazily-stamped tombstone first-seen times (both loop-local, never
+    // persisted). Emit an initial beacon up front so peers mark us live without
+    // waiting a full tick, mirroring the up-front address announce above.
+    let mut beacon_counter: u64 = 0;
+    let mut tombstone_observed: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+    emit_liveness_beacon(
+        &sync,
+        &self_announce.self_id,
+        boot_incarnation,
+        &mut beacon_counter,
+        &liveness,
+    )
+    .await;
     let mut ticker = tokio::time::interval(ANTI_ENTROPY_INTERVAL);
     ticker.tick().await; // first tick fires immediately; the warmup claim publish already covered this
     loop {
         ticker.tick().await;
+        // Liveness (e21.9): re-announce our own beacon and re-touch self so our
+        // records never read stale locally, then sweep the self-announced lanes
+        // — hard-expire long-silent service entries and GC aged unpublish
+        // tombstones. One pass, same cadence, no new timer.
+        emit_liveness_beacon(
+            &sync,
+            &self_announce.self_id,
+            boot_incarnation,
+            &mut beacon_counter,
+            &liveness,
+        )
+        .await;
+        sweep_stale_lanes(
+            &service_book_v2,
+            &service_tombstones_v2,
+            &lost_names_v2,
+            &service_book_v2_file,
+            &liveness,
+            &mut tombstone_observed,
+            mjolnir_mesh::monotonic_now_ms(),
+            TOMBSTONE_RETENTION.as_millis() as u64,
+        );
         let snapshot = store.lock().expect("claim store poisoned").clone();
         for (cidr, entry) in &snapshot {
             if let Err(e) = sync
@@ -2794,6 +2900,123 @@ async fn anti_entropy_loop<T: GossipTransport>(
             self_announce.backhaul_ip,
             &directory_file,
         );
+    }
+}
+
+/// Broadcast this node's ephemeral liveness beacon (bead e21.9) and refresh our
+/// own liveness locally. `counter` is a per-boot monotonic sequence bumped each
+/// call; `incarnation` is our boot wall-clock time (constant for this process).
+/// The beacon carries no CRDT state and is never persisted — it exists only to
+/// keep peers' in-memory [`LivenessTracker`]s fresh for the names/addresses this
+/// node owns. Touching self locally means our own records never read stale on
+/// this node even though we don't receive our own gossip.
+async fn emit_liveness_beacon<T: GossipTransport>(
+    sync: &GossipSync<T>,
+    self_id: &str,
+    incarnation: u64,
+    counter: &mut u64,
+    liveness: &Arc<Mutex<LivenessTracker>>,
+) {
+    let c = *counter;
+    *counter = counter.wrapping_add(1);
+    if let Err(e) = sync
+        .publish(GossipMessage::LivenessBeacon {
+            node_id: self_id.to_string(),
+            incarnation,
+            counter: c,
+        })
+        .await
+    {
+        warn!("liveness beacon broadcast failed: {e}");
+    }
+    liveness
+        .lock()
+        .expect("liveness tracker poisoned")
+        .touch(self_id, mjolnir_mesh::monotonic_now_ms());
+}
+
+/// Sweep the self-announced service lane for staleness (bead e21.9), run once
+/// per anti-entropy tick:
+/// 1. **Service hard-expiry** — drop v2 service entries whose owning node has
+///    been silent past the hard-expiry threshold, so a never-returning owner's
+///    names cannot grow the book unboundedly. (The address book is deliberately
+///    left alone here: `f8b` rejoin-bootstrap reads the persisted addrbook, so
+///    physical addr-entry deletion is coordinated there, not in this bead. The
+///    liveness tracker still marks addr owners stale for read consumers.)
+/// 2. **Tombstone GC** — drop unpublish tombstones the sweep first observed more
+///    than `tombstone_retention_ms` ago. First-seen is stamped lazily here
+///    (`tombstone_observed`), so no cross-site plumbing is needed; retention is
+///    far longer than any in-flight stale replay could survive, so GC cannot
+///    resurrect a name (see docs/network-coordination/lane-staleness.md).
+///
+/// Persists the v2 state only if it actually changed, so a quiescent mesh does
+/// not rewrite flash every tick.
+#[allow(clippy::too_many_arguments)]
+fn sweep_stale_lanes(
+    service_book_v2: &Arc<Mutex<ServiceBookV2>>,
+    service_tombstones_v2: &Arc<Mutex<ServiceTombstoneBook>>,
+    lost_names_v2: &Arc<Mutex<LostNameMap>>,
+    service_book_v2_file: &Path,
+    liveness: &Arc<Mutex<LivenessTracker>>,
+    tombstone_observed: &mut std::collections::BTreeMap<String, u64>,
+    now_ms: u64,
+    tombstone_retention_ms: u64,
+) {
+    let mut changed = false;
+
+    // 1. Service hard-expiry. Collect (name, owner) under the book lock, release
+    // it, then consult liveness — the two locks are never held simultaneously
+    // (the DNS read filter follows the same discipline).
+    let entries: Vec<(String, String)> = {
+        let book = service_book_v2.lock().expect("v2 service book poisoned");
+        book.iter().map(|(n, e)| (n.clone(), e.owner_node_id.clone())).collect()
+    };
+    let expired: Vec<String> = {
+        let tracker = liveness.lock().expect("liveness tracker poisoned");
+        entries
+            .into_iter()
+            .filter(|(_, owner)| tracker.is_hard_expired(owner, now_ms))
+            .map(|(name, _)| name)
+            .collect()
+    };
+    if !expired.is_empty() {
+        let mut book = service_book_v2.lock().expect("v2 service book poisoned");
+        for name in &expired {
+            book.remove(name);
+        }
+        changed = true;
+        info!(count = expired.len(), "e21.9 sweep: hard-expired long-silent service entries");
+    }
+
+    // 2. Tombstone GC with lazy first-seen stamping.
+    {
+        let mut tombstones = service_tombstones_v2.lock().expect("v2 service tombstones poisoned");
+        for name in tombstones.keys() {
+            tombstone_observed.entry(name.clone()).or_insert(now_ms);
+        }
+        let gc: Vec<String> = tombstones
+            .keys()
+            .filter(|name| {
+                let seen = tombstone_observed.get(*name).copied().unwrap_or(now_ms);
+                now_ms.saturating_sub(seen) > tombstone_retention_ms
+            })
+            .cloned()
+            .collect();
+        for name in &gc {
+            tombstones.remove(name);
+        }
+        // Forget observed stamps for tombstones that are gone (GC'd or revived).
+        tombstone_observed.retain(|name, _| tombstones.contains_key(name));
+        if !gc.is_empty() {
+            changed = true;
+            info!(count = gc.len(), "e21.9 sweep: GC'd aged unpublish tombstones");
+        }
+    }
+
+    if changed {
+        let snapshot =
+            snapshot_service_state_v2(service_book_v2, service_tombstones_v2, lost_names_v2);
+        persist_service_state_v2(&snapshot, service_book_v2_file);
     }
 }
 

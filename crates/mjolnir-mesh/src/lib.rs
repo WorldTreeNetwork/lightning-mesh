@@ -32,6 +32,7 @@ pub use crdt::{
     gossip::GossipMessage,
     hlc::HLC,
     lease::LeaseEntry,
+    liveness::{monotonic_now_ms, LivenessTracker},
     merge::{
         merge_peer_addr, merge_service, merge_service_v2, merge_subnet_claim, merge_user,
         resolve_subnet_conflict, MergeResult, ReservedServiceName,

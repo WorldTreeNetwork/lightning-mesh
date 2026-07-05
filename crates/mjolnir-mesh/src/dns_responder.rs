@@ -20,6 +20,7 @@ use simple_dns::{Name, Packet, PacketFlag, ResourceRecord, CLASS, QTYPE, RCODE, 
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
+use crate::crdt::liveness::{monotonic_now_ms, LivenessTracker};
 use crate::crdt::service::{is_reserved_service_name, ServiceBookV2};
 
 /// Default bind port for the `.mesh` responder (loopback-only — dnsmasq is
@@ -201,14 +202,31 @@ impl NameTable for CompositeTable {
 #[derive(Clone)]
 pub struct ServiceTable {
     store: Arc<Mutex<ServiceBookV2>>,
+    /// When set, a name whose owning node is stale (bead e21.9) is treated as
+    /// absent — it stops resolving (NXDOMAIN) rather than handing back a
+    /// black-hole IP for an offline owner. `None` disables the filter (all
+    /// entries always resolve), which is the constructor tests use.
+    liveness: Option<Arc<Mutex<LivenessTracker>>>,
 }
 
 impl ServiceTable {
-    /// Build a table reading from `store`. The caller (mjolnir-meshd) owns
-    /// the daemon-side write path (gossip dispatch, local publish/unpublish);
-    /// this table only ever reads.
+    /// Build a table reading from `store`, with no liveness filtering — every
+    /// entry in the book resolves. The caller (mjolnir-meshd) owns the
+    /// daemon-side write path (gossip dispatch, local publish/unpublish); this
+    /// table only ever reads.
     pub fn new(store: Arc<Mutex<ServiceBookV2>>) -> Self {
-        Self { store }
+        Self { store, liveness: None }
+    }
+
+    /// Build a table that filters out names whose owner has gone stale per the
+    /// shared [`LivenessTracker`] (bead e21.9). Used by the daemon so an
+    /// offline owner's names stop resolving; the entry stays in the book, so
+    /// the owner's return silently un-stales it.
+    pub fn with_liveness(
+        store: Arc<Mutex<ServiceBookV2>>,
+        liveness: Arc<Mutex<LivenessTracker>>,
+    ) -> Self {
+        Self { store, liveness: Some(liveness) }
     }
 
     /// `name` is a wire-format qname (e.g. `"printer.mesh."`); the service
@@ -218,13 +236,40 @@ impl ServiceTable {
     fn book_key<'a>(&self, name: &'a str) -> Option<&'a str> {
         name.trim_end_matches('.').strip_suffix(".mesh")
     }
+
+    /// True if `owner_node_id`'s records should be hidden because its liveness
+    /// beacon has aged past the stale threshold (bead e21.9). Always `false`
+    /// when no tracker is configured. Takes the liveness lock only after the
+    /// book lock has been released by the caller, so the two never nest.
+    fn owner_stale(&self, owner_node_id: &str) -> bool {
+        match &self.liveness {
+            Some(tracker) => tracker
+                .lock()
+                .map(|t| t.is_stale(owner_node_id, monotonic_now_ms()))
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Read `(value, owner)` for `key` under the book lock, releasing it before
+    /// any liveness check. Returns `None` if the name is absent.
+    fn get_if_live<T>(&self, key: &str, extract: impl FnOnce(&crate::crdt::service::ServiceEntryV2) -> T) -> Option<T> {
+        let (value, owner) = {
+            let book = self.store.lock().ok()?;
+            let entry = book.get(key)?;
+            (extract(entry), entry.owner_node_id.clone())
+        };
+        if self.owner_stale(&owner) {
+            return None;
+        }
+        Some(value)
+    }
 }
 
 impl NameTable for ServiceTable {
     fn lookup_a(&self, name: &str) -> Option<Vec<Ipv4Addr>> {
         let key = self.book_key(name)?;
-        let book = self.store.lock().ok()?;
-        match book.get(key)?.ip {
+        match self.get_if_live(key, |e| e.ip)? {
             IpAddr::V4(v4) => Some(vec![v4]),
             // No AAAA support in this story's scope; an A query against a
             // v6-only entry is NODATA (the name still `exists`), not NXDOMAIN.
@@ -234,21 +279,21 @@ impl NameTable for ServiceTable {
 
     fn exists(&self, name: &str) -> bool {
         match self.book_key(name) {
-            Some(key) => self.store.lock().map(|b| b.contains_key(key)).unwrap_or(false),
+            // A stale owner's name reports absent, so the composite dispatch
+            // falls through to NXDOMAIN rather than NODATA (bead e21.9).
+            Some(key) => self.get_if_live(key, |_| ()).is_some(),
             None => false,
         }
     }
 
     fn lookup_srv(&self, name: &str) -> Option<u16> {
         let key = self.book_key(name)?;
-        let book = self.store.lock().ok()?;
-        Some(book.get(key)?.port)
+        self.get_if_live(key, |e| e.port)
     }
 
     fn lookup_txt(&self, name: &str) -> Option<BTreeMap<String, String>> {
         let key = self.book_key(name)?;
-        let book = self.store.lock().ok()?;
-        Some(book.get(key)?.txt.clone())
+        self.get_if_live(key, |e| e.txt.clone())
     }
 }
 
@@ -668,6 +713,72 @@ mod tests {
         let reply = Packet::parse(&bytes).unwrap();
         assert_eq!(reply.rcode(), RCODE::NameError);
         assert_eq!(reply.name_servers.len(), 1);
+    }
+
+    // --- ServiceTable liveness filter (bead e21.9) ---
+
+    fn liveness_tracker() -> Arc<Mutex<LivenessTracker>> {
+        // 60s stale / 1h hard-expiry, matching the daemon defaults.
+        Arc::new(Mutex::new(LivenessTracker::new(60_000, 3_600_000)))
+    }
+
+    #[test]
+    fn service_table_stale_owner_is_nxdomain() {
+        // A name whose owner ("router-a") has never beaconed reads as stale, so
+        // the name stops resolving (NXDOMAIN) rather than handing back a
+        // black-hole IP — the headline e21.9 fix.
+        let store: Arc<Mutex<ServiceBookV2>> = Arc::new(Mutex::new(ServiceBookV2::new()));
+        store.lock().unwrap().insert(
+            "wiki".to_string(),
+            v2_entry("10.42.1.50".parse().unwrap(), 8080, "_http._tcp", &[("path", "/wiki")]),
+        );
+        let table = ServiceTable::with_liveness(store, liveness_tracker());
+
+        for qtype in [TYPE::A, TYPE::SRV, TYPE::TXT] {
+            let bytes = handle_query(&build_query("wiki.mesh.", qtype), &table).unwrap();
+            let reply = Packet::parse(&bytes).unwrap();
+            assert_eq!(reply.rcode(), RCODE::NameError, "stale owner should NXDOMAIN for {qtype:?}");
+        }
+    }
+
+    #[test]
+    fn service_table_fresh_owner_resolves() {
+        let store: Arc<Mutex<ServiceBookV2>> = Arc::new(Mutex::new(ServiceBookV2::new()));
+        store.lock().unwrap().insert(
+            "wiki".to_string(),
+            v2_entry("10.42.1.50".parse().unwrap(), 8080, "_http._tcp", &[]),
+        );
+        let tracker = liveness_tracker();
+        // Owner has beaconed just now -> fresh -> the name resolves normally.
+        tracker.lock().unwrap().touch("router-a", monotonic_now_ms());
+        let table = ServiceTable::with_liveness(store, tracker);
+
+        let bytes = handle_query(&build_query("wiki.mesh.", TYPE::A), &table).unwrap();
+        let reply = Packet::parse(&bytes).unwrap();
+        assert_eq!(reply.rcode(), RCODE::NoError);
+        assert_eq!(reply.answers.len(), 1);
+    }
+
+    #[test]
+    fn service_table_owner_return_unstales_the_name() {
+        // Stale -> NXDOMAIN; after the owner's beacon arrives the SAME entry
+        // (never removed from the book) resolves again — the silent-recovery
+        // property. Uses one shared tracker mutated between queries.
+        let store: Arc<Mutex<ServiceBookV2>> = Arc::new(Mutex::new(ServiceBookV2::new()));
+        store.lock().unwrap().insert(
+            "wiki".to_string(),
+            v2_entry("10.42.1.50".parse().unwrap(), 8080, "_http._tcp", &[]),
+        );
+        let tracker = liveness_tracker();
+        let table = ServiceTable::with_liveness(store, tracker.clone());
+
+        let before = handle_query(&build_query("wiki.mesh.", TYPE::A), &table).unwrap();
+        assert_eq!(Packet::parse(&before).unwrap().rcode(), RCODE::NameError);
+
+        tracker.lock().unwrap().observe("router-a", 100, 1, monotonic_now_ms());
+
+        let after = handle_query(&build_query("wiki.mesh.", TYPE::A), &table).unwrap();
+        assert_eq!(Packet::parse(&after).unwrap().rcode(), RCODE::NoError);
     }
 
     #[test]
