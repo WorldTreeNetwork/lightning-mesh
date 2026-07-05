@@ -363,6 +363,10 @@ Credibility with this audience comes from naming the limits plainly:
 
 ## Related documents
 
+- [DWeb talk — personal-narrative](dweb-2026-personal-narrative.md) — the
+  road-to-here story cut and the humanitarian stakes.
+- [DWeb talk — commons-frame (affirmative)](dweb-2026-commons-frame.md) — freedom
+  *to* build: the commons these mechanisms make possible; the talk's opening hook.
 - [Philosophical outcomes](../vision/philosophical-outcomes.md) — the durable
   statement of these ideas, independent of the talk.
 - [Why decentralized mesh networking](../vision/why-decentralized-mesh.md) —

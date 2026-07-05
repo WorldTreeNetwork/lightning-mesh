@@ -430,6 +430,15 @@ version tolerance). The decentralized web isn't centralized services with the lo
 filed off and a token bolted on — it's systems whose **correctness does not route
 through anyone's authority.** That's the sentence I'd want the room to leave with.
 
+But "locked open" is still a *defense* — freedom *from* capture. The reason it's
+worth defending is the other half: freedom *to* build. Un-ownability is the floor;
+what we raise on it — a private internet of our own, services for each other,
+collaboratively-owned infrastructure made real — is the point. That affirmative
+frame, the commons this whole fight is *for*, lives in
+[the commons-frame cut](dweb-2026-commons-frame.md) — and it's where the braided
+talk should open, so that everything above lands as *the stakes* for something we
+get to build, not just something we refuse to lose.
+
 ---
 
 ## The emotional arc, for delivery
@@ -495,6 +504,9 @@ is "here's why I couldn't stop." The shape to hit on stage:
 
 - [DWeb talk — technical-arc source](dweb-2026-technical-arc.md) — the same ideas
   as systems design; the sibling to braid this with.
+- [DWeb talk — commons-frame (affirmative)](dweb-2026-commons-frame.md) — freedom
+  *to* build: the commons this defensive arc is *for*, and where the braided talk
+  should open.
 - [dweb-2026-myanmar-why-PRIVATE.md](dweb-2026-myanmar-why-PRIVATE.md) — the fuller,
   rawer account behind §11, plus the opsec/ethics guardrails. **Not for
   publication**; read before adapting §11 for any audience.
