@@ -4,6 +4,11 @@
 shipped and field-validated on a 4-router OpenWrt 802.11s fleet. Sections are annotated
 where the original design diverged from what shipped.
 
+> **Judging criteria:** the two principles used to weigh every architecture decision here
+> — *the L3 overlay is the invariant* and *no-config is a first-class constraint* — are
+> stated in [design-principles](design-principles.md). Read that first if you want to know
+> *why* the model below has the shape it does.
+
 ## Overview
 
 mjolnir-mesh creates a decentralized mesh network across OpenWrt routers. Each node owns
