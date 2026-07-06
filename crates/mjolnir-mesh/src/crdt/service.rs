@@ -142,6 +142,114 @@ pub struct LostName {
 /// Lost-name map keyed by service name, same convention as [`ServiceBookV2`].
 pub type LostNameMap = BTreeMap<String, LostName>;
 
+// --- Stationary device names (bead e21.3) ---
+//
+// A stationary device (NAS, printer, always-on box) is published as a *scoped*
+// service under `<host>.<scope>.mesh`, mechanically a device-published entry in
+// the same [`ServiceBookV2`] lane (with `host_mac` populated). The scope segment
+// is derived from the publishing node's id, so the name is authority-free and
+// Sybil-bounded — a node can only publish under its own scope — and, being two
+// labels, structurally cannot collide with (shadow / be shadowed by) a bare
+// one-label service or well-known name (`wiki.mesh`, `hello.mesh`). See
+// `docs/network-coordination/mesh-naming.md` "Device names: identity-gated".
+
+/// Lowercase RFC 4648 base32 alphabet (no padding). Used only for the short
+/// node-scope label; DNS labels are case-insensitive and this alphabet is all
+/// `[a-z2-7]`, so scoped device names are safe to type.
+const SCOPE_BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+/// Length, in base32 characters, of a derived node-scope label. Four chars
+/// encode the top 20 bits of `blake3(node_id)` — human-typable, matching the
+/// `nas.n7x3.mesh` shape in the naming doc. Cross-node scope collision is
+/// possible but bounded by first-writer-wins on HLC, exactly like the flat
+/// service tier (squatting accepted until web-of-trust identity binding).
+const SCOPE_LABEL_LEN: usize = 4;
+
+/// Derive the short, human-typable DNS label that scopes a device name to its
+/// publishing node (bead e21.3): the first [`SCOPE_LABEL_LEN`] base32 chars of
+/// `blake3(node_id)`. Deterministic and dependency-free (no `data-encoding`, so
+/// it is available in every build, not just `--features daemon`).
+pub fn node_scope_label(node_id: &str) -> String {
+    let hash = blake3::hash(node_id.as_bytes());
+    let b = hash.as_bytes();
+    // Top 24 bits of the digest; we consume the top 20 (4 × 5-bit groups).
+    let bits = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+    let mut label = String::with_capacity(SCOPE_LABEL_LEN);
+    for i in 0..SCOPE_LABEL_LEN {
+        let shift = 19 - 5 * i; // 19, 14, 9, 4 → most-significant group first
+        let idx = ((bits >> shift) & 0x1f) as usize;
+        label.push(SCOPE_BASE32_ALPHABET[idx] as char);
+    }
+    label
+}
+
+/// Why a proposed device host label is unusable (bead e21.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceHostError {
+    /// Empty after trimming.
+    Empty,
+    /// Longer than 63 chars (the DNS single-label limit).
+    TooLong,
+    /// Contains a character outside `[a-z0-9-]` (case-folded before checking),
+    /// including a `.` — the operator names only the host; the daemon appends
+    /// the scope, so a dotted name is a mistake, not a multi-label request.
+    InvalidChar,
+    /// Begins or ends with `-` (not a valid DNS label).
+    HyphenBoundary,
+}
+
+/// Validate and normalize a device host label to a single lowercase DNS label
+/// (bead e21.3). The operator supplies only the `<host>` part (`nas`,
+/// `printer`); the daemon derives and appends `<scope>`.
+pub fn normalize_device_host(host: &str) -> Result<String, DeviceHostError> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(DeviceHostError::Empty);
+    }
+    if host.len() > 63 {
+        return Err(DeviceHostError::TooLong);
+    }
+    let lower = host.to_ascii_lowercase();
+    if !lower
+        .bytes()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+    {
+        return Err(DeviceHostError::InvalidChar);
+    }
+    if lower.starts_with('-') || lower.ends_with('-') {
+        return Err(DeviceHostError::HyphenBoundary);
+    }
+    Ok(lower)
+}
+
+/// Compose the scoped [`ServiceBookV2`] key for a stationary device published by
+/// `node_id`: `<host>.<scope>` (bead e21.3). The resolver keys the book on the
+/// full pre-`.mesh` string, so this key resolves at `<host>.<scope>.mesh` with
+/// no responder changes.
+pub fn device_service_key(host: &str, node_id: &str) -> Result<String, DeviceHostError> {
+    let host = normalize_device_host(host)?;
+    Ok(format!("{host}.{}", node_scope_label(node_id)))
+}
+
+/// Parse a `aa:bb:cc:dd:ee:ff` MAC (case-insensitive, colon-separated) into six
+/// bytes for [`ServiceEntryV2::host_mac`] (bead e21.3). Returns `None` on any
+/// malformed input.
+pub fn parse_host_mac(s: &str) -> Option<[u8; 6]> {
+    let mut octets = [0u8; 6];
+    let mut parts = s.split(':');
+    for slot in &mut octets {
+        let part = parts.next()?;
+        if part.len() != 2 {
+            return None;
+        }
+        *slot = u8::from_str_radix(part, 16).ok()?;
+    }
+    if parts.next().is_some() {
+        return None; // more than six octets
+    }
+    Some(octets)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
@@ -258,5 +366,63 @@ mod tests {
         assert!(is_reserved_service_name("ID"));
         assert!(!is_reserved_service_name("printer"));
         assert!(!is_reserved_service_name("hello2"));
+    }
+
+    // --- Stationary device names (bead e21.3) ---
+
+    #[test]
+    fn node_scope_label_is_stable_and_typable() {
+        let a = node_scope_label("router-a-node-id");
+        // Deterministic across calls.
+        assert_eq!(a, node_scope_label("router-a-node-id"));
+        // Four chars, all from the lowercase base32 alphabet.
+        assert_eq!(a.len(), SCOPE_LABEL_LEN);
+        assert!(a.bytes().all(|c| SCOPE_BASE32_ALPHABET.contains(&c)));
+    }
+
+    #[test]
+    fn node_scope_label_differs_between_nodes() {
+        // Different node ids overwhelmingly derive different scopes.
+        assert_ne!(node_scope_label("router-a-node-id"), node_scope_label("router-b-node-id"));
+    }
+
+    #[test]
+    fn device_service_key_is_two_labels_scoped_to_node() {
+        let key = device_service_key("nas", "router-a-node-id").unwrap();
+        let scope = node_scope_label("router-a-node-id");
+        assert_eq!(key, format!("nas.{scope}"));
+        // Two labels ⇒ resolves at `nas.<scope>.mesh`, never colliding with a
+        // bare one-label service or a reserved well-known name.
+        assert_eq!(key.split('.').count(), 2);
+        assert!(!is_reserved_service_name(&key));
+    }
+
+    #[test]
+    fn device_host_is_normalized_and_validated() {
+        assert_eq!(normalize_device_host("NAS").unwrap(), "nas");
+        assert_eq!(normalize_device_host("  printer ").unwrap(), "printer");
+        assert_eq!(normalize_device_host("host-01").unwrap(), "host-01");
+        assert_eq!(normalize_device_host(""), Err(DeviceHostError::Empty));
+        assert_eq!(normalize_device_host("   "), Err(DeviceHostError::Empty));
+        // A dotted name is a mistake — the daemon appends the scope, not the user.
+        assert_eq!(normalize_device_host("nas.n7x3"), Err(DeviceHostError::InvalidChar));
+        assert_eq!(normalize_device_host("a_b"), Err(DeviceHostError::InvalidChar));
+        assert_eq!(normalize_device_host("-nas"), Err(DeviceHostError::HyphenBoundary));
+        assert_eq!(normalize_device_host("nas-"), Err(DeviceHostError::HyphenBoundary));
+        assert_eq!(normalize_device_host(&"a".repeat(64)), Err(DeviceHostError::TooLong));
+    }
+
+    #[test]
+    fn parse_host_mac_roundtrips_and_rejects_junk() {
+        assert_eq!(
+            parse_host_mac("de:ad:be:ef:00:01"),
+            Some([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01])
+        );
+        assert_eq!(parse_host_mac("DE:AD:BE:EF:00:01"), Some([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01]));
+        assert_eq!(parse_host_mac("de:ad:be:ef:00"), None); // too few
+        assert_eq!(parse_host_mac("de:ad:be:ef:00:01:02"), None); // too many
+        assert_eq!(parse_host_mac("de-ad-be-ef-00-01"), None); // wrong separator
+        assert_eq!(parse_host_mac("dead:be:ef:00:01:02"), None); // bad octet width
+        assert_eq!(parse_host_mac("gg:ad:be:ef:00:01"), None); // non-hex
     }
 }

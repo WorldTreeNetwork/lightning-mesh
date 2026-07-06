@@ -40,8 +40,10 @@ pub use crdt::{
     },
     peer_addr::{AddrBook, PeerAddrEntry},
     service::{
-        is_reserved_service_name, LostName, LostNameMap, ServiceBook, ServiceBookV2, ServiceEntry,
-        ServiceEntryV2, ServiceTombstone, ServiceTombstoneBook, RESERVED_SERVICE_NAMES,
+        device_service_key, is_reserved_service_name, node_scope_label, normalize_device_host,
+        parse_host_mac, DeviceHostError, LostName, LostNameMap, ServiceBook, ServiceBookV2,
+        ServiceEntry, ServiceEntryV2, ServiceTombstone, ServiceTombstoneBook,
+        RESERVED_SERVICE_NAMES,
     },
     service_apply::{
         apply_service_publish_v2, apply_service_publish_v2_tracking_loss,

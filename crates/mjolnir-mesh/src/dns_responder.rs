@@ -288,7 +288,10 @@ impl NameTable for ServiceTable {
 
     fn lookup_srv(&self, name: &str) -> Option<u16> {
         let key = self.book_key(name)?;
-        self.get_if_live(key, |e| e.port)
+        // Port 0 means "no service port" — a stationary device published as an
+        // A-record only (bead e21.3, e.g. a NAS reachable by IP with no SRV).
+        // The name still resolves (A), so this is NODATA for SRV, not NXDOMAIN.
+        self.get_if_live(key, |e| e.port).filter(|p| *p != 0)
     }
 
     fn lookup_txt(&self, name: &str) -> Option<BTreeMap<String, String>> {
@@ -684,6 +687,36 @@ mod tests {
             }
             other => panic!("expected TXT, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn scoped_device_resolves_a_but_port_zero_has_no_srv() {
+        // A stationary device (bead e21.3) is a scoped, two-label service key
+        // `<host>.<scope>`, published A-record-only (port 0). It resolves at
+        // `<host>.<scope>.mesh` with no responder changes, and SRV is NODATA.
+        use crate::crdt::service::device_service_key;
+        let store: Arc<Mutex<ServiceBookV2>> = Arc::new(Mutex::new(ServiceBookV2::new()));
+        let key = device_service_key("nas", "router-a").unwrap(); // e.g. "nas.<scope>"
+        store.lock().unwrap().insert(
+            key.clone(),
+            v2_entry("192.168.7.20".parse().unwrap(), 0, "_tcp", &[]),
+        );
+        let table = ServiceTable::new(store);
+        let qname = format!("{key}.mesh.");
+
+        let a_reply = handle_query(&build_query(&qname, TYPE::A), &table).unwrap();
+        let reply = Packet::parse(&a_reply).unwrap();
+        assert_eq!(reply.rcode(), RCODE::NoError);
+        match &reply.answers[0].rdata {
+            RData::A(a) => assert_eq!(Ipv4Addr::from(a.address), "192.168.7.20".parse::<Ipv4Addr>().unwrap()),
+            other => panic!("expected A, got {other:?}"),
+        }
+
+        // SRV: name exists (A answered) but has no service port → NODATA, no answers.
+        let srv_reply = handle_query(&build_query(&qname, TYPE::SRV), &table).unwrap();
+        let reply = Packet::parse(&srv_reply).unwrap();
+        assert_eq!(reply.rcode(), RCODE::NoError);
+        assert!(reply.answers.is_empty(), "port-0 device must not answer SRV");
     }
 
     #[test]

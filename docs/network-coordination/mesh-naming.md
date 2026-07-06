@@ -80,7 +80,7 @@ The name classes, resolved in this order:
 |---|---|---|---|
 | **Well-known node-local** (`hello.mesh`, `id.mesh`) | compiled-in reserved list — **never in the CRDT, unclaimable** | this node's own client gateway IP (`10.42.x.1`) | first stone |
 | **Services** (`wiki.mesh`) | `/services/{name}` CRDT lane, gossiped | the published `ip` (+ SRV port, TXT) | first stone |
-| **Devices, stationary** (`nas.n7x3.mesh`) | explicit opt-in publish, **scoped** (a device-published service) | the device's IP | later (e21.3) |
+| **Devices, stationary** (`nas.n7x3.mesh`) | explicit opt-in publish, **scoped** (a device-published service) | the device's IP | **shipped (e21.3)** |
 | **Devices, auto** (`laptop.duke.mesh`) | DHCP lease lane, **identity-scoped**, gossiped + location-tracked | current lease IP | deferred (`e21.5`) |
 
 Well-known names are **anycast by convention**: every node answers `hello.mesh`
@@ -139,6 +139,21 @@ So device naming is staged on identity:
    service*: the `/services` v2 lane already carries `host_mac` for exactly this,
    and `e21.9` handles staleness. Auto names for phones/laptops are **not** shipped
    here.
+
+   *Shipped (e21.3):* `meshd publish <host> --ip <addr> [--port <p>] [--mac <m>]
+   [--txt k=v]`. The `--ip` flag is what distinguishes a device from a
+   node-hosted service: the daemon derives the scope from **its own** node id
+   (`node_scope_label` = first 4 base32 chars of `blake3(node_id)`), keys the
+   entry `<host>.<scope>` in the same `/services` v2 lane, and stores the
+   device's explicit IP (not the gateway). Omitting `--port` publishes an
+   A-record only — DNS answers A, and SRV is NODATA (port 0 is the sentinel).
+   The host must be a single DNS label (`[a-z0-9-]`, no dot — the daemon appends
+   the scope, not the operator), so a device can never occupy the bare flat
+   form. Release with `meshd unpublish <host> --device` (re-derives the same
+   scoped key) or by naming the full `<host>.<scope>` key. Because the scope is
+   derived from the publisher's key, a node can only publish under its own
+   scope; cross-node scope collision is possible but bounded by FWW-on-HLC,
+   exactly like the flat tier.
 2. **Auto, stable, identity-scoped (deferred, `e21.5`).** `<host>.<owner>.mesh`
    bound to IdentiKey identity, gossiped and location-tracked so it survives
    roaming across the owner's nodes — the real portable device name, and the home

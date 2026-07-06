@@ -38,7 +38,8 @@ use mjolnir_mesh::babel::{
     OverlayRtt,
 };
 use mjolnir_mesh::{
-    alloc, apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, merge_peer_addr,
+    alloc, apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
+    merge_peer_addr, parse_host_mac,
     merge_service, merge_subnet_claim, merge_user, publish_service_v2, AddrBook, GossipError,
     GossipSync, GossipTransport, LivenessTracker, LostNameMap, MergeResult, PeerAddrEntry,
     PeerEntry, PeerRoster,
@@ -142,11 +143,23 @@ enum Command {
     /// `127.0.0.1:5380` — requires `mesh` (or another meshd instance) to
     /// already be running.
     Publish {
-        /// Service name to claim (e.g. `wiki.mesh`).
+        /// Service name to claim (e.g. `wiki`), or, with `--ip`, the host label
+        /// of a stationary device — published scoped as `<name>.<node>.mesh`
+        /// (bead e21.3).
         name: String,
-        /// TCP/UDP port the service listens on.
+        /// TCP/UDP port the service listens on. Optional for a device publish
+        /// (`--ip`): omit it for an A-record-only device (no SRV).
         #[arg(long)]
-        port: u16,
+        port: Option<u16>,
+        /// Publish a stationary device (NAS, printer, always-on box) at this
+        /// explicit IP under a node-scoped name `<name>.<node>.mesh` (bead
+        /// e21.3), instead of a node-hosted service at the gateway address.
+        #[arg(long)]
+        ip: Option<IpAddr>,
+        /// Optional device MAC (`aa:bb:cc:dd:ee:ff`), recorded on the entry.
+        /// Only meaningful with `--ip`.
+        #[arg(long)]
+        mac: Option<String>,
         /// Extra `key=value` TXT record (repeatable), e.g. `--txt path=/wiki`.
         #[arg(long = "txt", value_parser = parse_txt_kv)]
         txt: Vec<(String, String)>,
@@ -154,8 +167,13 @@ enum Command {
     /// Release a `/services/` name this node owns, via the control API (bead
     /// e21.2.6, FR27). Thin HTTP client of `POST /v0/unpublish`.
     Unpublish {
-        /// Service name to release.
+        /// Service name to release. With `--device`, the host label of a
+        /// stationary device — the node-scoped name is re-derived and released.
         name: String,
+        /// Release a stationary device published with `--ip` (bead e21.3):
+        /// re-derives `<name>.<node>` before unpublishing.
+        #[arg(long)]
+        device: bool,
     },
     /// Listen for inbound mesh connections and echo ping datagrams. Runs until Ctrl-C.
     Listen,
@@ -320,11 +338,11 @@ async fn main() -> Result<()> {
 
     // publish/unpublish are thin HTTP clients of the running daemon's control
     // API (S3.2, bead e21.2.6) — no iroh endpoint, no CRDT access here.
-    if let Command::Publish { name, port, txt } = &cli.command {
-        return run_publish_cli(name, *port, txt).await;
+    if let Command::Publish { name, port, ip, mac, txt } = &cli.command {
+        return run_publish_cli(name, *port, *ip, mac.as_deref(), txt).await;
     }
-    if let Command::Unpublish { name } = &cli.command {
-        return run_unpublish_cli(name).await;
+    if let Command::Unpublish { name, device } = &cli.command {
+        return run_unpublish_cli(name, *device).await;
     }
 
     // The deployed `mesh` daemon defaults to LAN mode (offline, mDNS, no relay),
@@ -3520,7 +3538,20 @@ fn control_api_entry_body(name: &str, entry: &ServiceEntryV2) -> Vec<u8> {
 #[derive(Debug, Deserialize)]
 struct ControlApiPublishRequest {
     name: String,
-    port: u16,
+    /// Optional so a stationary device (`ip` set) can be published A-only with
+    /// no SRV (bead e21.3). Absent → port 0 → no SRV answered. A node-service
+    /// publish still passes a port as before.
+    #[serde(default)]
+    port: Option<u16>,
+    /// Set for a stationary device publish (bead e21.3): the device's explicit
+    /// IP, published under the node-scoped name `<name>.<node>`. Absent → the
+    /// legacy node-hosted-service publish pinned to this node's gateway (FR29).
+    #[serde(default)]
+    ip: Option<IpAddr>,
+    /// Optional device MAC (`aa:bb:cc:dd:ee:ff`), recorded on the entry's
+    /// `host_mac`. Only honored alongside `ip`.
+    #[serde(default)]
+    mac: Option<String>,
     #[serde(default)]
     txt: BTreeMap<String, String>,
     /// Not in the story's spec'd request shape (`{name, port, txt?}`), but
@@ -3538,6 +3569,10 @@ fn control_api_default_protocol() -> String {
 #[derive(Debug, Deserialize)]
 struct ControlApiUnpublishRequest {
     name: String,
+    /// When true, `name` is a device host label — re-derive the node-scoped
+    /// key `<name>.<node>` before releasing (bead e21.3).
+    #[serde(default)]
+    device: bool,
 }
 
 /// `POST /v0/publish`: claim/refresh a service name on behalf of THIS node.
@@ -3568,20 +3603,43 @@ async fn control_api_handle_publish<T: GossipTransport>(
     if req.name.is_empty() {
         return (400, control_api_error_body("malformed_body"));
     }
-    let ip = {
-        let guard = gateway.read().expect("gateway handle poisoned");
-        guard.unwrap_or(mjolnir_mesh::dns_responder::PRE_CLAIM_GATEWAY)
+    // A `--ip` publish is a stationary device (bead e21.3): scope the name to
+    // this node (`<host>.<scope>`, authority-free and unforgeable) and use the
+    // device's explicit IP. Otherwise it is the legacy node-hosted service,
+    // keyed flat and pinned to this node's gateway (FR29).
+    let (key, ip, host_mac) = match req.ip {
+        Some(device_ip) => {
+            let key = match device_service_key(&req.name, self_id) {
+                Ok(k) => k,
+                Err(_) => return (400, control_api_error_body("invalid_device_name")),
+            };
+            let host_mac = match req.mac.as_deref() {
+                Some(m) => match parse_host_mac(m) {
+                    Some(bytes) => Some(bytes),
+                    None => return (400, control_api_error_body("invalid_mac")),
+                },
+                None => None,
+            };
+            (key, device_ip, host_mac)
+        }
+        None => {
+            let gw = {
+                let guard = gateway.read().expect("gateway handle poisoned");
+                guard.unwrap_or(mjolnir_mesh::dns_responder::PRE_CLAIM_GATEWAY)
+            };
+            (req.name.clone(), IpAddr::V4(gw), None)
+        }
     };
     let now = now_hlc(self_id);
     let entry = ServiceEntryV2 {
         owner_node_id: self_id.to_string(),
         first_claimed_at: now.clone(),
         updated_at: now,
-        ip: IpAddr::V4(ip),
-        port: req.port,
+        ip,
+        port: req.port.unwrap_or(0),
         protocol: req.protocol,
         txt: req.txt,
-        host_mac: None,
+        host_mac,
     };
     match publish_service(
         sync,
@@ -3590,7 +3648,7 @@ async fn control_api_handle_publish<T: GossipTransport>(
         lost_names_v2,
         service_book_v2_file,
         self_id,
-        &req.name,
+        &key,
         entry.clone(),
     )
     .await
@@ -3606,17 +3664,17 @@ async fn control_api_handle_publish<T: GossipTransport>(
             // Not the local publisher's loss (or a same-owner LWW outcome):
             // the store now holds our incoming entry (Inserted/Updated) or a
             // strictly-newer same-owner entry (Unchanged) — report accordingly.
-            MergeResult::Conflict { winner, .. } => (200, control_api_entry_body(&req.name, &winner)),
+            MergeResult::Conflict { winner, .. } => (200, control_api_entry_body(&key, &winner)),
             MergeResult::Inserted | MergeResult::Updated | MergeResult::Unchanged => {
-                (200, control_api_entry_body(&req.name, &entry))
+                (200, control_api_entry_body(&key, &entry))
             }
         },
-        Ok(PublishOutcome::Revived) => (200, control_api_entry_body(&req.name, &entry)),
+        Ok(PublishOutcome::Revived) => (200, control_api_entry_body(&key, &entry)),
         Ok(PublishOutcome::RejectedByTombstone) => {
             let winner_node_id = service_tombstones_v2
                 .lock()
                 .expect("v2 service tombstones poisoned")
-                .get(&req.name)
+                .get(&key)
                 .map(|t| t.owner_node_id.clone())
                 .unwrap_or_default();
             (409, control_api_owned_by_other_body(&winner_node_id))
@@ -3643,6 +3701,16 @@ async fn control_api_handle_unpublish<T: GossipTransport>(
     if req.name.is_empty() {
         return (400, control_api_error_body("malformed_body"));
     }
+    // A `--device` unpublish re-derives the same node-scoped key the publish
+    // used (bead e21.3); otherwise the flat service name is the key.
+    let key = if req.device {
+        match device_service_key(&req.name, self_id) {
+            Ok(k) => k,
+            Err(_) => return (400, control_api_error_body("invalid_device_name")),
+        }
+    } else {
+        req.name.clone()
+    };
     let hlc = now_hlc(self_id);
     let outcome = unpublish_service(
         sync,
@@ -3650,7 +3718,7 @@ async fn control_api_handle_unpublish<T: GossipTransport>(
         service_tombstones_v2,
         lost_names_v2,
         service_book_v2_file,
-        &req.name,
+        &key,
         self_id,
         hlc,
     )
@@ -3936,6 +4004,10 @@ fn control_api_publish_error_message(name: &str, status: u16, body: &[u8]) -> St
             format!("cannot publish '{name}': already owned by node {winner}")
         }
         Some("malformed_body") => format!("cannot publish '{name}': malformed request"),
+        Some("invalid_device_name") => {
+            format!("cannot publish '{name}': invalid device host label (use a single DNS label, e.g. `nas`)")
+        }
+        Some("invalid_mac") => format!("cannot publish '{name}': invalid --mac (expected aa:bb:cc:dd:ee:ff)"),
         Some(kind) => format!("cannot publish '{name}': control API returned {status} ({kind})"),
         None => format!("cannot publish '{name}': control API returned {status}"),
     }
@@ -3948,6 +4020,9 @@ fn control_api_unpublish_error_message(name: &str, status: u16, body: &[u8]) -> 
     match err.get("error").and_then(|v| v.as_str()) {
         Some("not_owner") => format!("cannot unpublish '{name}': not owned by this node"),
         Some("malformed_body") => format!("cannot unpublish '{name}': malformed request"),
+        Some("invalid_device_name") => {
+            format!("cannot unpublish '{name}': invalid device host label (use a single DNS label, e.g. `nas`)")
+        }
         Some(kind) => format!("cannot unpublish '{name}': control API returned {status} ({kind})"),
         None => format!("cannot unpublish '{name}': control API returned {status}"),
     }
@@ -3957,20 +4032,39 @@ fn control_api_unpublish_error_message(name: &str, status: u16, body: &[u8]) -> 
 /// `POST /v0/publish` (FR26). Prints the published entry plainly on success;
 /// on any failure, renders the exact error wording to stderr and exits
 /// nonzero — never touches CRDT state directly.
-async fn run_publish_cli(name: &str, port: u16, txt: &[(String, String)]) -> Result<()> {
+async fn run_publish_cli(
+    name: &str,
+    port: Option<u16>,
+    ip: Option<IpAddr>,
+    mac: Option<&str>,
+    txt: &[(String, String)],
+) -> Result<()> {
     let txt_map: BTreeMap<String, String> = txt.iter().cloned().collect();
-    let body = serde_json::to_vec(&serde_json::json!({
+    let mut body_json = serde_json::json!({
         "name": name,
-        "port": port,
         "txt": txt_map,
-    }))?;
+    });
+    if let Some(p) = port {
+        body_json["port"] = serde_json::json!(p);
+    }
+    if let Some(addr) = ip {
+        body_json["ip"] = serde_json::json!(addr.to_string());
+    }
+    if let Some(m) = mac {
+        body_json["mac"] = serde_json::json!(m);
+    }
+    let body = serde_json::to_vec(&body_json)?;
     match control_api_client_request("POST", "/v0/publish", &body).await {
         Ok((200, resp_body)) => {
             let entry: serde_json::Value = serde_json::from_slice(&resp_body).unwrap_or_default();
+            // The server echoes the resolved name — for a device publish this is
+            // the node-scoped `<host>.<scope>`, so the operator sees the real
+            // `.mesh` name it must query (bead e21.3).
+            let resolved = entry.get("name").and_then(|v| v.as_str()).unwrap_or(name);
             println!(
-                "published {name}  ip={} port={}",
+                "published {resolved}.mesh  ip={} port={}",
                 entry.get("ip").and_then(|v| v.as_str()).unwrap_or("?"),
-                entry.get("port").and_then(|v| v.as_u64()).unwrap_or(u64::from(port)),
+                entry.get("port").and_then(|v| v.as_u64()).unwrap_or(0),
             );
             Ok(())
         }
@@ -3984,8 +4078,8 @@ async fn run_publish_cli(name: &str, port: u16, txt: &[(String, String)]) -> Res
 /// `meshd unpublish <name>`: thin HTTP client of `POST /v0/unpublish` (FR27).
 /// Prints the resulting status plainly on success; on any failure, renders
 /// the exact error wording to stderr and exits nonzero.
-async fn run_unpublish_cli(name: &str) -> Result<()> {
-    let body = serde_json::to_vec(&serde_json::json!({ "name": name }))?;
+async fn run_unpublish_cli(name: &str, device: bool) -> Result<()> {
+    let body = serde_json::to_vec(&serde_json::json!({ "name": name, "device": device }))?;
     match control_api_client_request("POST", "/v0/unpublish", &body).await {
         Ok((200, resp_body)) => {
             let resp: serde_json::Value = serde_json::from_slice(&resp_body).unwrap_or_default();
@@ -7025,6 +7119,80 @@ config meshd 'meshd'
         assert_eq!(status, 400);
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "reserved");
+
+        fixture.handle.abort();
+    }
+
+    #[tokio::test]
+    async fn control_api_publish_device_is_scoped_and_a_only() {
+        // Stationary device publish (bead e21.3): `--ip` set, no port. The name
+        // is scoped to this node (`<host>.<scope>`), the entry uses the device's
+        // own IP (not the gateway), and it is unpublishable via `--device`.
+        let fixture = start_test_control_api("node-a", Some("10.42.5.1".parse().unwrap())).await;
+        let scope = mjolnir_mesh::node_scope_label("node-a");
+        let scoped = format!("nas.{scope}");
+
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"nas","ip":"192.168.7.20","mac":"de:ad:be:ef:00:01"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], scoped, "device name is node-scoped, not bare");
+        assert_eq!(json["ip"], "192.168.7.20", "device IP, not the gateway 10.42.5.1");
+        assert_eq!(json["port"], 0, "no port ⇒ A-only, port 0");
+
+        // Appears in the directory under its scoped key.
+        let (status, body) = control_api_request(fixture.addr, "GET", "/v0/directory", b"").await;
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["services"][0]["name"], scoped);
+        assert_eq!(json["services"][0]["ip"], "192.168.7.20");
+
+        // `--device` unpublish re-derives the scoped key and releases it.
+        let (status, body) =
+            control_api_request(fixture.addr, "POST", "/v0/unpublish", br#"{"name":"nas","device":true}"#).await;
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "unpublished");
+
+        let (_, body) = control_api_request(fixture.addr, "GET", "/v0/directory", b"").await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["services"].as_array().unwrap().is_empty(), "device released");
+
+        fixture.handle.abort();
+    }
+
+    #[tokio::test]
+    async fn control_api_publish_device_rejects_bad_inputs() {
+        let fixture = start_test_control_api("node-a", None).await;
+
+        // Dotted host label — the daemon appends the scope, so a dot is a mistake.
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"nas.evil","ip":"192.168.7.20"}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_device_name");
+
+        // Malformed MAC.
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"nas","ip":"192.168.7.20","mac":"nope"}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_mac");
 
         fixture.handle.abort();
     }
