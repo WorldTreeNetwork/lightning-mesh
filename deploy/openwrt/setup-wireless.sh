@@ -38,6 +38,8 @@ BACKHAUL_CHANNEL_5G="${BACKHAUL_CHANNEL_5G:-36}"                      # NON-DFS 
 CLIENT_CHANNEL_2G="${CLIENT_CHANNEL_2G:-6}"                           # 2.4 GHz client AP channel (used when BACKHAUL_BAND=5g)
 CLIENT_SSID="${CLIENT_SSID:-lightning-mesh}"
 CLIENT_KEY="${CLIENT_KEY:-lightning}"    # public/posted PSK — not a secret (overridable via fleet-secrets/wireless.env)
+CLIENT_ENC="${CLIENT_ENC:-sae-mixed}"    # primary client AP encryption. 'sae-mixed'=WPA2/3 (prod default);
+                                         # 'none'=OPEN (no key) for a test network. Set in fleet-secrets/wireless.env.
 CLIENT_CHANNEL_5G="${CLIENT_CHANNEL_5G:-36}"                          # 5 GHz client AP channel (used when BACKHAUL_BAND=2g)
 CLIENT_AP_2G="${CLIENT_AP_2G:-0}"            # ENABLE flag for the 2.4 GHz client AP (concurrent with the mesh-point, for 2.4-only
                                              # IoT/ESP32). The section is ALWAYS rendered so the SSID/key/FT config is staged; the
@@ -149,9 +151,9 @@ uci set wireless.clientap.device="$radio_cl"
 uci set wireless.clientap.mode='ap'
 uci set wireless.clientap.ssid="$CLIENT_SSID"
 uci set wireless.clientap.network='lan'
-uci set wireless.clientap.encryption='sae-mixed'
-uci set wireless.clientap.key="$CLIENT_KEY"
-if [ -n "$FT_KEY" ]; then
+uci set wireless.clientap.encryption="$CLIENT_ENC"
+[ "$CLIENT_ENC" = none ] || uci set wireless.clientap.key="$CLIENT_KEY"
+if [ -n "$FT_KEY" ] && [ "$CLIENT_ENC" != none ]; then
 	# FT-SAE: nasid/r1_key_holder are left unset — hostapd's own default (the AP's own
 	# BSSID) is already unique per node, which is exactly what's needed here.
 	uci set wireless.clientap.ieee80211r='1'
