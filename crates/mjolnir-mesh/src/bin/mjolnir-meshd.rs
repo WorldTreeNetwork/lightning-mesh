@@ -1360,6 +1360,16 @@ async fn run_mesh(
                     })
                 };
 
+                // Radio telemetry (bead ng9): a standalone ~10s loop shelling out
+                // to `iw` for 802.11s station/mpath/info, writing `radio.json`
+                // beside `directory.json`. Independent of gossip/CRDT state, so it
+                // needs only the run-dir seam and this node's backhaul address; it
+                // degrades silently on a box with no mesh interface.
+                {
+                    let directory_path = directory_file.clone();
+                    tokio::spawn(radio_telemetry_loop(directory_path, backhaul_ip));
+                }
+
                 // Control API (S3.1, bead e21.2.5): needs `sync` for the immediate
                 // publish/unpublish gossip broadcast (FR25), so — like the tasks
                 // above — it's only started once gossip subscribe succeeds. A
@@ -1612,6 +1622,12 @@ const CLIENT_PREFIX_LEN: u8 = 24;
 /// late-joiner / dropped-packet / restart convergence without any new gossip
 /// protocol, just a resend of what `SubnetClaimUpdate` already carries.
 const ANTI_ENTROPY_INTERVAL: Duration = Duration::from_secs(20);
+
+/// Radio-telemetry cadence (bead ng9): how often `radio_telemetry_loop`
+/// re-collects `iw` station/mpath/info and rewrites `radio.json`. Faster than
+/// anti-entropy because signal/throughput/inactivity are what a live
+/// mesh-topology view watches change.
+const RADIO_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Self-announced lane staleness (bead e21.9). Liveness rides an ephemeral
 /// per-node [`LivenessBeacon`](mjolnir_mesh::crdt::gossip::GossipMessage::LivenessBeacon)
@@ -2712,6 +2728,69 @@ fn write_directory_projection(
         &gateways,
     );
     persist_directory(&snapshot, directory_file);
+}
+
+/// Persist a `radio.json` telemetry snapshot (bead ng9) next to
+/// `directory.json`, via the same tmp+rename crash-safe write `mjolnir-hello`
+/// relies on for the directory projection. Best effort: a failure is logged,
+/// never fatal.
+fn persist_radio(snapshot: &mjolnir_mesh::radio::RadioSnapshot, path: &Path) {
+    let bytes = match serde_json::to_vec_pretty(snapshot) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("failed to encode radio telemetry for persistence: {e}");
+            return;
+        }
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), "failed to create radio telemetry dir: {e}");
+        return;
+    }
+    let tmp_path = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        warn!(path = %tmp_path.display(), "failed to write radio telemetry tmp file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        warn!(path = %path.display(), "failed to rename radio telemetry tmp file into place: {e}");
+    }
+}
+
+/// Radio-telemetry loop (bead ng9): every [`RADIO_INTERVAL`], collect this
+/// node's 802.11s radio telemetry via `iw` and write `radio.json` beside
+/// `directory.json` for `mjolnir-hello`'s `GET /api/radio` to serve. On a box
+/// with no mesh interface (linux-dev/test) [`collect_radio`] returns `None` and
+/// this loop stays silent — no `radio.json`, a debug log — rather than
+/// spamming warnings.
+///
+/// `radio.json` lives at `<dir(directory_file)>/radio.json`, reusing the same
+/// run-dir seam as the directory projection so the two files always co-locate.
+async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
+    let radio_file = directory_file.with_file_name("radio.json");
+    let backhaul_addr = backhaul_ip.to_string();
+    let mut ticker = tokio::time::interval(RADIO_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let backhaul_addr = backhaul_addr.clone();
+        // `iw` is a blocking subprocess; keep it off the async reactor.
+        let snapshot = tokio::task::spawn_blocking(move || {
+            let now_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or_default();
+            mjolnir_mesh::radio::collect_radio(&backhaul_addr, now_unix)
+        })
+        .await;
+        match snapshot {
+            Ok(Some(snapshot)) => persist_radio(&snapshot, &radio_file),
+            Ok(None) => {
+                debug!("no 802.11s mesh interface / iw unavailable; skipping radio telemetry")
+            }
+            Err(e) => warn!("radio telemetry collector task failed: {e}"),
+        }
+    }
 }
 
 /// Apply an inbound service CRDT message to the directory. Returns the

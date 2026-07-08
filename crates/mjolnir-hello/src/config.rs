@@ -28,6 +28,13 @@ pub struct Config {
     #[arg(long, default_value = "/var/run/mjolnir/directory.json")]
     pub directory_file: PathBuf,
 
+    /// Path to the read-only radio-telemetry projection that `mjolnir-meshd`
+    /// writes on a ~10s cadence (bead ng9): local mesh interface channel/freq,
+    /// peer stations, and the mesh path table. Consumed by `GET /api/radio`.
+    /// Default MUST match `mjolnir-meshd`'s (sibling of `directory.json`).
+    #[arg(long, default_value = "/var/run/mjolnir/radio.json")]
+    pub radio_file: PathBuf,
+
     /// Spool directory `mjolnir-hello` drops identity submissions into for
     /// `mjolnir-meshd` to validate and gossip. Consumed by the S4
     /// `POST /api/identity` endpoint.

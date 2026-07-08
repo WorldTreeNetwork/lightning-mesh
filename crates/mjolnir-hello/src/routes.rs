@@ -35,19 +35,48 @@ pub fn new_challenge_store() -> ChallengeStore {
 const EMPTY_DIRECTORY: &str =
     r#"{"version":1,"node":null,"neighbors":[],"identities":[],"services":[]}"#;
 
-/// Cached last-good read of the daemon-written `directory.json`, keyed off
-/// the file's mtime so a request only re-reads the file when it changed.
-/// Falls back to (and remembers) [`EMPTY_DIRECTORY`] when the file is
-/// missing/unreadable and there is no prior last-good snapshot.
-#[derive(Debug, Default)]
-pub struct DirectoryCache {
-    inner: Mutex<CachedDirectory>,
-}
+/// Empty radio-telemetry doc (bead ng9), served whenever `radio.json` is
+/// missing/unreadable and there is no last-good copy — e.g. a node with no
+/// 802.11s mesh interface, where `mjolnir-meshd` writes no `radio.json` at all.
+/// Same schema (v1) as a live snapshot, just with nulls and empty tables.
+const EMPTY_RADIO: &str = r#"{"version":1,"backhaul_addr":null,"mesh_if":null,"mesh_mac":null,"channel":null,"freq_mhz":null,"collected_at_unix":null,"stations":[],"mpaths":[]}"#;
 
+/// Last-good body of a daemon-written JSON file, keyed off the file's mtime so
+/// a request only re-reads when it changed.
 #[derive(Debug, Default)]
-struct CachedDirectory {
+struct CachedFile {
     mtime: Option<SystemTime>,
     body: Option<String>,
+}
+
+/// Read (or serve cached) a daemon-written JSON file as a raw string, keyed on
+/// mtime. On read failure, serves the last-good body — or `empty` when there
+/// isn't one — without clobbering the cached mtime, so a transient stat/read
+/// race can't drop a known-good snapshot. Shared by [`DirectoryCache`] and
+/// [`RadioCache`]; the only difference between them is the `empty` fallback.
+fn read_cached(inner: &Mutex<CachedFile>, path: &Path, empty: &str) -> String {
+    let mtime = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok();
+
+    let mut cached = inner.lock().expect("file cache poisoned");
+
+    if (mtime.is_none() || mtime != cached.mtime)
+        && let Ok(contents) = std::fs::read_to_string(path)
+    {
+        cached.mtime = mtime;
+        cached.body = Some(contents);
+    }
+
+    cached.body.clone().unwrap_or_else(|| empty.to_string())
+}
+
+/// Cached last-good read of the daemon-written `directory.json`. Falls back to
+/// (and remembers) [`EMPTY_DIRECTORY`] when the file is missing/unreadable and
+/// there is no prior last-good snapshot.
+#[derive(Debug, Default)]
+pub struct DirectoryCache {
+    inner: Mutex<CachedFile>,
 }
 
 impl DirectoryCache {
@@ -57,28 +86,26 @@ impl DirectoryCache {
 
     /// Read (or serve cached) directory.json contents as a raw JSON string.
     fn read(&self, path: &Path) -> String {
-        let mtime = std::fs::metadata(path)
-            .and_then(|meta| meta.modified())
-            .ok();
+        read_cached(&self.inner, path, EMPTY_DIRECTORY)
+    }
+}
 
-        let mut cached = self.inner.lock().expect("directory cache poisoned");
+/// Cached last-good read of the daemon-written `radio.json` (bead ng9). Mirrors
+/// [`DirectoryCache`]; falls back to [`EMPTY_RADIO`] when the file is
+/// missing/unreadable and there is no prior last-good snapshot.
+#[derive(Debug, Default)]
+pub struct RadioCache {
+    inner: Mutex<CachedFile>,
+}
 
-        // Re-read only if the mtime is unknown or has changed since the last
-        // successful read. On read failure, fall through and serve the
-        // last-good body (or the empty directory if there isn't one) without
-        // clobbering the cached mtime — a transient stat/read race shouldn't
-        // drop a known-good snapshot.
-        if (mtime.is_none() || mtime != cached.mtime)
-            && let Ok(contents) = std::fs::read_to_string(path)
-        {
-            cached.mtime = mtime;
-            cached.body = Some(contents);
-        }
+impl RadioCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-        cached
-            .body
-            .clone()
-            .unwrap_or_else(|| EMPTY_DIRECTORY.to_string())
+    /// Read (or serve cached) radio.json contents as a raw JSON string.
+    fn read(&self, path: &Path) -> String {
+        read_cached(&self.inner, path, EMPTY_RADIO)
     }
 }
 
@@ -104,6 +131,10 @@ pub struct RouteResponse {
     pub status: u16,
     pub content_type: &'static str,
     pub body: Vec<u8>,
+    /// When set, the adapter emits `Access-Control-Allow-Origin: *`. The
+    /// browser topology view (bead ng9) aggregates `GET /api/*` from OTHER
+    /// nodes' overlay addresses, so those reads must be cross-origin-readable.
+    pub cors: bool,
 }
 
 impl RouteResponse {
@@ -112,6 +143,7 @@ impl RouteResponse {
             status,
             content_type: "application/json",
             body: body.into().into_bytes(),
+            cors: false,
         }
     }
 
@@ -120,6 +152,7 @@ impl RouteResponse {
             status,
             content_type: "text/html; charset=utf-8",
             body,
+            cors: false,
         }
     }
 
@@ -131,6 +164,7 @@ impl RouteResponse {
             status,
             content_type: content_type_for(path),
             body,
+            cors: false,
         }
     }
 }
@@ -164,6 +198,13 @@ fn health() -> RouteResponse {
 /// on read failure, empty-but-valid directory if there's no last-good copy).
 fn directory(cache: &DirectoryCache, directory_file: &Path) -> RouteResponse {
     RouteResponse::json(200, cache.read(directory_file))
+}
+
+/// `GET /api/radio` — serve `radio.json` verbatim (bead ng9): cached, last-good
+/// on read failure, empty-but-valid radio doc if there's no last-good copy
+/// (e.g. a node with no mesh interface).
+fn radio(cache: &RadioCache, radio_file: &Path) -> RouteResponse {
+    RouteResponse::json(200, cache.read(radio_file))
 }
 
 /// `GET /api/node` — extract just the `node` section of the directory, for
@@ -328,13 +369,18 @@ pub fn route(
     spool_dir: &Path,
     directory_cache: &DirectoryCache,
     directory_file: &Path,
+    radio_cache: &RadioCache,
+    radio_file: &Path,
 ) -> RouteResponse {
-    match (method, path) {
+    let mut resp = match (method, path) {
         ("GET", "/api/health") => health(),
 
         // --- S3 (mjolnir-mesh-11l): read-only mesh state ---------------
         ("GET", "/api/directory") => directory(directory_cache, directory_file),
         ("GET", "/api/node") => node(directory_cache, directory_file),
+
+        // --- radio telemetry (mjolnir-mesh-ng9): live mesh-topology view --
+        ("GET", "/api/radio") => radio(radio_cache, radio_file),
 
         // --- S4 (mjolnir-mesh-5zn): identity ceremony -------------------
         ("GET", "/api/challenge") => issue_challenge(challenges),
@@ -345,8 +391,17 @@ pub fn route(
             status: 404,
             content_type: "text/plain",
             body: b"not found".to_vec(),
+            cors: false,
         },
+    };
+
+    // Every `GET /api/*` read is aggregated cross-origin by the browser
+    // topology view (bead ng9), so it must carry `Access-Control-Allow-Origin`.
+    // Static assets and same-origin POSTs don't need it.
+    if method == "GET" && path.starts_with("/api/") {
+        resp.cors = true;
     }
+    resp
 }
 
 #[cfg(test)]
@@ -384,6 +439,8 @@ mod tests {
             spool.path(),
             &DirectoryCache::new(),
             Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "application/json");
@@ -401,6 +458,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
@@ -422,6 +481,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
@@ -459,6 +520,8 @@ mod tests {
             spool.path(),
             &DirectoryCache::new(),
             Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 404);
     }
@@ -476,6 +539,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
@@ -497,6 +562,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(challenge_resp.status, 200);
@@ -520,6 +587,8 @@ mod tests {
             spool.path(),
             &DirectoryCache::new(),
             Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
 
@@ -538,6 +607,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(replay.status, 400);
@@ -558,6 +629,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         let challenge_json: serde_json::Value =
@@ -580,6 +653,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 400);
@@ -604,6 +679,8 @@ mod tests {
             spool.path(),
             &DirectoryCache::new(),
             Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         let challenge_json: serde_json::Value =
             serde_json::from_slice(&challenge_resp.body).unwrap();
@@ -625,6 +702,8 @@ mod tests {
             spool.path(),
             &DirectoryCache::new(),
             Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(first.status, 200);
 
@@ -636,6 +715,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(second.status, 400);
@@ -663,6 +744,8 @@ mod tests {
             &challenges,
             spool.path(),
             &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
             Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 400);
@@ -693,6 +776,8 @@ mod tests {
             spool.path(),
             &cache,
             &directory_path,
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "application/json");
@@ -718,6 +803,8 @@ mod tests {
             spool.path(),
             &cache,
             &missing_path,
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
         assert_eq!(
@@ -742,6 +829,8 @@ mod tests {
             spool.path(),
             &cache,
             &directory_path,
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
         let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
@@ -764,8 +853,113 @@ mod tests {
             spool.path(),
             &cache,
             &missing_path,
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, b"{}".to_vec());
+    }
+
+    const SAMPLE_RADIO: &str = r#"{
+        "version": 1,
+        "backhaul_addr": "10.254.12.214",
+        "mesh_if": "phy1-mesh0",
+        "mesh_mac": "82:af:ca:e7:ba:9d",
+        "channel": 36,
+        "freq_mhz": 5180,
+        "collected_at_unix": 1751234567,
+        "stations": [ { "mac": "82:af:ca:d9:85:af", "signal_dbm": -59, "expected_throughput_mbps": 887.703, "inactive_ms": 100 } ],
+        "mpaths": [ { "dst": "82:af:ca:d9:85:af", "next_hop": "82:af:ca:d9:85:af", "metric": 14 } ]
+    }"#;
+
+    #[test]
+    fn radio_endpoint_serves_file_contents() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let radio_path = dir.path().join("radio.json");
+        std::fs::write(&radio_path, SAMPLE_RADIO).unwrap();
+
+        let resp = route(
+            "GET",
+            "/api/radio",
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            &radio_path,
+        );
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.content_type, "application/json");
+        let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["mesh_if"], "phy1-mesh0");
+        assert_eq!(value["stations"][0]["signal_dbm"], -59);
+        assert_eq!(value["mpaths"][0]["metric"], 14);
+    }
+
+    #[test]
+    fn radio_endpoint_returns_empty_radio_when_file_missing() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("does-not-exist.json");
+
+        let resp = route(
+            "GET",
+            "/api/radio",
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            &missing_path,
+        );
+        assert_eq!(resp.status, 200);
+        // Empty-but-valid v1 radio doc.
+        let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(value["version"], 1);
+        assert!(value["mesh_if"].is_null());
+        assert_eq!(value["stations"].as_array().unwrap().len(), 0);
+        assert_eq!(value["mpaths"].as_array().unwrap().len(), 0);
+    }
+
+    /// Helper: route with throwaway state, returning the `RouteResponse`.
+    fn route_for(method: &str, path: &str) -> RouteResponse {
+        let (challenges, spool) = no_state();
+        route(
+            method,
+            path,
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+        )
+    }
+
+    #[test]
+    fn get_api_responses_carry_cors() {
+        // Every GET /api/* read is aggregated cross-origin by the browser
+        // topology view (ng9), so it must advertise CORS.
+        assert!(route_for("GET", "/api/radio").cors);
+        assert!(route_for("GET", "/api/directory").cors);
+        assert!(route_for("GET", "/api/node").cors);
+        assert!(route_for("GET", "/api/health").cors);
+        assert!(route_for("GET", "/api/challenge").cors);
+    }
+
+    #[test]
+    fn non_api_and_post_do_not_carry_cors() {
+        // Static assets are same-origin; POSTs aren't cross-origin reads.
+        assert!(!route_for("GET", "/").cors);
+        assert!(!route_for("GET", "/some/client/route").cors);
+        assert!(!route_for("POST", "/api/identity").cors);
     }
 }

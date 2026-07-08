@@ -23,7 +23,7 @@ use tiny_http::{Header, Response, Server};
 use tracing::info;
 
 use config::Config;
-use routes::{DirectoryCache, new_challenge_store, route};
+use routes::{DirectoryCache, RadioCache, new_challenge_store, route};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -31,6 +31,7 @@ fn main() {
 
     let challenges = new_challenge_store();
     let directory_cache = DirectoryCache::new();
+    let radio_cache = RadioCache::new();
 
     let server = Server::http(&config.bind).unwrap_or_else(|err| {
         panic!("failed to bind {}: {err}", config.bind);
@@ -55,14 +56,23 @@ fn main() {
             &config.spool_dir,
             &directory_cache,
             &config.directory_file,
+            &radio_cache,
+            &config.radio_file,
         );
 
         let content_type = Header::from_bytes(&b"Content-Type"[..], resp.content_type.as_bytes())
             .expect("valid content-type header");
 
-        let response = Response::from_data(resp.body)
+        let mut response = Response::from_data(resp.body)
             .with_status_code(resp.status)
             .with_header(content_type);
+
+        // Cross-origin read access for the browser topology aggregator (ng9).
+        if resp.cors {
+            let cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
+                .expect("valid CORS header");
+            response.add_header(cors);
+        }
 
         if let Err(err) = request.respond(response) {
             tracing::warn!(%err, "failed to respond to request");

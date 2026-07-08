@@ -30,6 +30,7 @@ pub mod crdt;
 mod dns_conformance_tests;
 #[cfg(feature = "daemon")]
 pub mod dns_responder;
+pub mod radio;
 pub mod roster;
 pub mod tun;
 
