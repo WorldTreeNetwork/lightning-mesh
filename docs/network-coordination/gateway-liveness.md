@@ -114,11 +114,19 @@ whole fleet at once.
 2. `EgressAd` + local-egress detection (kernel non-babel default, oif exclusion,
    probe stub); extend `LivenessBeacon` with `egress: Option<EgressAd>` and
    `LivenessTracker` to stash/expose it. Emit-only, no behaviour change yet.
+   **[done: commit be99c38 (7z5) — crdt::egress + tracker `live_gateways()`]**
 3. Flip Lever 1: gate the `0.0.0.0/0` render on local egress. **This fixes the
    field bug** (a no-WAN node can no longer re-export a stale default).
+   **[done: commit 0c5564e — `read_default_routes`/`local_egress` gate both
+   reconcilers; beacon now advertises real egress. aarch64-musl cross-build
+   verified.]**
 4. Flip Lever 2: meshd consumes `live_gateways()` and owns proactive withdraw.
+   **[next]** A `gateway_reconciler` task reads `liveness.live_gateways(now)` each
+   tick and, for any learned `proto babel` default whose origin is NOT in the
+   live set, flushes it (`ip route del`) — the positive-withdraw the FIB never
+   got. Anti-flap guard: only flush when no live gateway advertises a path.
 5. Fold in `42j`: replace the probe stub with the real ICMP + HTTP-204 captive
-   check + hysteresis.
+   check + hysteresis. `classify_egress` sets `healthy` from the probe.
 
 ## Test plan
 
