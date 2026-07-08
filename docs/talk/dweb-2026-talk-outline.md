@@ -1,4 +1,9 @@
-# Overcoming Implicit Authority Structures To Build a P2P Mesh — Talk Outline (v2)
+# Locked Open: Building Networks With No Authority to Capture — Talk Outline (v2)
+
+> **Title:** "Locked Open: Building Networks With No Authority to Capture."
+> (Submitted/program title was "Overcoming Implicit Authority Structures To
+> Build a P2P Mesh" — if the program can't be updated, the old title stays in
+> the listing and this one goes on the title slide.)
 
 **Status:** Working outline — the talk skeleton | **Slot:** 1 hour (~45–50 min
 talk + Q&A) | **Audience:** DWeb Camp — open-hearted technologists and
@@ -15,11 +20,38 @@ folks in the room, friends from Myanmar in the room | **Date:** 2026-07-07
 
 ## The talk in one sentence
 
-**Find the implicit authority hiding in a system, remove it with symmetry +
-conflict-free merge + self-created keys — and what falls out is a
-configuration-free network nobody can own.** Taught as a **portable method**
-that can be applied to any centralized system, grounded in one real use case —
-so the room leaves empowered to apply the move to whatever *they're* building.
+**Find the implicit authority hiding in a system, remove it with keys,
+peering, and convergence — and what falls out is a configuration-free network
+nobody can own.** Taught as a **portable method** that can be applied to any
+centralized system, grounded in one real use case — so the room leaves
+empowered to apply the move to whatever *they're* building.
+
+## The organizing principle: the story of joining a commons
+
+The triad isn't just a mnemonic — its arc **is the talk's story**, and every
+beat is a stage of it:
+
+- **Keys — what you hold.** You mint yourself. Nobody admits you, so nobody
+  can expel you.
+- **Peering — how you relate.** You connect as an equal. Nobody's customer,
+  nobody's tenant.
+- **Convergence — where you all arrive.** Shared truth with no referee. The
+  commons agrees with itself.
+
+Hold → relate → arrive: the story of joining a commons. And the crucial
+sharpening: **the act of joining *creates* the commons.** There is no
+pre-existing thing that admits you — a commons with a front door would have a
+doorman, and a doorman is an authority. The network *is* its participants:
+add a node and the commons grows; your capacity added is everyone's; two
+commons that meet become one. Joining is constitutive, not granted — that's
+what "permissionless" means when it's load-bearing.
+
+The cold open is the audience literally living this (their joining *is* the
+network the room watches come into being). The case studies are the three
+stages done rigorously. The Myanmar beat is what it costs when a people's
+commons is taken — and why one that exists *by* participation can't be
+confiscated at the front desk. "Locked open" is the commons made permanent.
+Every beat should know which stage of joining-that-creates it's telling.
 
 ## The principles (the educational spine)
 
@@ -85,7 +117,13 @@ The affirmative frame: a private internet of our own. Services for each
 other, discoverable by name, on hardware we hold — private when we want,
 spanning the public internet when we want reach. Everything web3 promised —
 own your identity, own your data, permissionless, disintermediated — delivered
-by **keys, routing, and merge. No token, no chain.**
+by **keys, peering, and convergence. No token, no chain.** ("Peering" chosen
+deliberately over "routing": it's the term of art for networks connecting as
+equals, settlement-free — vs. *transit*, where you're a customer.
+"Convergence" chosen over "merge": it's the actual guarantee — separate paths
+arriving at the same place with no referee — explained via the `conflicted
+copy (2)` hook. The triad doubles as the take-home checklist: who mints your
+identity? peer or customer? who decides whose version wins?)
 
 This is an invitation, not a fortress. The rest of the talk is the method,
 and what it protects.
