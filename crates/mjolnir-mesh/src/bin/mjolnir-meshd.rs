@@ -2376,6 +2376,16 @@ struct DirectorySnapshot {
     /// so `mjolnir-hello` reading the on-disk file sees no schema break.
     #[serde(default)]
     lost_names: Vec<DirectoryLostName>,
+    /// Nodes currently believed to be LIVE internet gateways (mjolnir-mesh-5lw
+    /// Lever 2): the liveness-gated egress set from [`LivenessTracker::live_gateways`],
+    /// i.e. origins that are beaconing fresh AND advertised a healthy uplink. This
+    /// is positively-determined presence/absence — a gateway that stops beaconing
+    /// drops out on its own — surfaced so the front desk can show "internet via N
+    /// gateways" and operators can see who the egresses are. meshd never touches a
+    /// babel route on the strength of this (babel stays the data-path authority);
+    /// it is observability only. Additive `#[serde(default)]` — hello-safe.
+    #[serde(default)]
+    gateways: Vec<DirectoryGateway>,
 }
 
 /// One service name this node attempted to claim but lost to an earlier
@@ -2405,6 +2415,15 @@ struct DirectoryNeighbor {
     node_id: String,
     addrs: Vec<String>,
     subnet: Option<String>,
+}
+
+/// One live internet gateway, projected for the front desk (mjolnir-mesh-5lw
+/// Lever 2). `cost_hint` mirrors the advertised egress cost (lower = nearer);
+/// informational — babel's own metric still decides the installed route.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct DirectoryGateway {
+    node_id: String,
+    cost_hint: u16,
 }
 
 /// One `/users` record, projected for the front desk.
@@ -2452,6 +2471,9 @@ fn build_directory_snapshot(
     service_book: &ServiceBook,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
+    // Live internet gateways (mjolnir-mesh-5lw Lever 2), already filtered to the
+    // fresh+healthy set by the caller via [`LivenessTracker::live_gateways`].
+    gateways: &[(String, mjolnir_mesh::EgressAd)],
 ) -> DirectorySnapshot {
     let node = DirectoryNode {
         node_id: self_id.to_string(),
@@ -2487,6 +2509,14 @@ fn build_directory_snapshot(
         })
         .collect();
 
+    let gateways = gateways
+        .iter()
+        .map(|(node_id, ad)| DirectoryGateway {
+            node_id: node_id.clone(),
+            cost_hint: ad.cost_hint,
+        })
+        .collect();
+
     DirectorySnapshot {
         version: DIRECTORY_SCHEMA_VERSION,
         node,
@@ -2494,6 +2524,7 @@ fn build_directory_snapshot(
         identities,
         services,
         lost_names: Vec::new(),
+        gateways,
     }
 }
 
@@ -2562,6 +2593,11 @@ fn build_directory_snapshot_v2(
         identities,
         services,
         lost_names,
+        // The live-gateway set (5lw Lever 2) is carried by the FILE projection
+        // (`directory.json`, what the front desk reads). The control-API path
+        // doesn't have the LivenessTracker in scope; threading it through the
+        // HTTP plumbing is a follow-up, so this reads empty here for now.
+        gateways: Vec::new(),
     }
 }
 
@@ -2605,6 +2641,7 @@ fn write_directory_projection(
     addr_book: &Arc<Mutex<AddrBook>>,
     user_book: &Arc<Mutex<UserBook>>,
     service_book: &Arc<Mutex<ServiceBook>>,
+    liveness: &Arc<Mutex<LivenessTracker>>,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
     directory_file: &Path,
@@ -2616,6 +2653,18 @@ fn write_directory_projection(
         .lock()
         .expect("service directory poisoned")
         .clone();
+    // Live-gateway set (5lw Lever 2): read under the liveness lock, released
+    // before persist. Held separately from the book locks (same discipline as
+    // the DNS read filter / sweep) so we never nest tracker + book locks.
+    let gateways = liveness
+        .lock()
+        .expect("liveness tracker poisoned")
+        .live_gateways(mjolnir_mesh::monotonic_now_ms());
+    debug!(
+        count = gateways.len(),
+        ids = ?gateways.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        "live internet gateways (5lw Lever 2)"
+    );
     let snapshot = build_directory_snapshot(
         &claims_snapshot,
         &addr_snapshot,
@@ -2623,6 +2672,7 @@ fn write_directory_projection(
         &service_snapshot,
         self_id,
         backhaul_ip,
+        &gateways,
     );
     persist_directory(&snapshot, directory_file);
 }
@@ -2941,6 +2991,7 @@ async fn anti_entropy_loop<T: GossipTransport>(
         &addr_book,
         &user_book,
         &service_book,
+        &liveness,
         &self_announce.self_id,
         self_announce.backhaul_ip,
         &directory_file,
@@ -3041,6 +3092,7 @@ async fn anti_entropy_loop<T: GossipTransport>(
             &addr_book,
             &user_book,
             &service_book,
+            &liveness,
             &self_announce.self_id,
             self_announce.backhaul_ip,
             &directory_file,
@@ -7207,6 +7259,7 @@ config meshd 'meshd'
             &service_book,
             "self",
             "10.254.1.1".parse().unwrap(),
+            &[],
         );
 
         assert_eq!(snapshot.version, DIRECTORY_SCHEMA_VERSION);
@@ -7217,6 +7270,42 @@ config meshd 'meshd'
         assert!(snapshot.neighbors.is_empty());
         assert!(snapshot.identities.is_empty());
         assert!(snapshot.services.is_empty());
+        assert!(
+            snapshot.gateways.is_empty(),
+            "no gateways passed -> none projected"
+        );
+    }
+
+    #[test]
+    fn build_directory_snapshot_projects_live_gateways() {
+        // 5lw Lever 2: the live-gateway set (already liveness-filtered by the
+        // caller) is projected into the directory for the front desk. cost_hint
+        // rides through; healthy is implied by presence in the set.
+        let claims = HashMap::new();
+        let addr_book = AddrBook::new();
+        let user_book = UserBook::new();
+        let service_book = ServiceBook::new();
+        let gateways = [(
+            "gw-node".to_string(),
+            mjolnir_mesh::EgressAd {
+                healthy: true,
+                cost_hint: 7,
+            },
+        )];
+
+        let snapshot = build_directory_snapshot(
+            &claims,
+            &addr_book,
+            &user_book,
+            &service_book,
+            "self",
+            "10.254.1.1".parse().unwrap(),
+            &gateways,
+        );
+
+        assert_eq!(snapshot.gateways.len(), 1);
+        assert_eq!(snapshot.gateways[0].node_id, "gw-node");
+        assert_eq!(snapshot.gateways[0].cost_hint, 7);
     }
 
     #[test]
@@ -7257,6 +7346,7 @@ config meshd 'meshd'
             &service_book,
             "self",
             "10.254.1.1".parse().unwrap(),
+            &[],
         );
 
         // Valid JSON with the schema version field (AC).
@@ -7300,6 +7390,7 @@ config meshd 'meshd'
             &ServiceBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
+            &[],
         );
         persist_directory(&snapshot, &path);
 

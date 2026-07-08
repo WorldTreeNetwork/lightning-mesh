@@ -86,15 +86,16 @@ construction (you can't be "live but with a stale gateway status"). Extend
 `stale_threshold_ms`, not guessed-gone.
 
 meshd then:
-- Keeps babeld as the **forwarding-plane installer** (don't reinvent
-  nearest-exit metric math — babeld does it well). babeld still learns/installs
-  the actual default route.
-- Uses the live-gateway set as an **authoritative overlay**: when a gateway goes
-  stale in `GatewayTracker`, meshd proactively `ip route flush`-es any learned
-  default toward that origin instead of waiting for babeld's hold-time. This is
-  the positive-withdraw signal that closes "lack of liveness isn't advertised".
-- Exposes the live-gateway set to status/DNS/ops (`meshctl`, hello) so operators
-  can see who the current egresses are and why.
+- Keeps babeld as the **forwarding-plane installer AND the data-path authority**
+  (don't reinvent nearest-exit metric math — babeld does it well). babeld learns,
+  installs, and withdraws the actual default route; meshd never deletes one.
+- **Exposes** the live-gateway set to the front desk / ops: written into
+  `directory.json` (`gateways`) each anti-entropy tick and logged. This is the
+  positively-determined presence/absence — "internet via N gateways", and a
+  gateway that stops beaconing drops out on its own.
+- Does **NOT** proactively flush routes on beacon-staleness (see the build-order
+  note): gossip/meshd liveness ≠ babel data-path liveness, so a flush could cut
+  working internet. Withdrawal stays babeld's job.
 
 ## Why the beacon plane and not an HLC / a CRDT book
 
@@ -120,11 +121,24 @@ whole fleet at once.
    **[done: commit 0c5564e — `read_default_routes`/`local_egress` gate both
    reconcilers; beacon now advertises real egress. aarch64-musl cross-build
    verified.]**
-4. Flip Lever 2: meshd consumes `live_gateways()` and owns proactive withdraw.
-   **[next]** A `gateway_reconciler` task reads `liveness.live_gateways(now)` each
-   tick and, for any learned `proto babel` default whose origin is NOT in the
-   live set, flushes it (`ip route del`) — the positive-withdraw the FIB never
-   got. Anti-flap guard: only flush when no live gateway advertises a path.
+4. Lever 2 — meshd consumes `live_gateways()` and **surfaces** it (NO route
+   manipulation). **[done]** `write_directory_projection` reads
+   `liveness.live_gateways(now)` each anti-entropy tick and writes the live set
+   into `directory.json` (`gateways: [{node_id, cost_hint}]`, additive/hello-safe)
+   plus a `debug!` line; the front desk can show "internet via N gateways".
+
+   **The proactive-withdraw idea was deliberately DROPPED as unsafe** (decided
+   2026-07-08). The liveness beacon rides meshd's gossip plane; the default route
+   is owned by **babeld**, a separate process on a separate transport. They
+   diverge: if meshd crashes or gossip partitions on a gateway while babeld keeps
+   routing, the gateway stops beaconing (looks "stale") but internet still flows.
+   Having meshd `ip route del` the default on beacon-staleness would then CUT
+   WORKING INTERNET, and deleting a route babeld still believes in just makes
+   babeld re-add it (flap). babel stays the data-path authority; meshd's
+   liveness-gated role is advertise-side (Lever 1) + observability (this), never
+   route deletion. Fast multi-gateway failover is already babel's job (metric +
+   hop cost). If a positive-withdraw is ever wanted, it must be gated on the
+   DATA path (babel's own route state), not the gossip beacon.
 5. Fold in `42j`: replace the probe stub with the real ICMP + HTTP-204 captive
    check + hysteresis. `classify_egress` sets `healthy` from the probe.
 
