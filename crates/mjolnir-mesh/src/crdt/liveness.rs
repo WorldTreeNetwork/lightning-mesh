@@ -34,6 +34,8 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use crate::crdt::egress::EgressAd;
+
 /// Process-monotonic milliseconds since the first call. The liveness plane
 /// judges staleness purely by *receiver-local* elapsed time (never a remote
 /// wall clock), so a monotonic source is exactly right — it cannot jump
@@ -52,6 +54,12 @@ struct Seen {
     incarnation: u64,
     counter: u64,
     received_at_ms: u64,
+    /// The origin's internet-egress advertisement from this beacon
+    /// (mjolnir-mesh-5lw): `Some` iff it announced itself a live gateway.
+    /// Refreshed on every accepted beacon, so a gateway that stops advertising
+    /// egress (drops to `None`) is reflected on its next beacon, and one that
+    /// stops beaconing entirely goes stale via `received_at_ms` like any record.
+    egress: Option<EgressAd>,
 }
 
 impl Seen {
@@ -94,8 +102,27 @@ impl LivenessTracker {
 
     /// Ingest a beacon observed at receiver-local time `now_ms`. Returns `true`
     /// if it was newer than what we held (and therefore refreshed liveness),
-    /// `false` if it was a duplicate/older replay we ignored.
+    /// `false` if it was a duplicate/older replay we ignored. Carries no egress
+    /// advertisement — thin wrapper over [`observe_with_egress`] for callers
+    /// (and the many liveness tests) that don't care about the gateway lane.
     pub fn observe(&mut self, node_id: &str, incarnation: u64, counter: u64, now_ms: u64) -> bool {
+        self.observe_with_egress(node_id, incarnation, counter, None, now_ms)
+    }
+
+    /// Like [`observe`], but also records the origin's internet-egress
+    /// advertisement (mjolnir-mesh-5lw). The egress is stored only when the
+    /// beacon is accepted (strictly newer), so a stale replay can neither
+    /// refresh liveness nor resurrect a withdrawn gateway. Passing `None` clears
+    /// the gateway status on the next accepted beacon — the mechanism by which a
+    /// node that loses its uplink stops being counted as a gateway.
+    pub fn observe_with_egress(
+        &mut self,
+        node_id: &str,
+        incarnation: u64,
+        counter: u64,
+        egress: Option<EgressAd>,
+        now_ms: u64,
+    ) -> bool {
         match self.seen.get_mut(node_id) {
             Some(prev) if !prev.superseded_by(incarnation, counter) => false,
             Some(prev) => {
@@ -103,6 +130,7 @@ impl LivenessTracker {
                     incarnation,
                     counter,
                     received_at_ms: now_ms,
+                    egress,
                 };
                 true
             }
@@ -113,6 +141,7 @@ impl LivenessTracker {
                         incarnation,
                         counter,
                         received_at_ms: now_ms,
+                        egress,
                     },
                 );
                 true
@@ -135,10 +164,27 @@ impl LivenessTracker {
                         incarnation: 0,
                         counter: 0,
                         received_at_ms: now_ms,
+                        egress: None,
                     },
                 );
             }
         }
+    }
+
+    /// The set of nodes currently believed to be **live internet gateways**:
+    /// origins that are not stale and whose last accepted beacon advertised a
+    /// healthy egress (mjolnir-mesh-5lw). This is the positively-expiring
+    /// live-gateway set — a gateway that stops beaconing drops out via
+    /// [`is_stale`], and one that withdraws its uplink drops out when its next
+    /// beacon carries `egress: None` (or `healthy: false`). Consumers use it to
+    /// decide/withdraw their own default route instead of trusting babeld's
+    /// implicit redistribution.
+    pub fn live_gateways(&self, now_ms: u64) -> Vec<(String, EgressAd)> {
+        self.seen
+            .iter()
+            .filter(|(id, _)| !self.is_stale(id, now_ms))
+            .filter_map(|(id, s)| s.egress.filter(|ad| ad.healthy).map(|ad| (id.clone(), ad)))
+            .collect()
     }
 
     /// Elapsed ms since the last accepted beacon from `node_id`, or `None` if we
@@ -304,6 +350,70 @@ mod tests {
         t.forget("x");
         assert!(t.is_stale("x", 1_000)); // back to unknown
         assert!(!t.is_hard_expired("x", 1_000 + HARD));
+    }
+
+    fn ad() -> EgressAd {
+        EgressAd {
+            healthy: true,
+            cost_hint: 0,
+        }
+    }
+
+    #[test]
+    fn live_gateway_appears_and_expires_with_liveness() {
+        let mut t = tracker();
+        // Non-gateway beacon: never listed.
+        t.observe("plain", 100, 1, 1_000);
+        assert!(t.live_gateways(1_000).is_empty());
+        // Gateway beacon: listed while fresh...
+        t.observe_with_egress("gw", 100, 1, Some(ad()), 1_000);
+        assert_eq!(
+            t.live_gateways(1_000),
+            vec![("gw".to_string(), ad())],
+            "a freshly-beaconed gateway is live"
+        );
+        // ...and drops out once its beacon goes stale (positive expiry — the
+        // 5lw point: a gateway that stops beaconing is KNOWN gone).
+        assert!(t.live_gateways(1_001 + STALE).is_empty());
+    }
+
+    #[test]
+    fn gateway_withdraws_by_beaconing_none() {
+        let mut t = tracker();
+        t.observe_with_egress("gw", 100, 1, Some(ad()), 1_000);
+        assert_eq!(t.live_gateways(1_000).len(), 1);
+        // Uplink lost: the next (newer) beacon carries egress: None.
+        assert!(t.observe_with_egress("gw", 100, 2, None, 2_000));
+        assert!(
+            t.live_gateways(2_000).is_empty(),
+            "a withdrawn uplink drops the node from the live-gateway set"
+        );
+    }
+
+    #[test]
+    fn unhealthy_egress_is_not_a_live_gateway() {
+        let mut t = tracker();
+        let sick = EgressAd {
+            healthy: false,
+            cost_hint: 0,
+        };
+        t.observe_with_egress("gw", 100, 1, Some(sick), 1_000);
+        assert!(
+            t.live_gateways(1_000).is_empty(),
+            "a dead/captive uplink (healthy: false) must not be selected"
+        );
+    }
+
+    #[test]
+    fn stale_replay_cannot_resurrect_a_withdrawn_gateway() {
+        let mut t = tracker();
+        t.observe_with_egress("gw", 100, 1, Some(ad()), 1_000);
+        // Withdraw at counter 2.
+        t.observe_with_egress("gw", 100, 2, None, 2_000);
+        // A replayed OLD gateway beacon (counter 1) must be ignored — it neither
+        // refreshes liveness nor brings the gateway back.
+        assert!(!t.observe_with_egress("gw", 100, 1, Some(ad()), 3_000));
+        assert!(t.live_gateways(3_000).is_empty());
     }
 
     #[test]

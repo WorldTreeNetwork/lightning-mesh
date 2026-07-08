@@ -1,4 +1,5 @@
 pub mod dns;
+pub mod egress;
 pub mod gossip;
 pub mod hlc;
 pub mod lease;

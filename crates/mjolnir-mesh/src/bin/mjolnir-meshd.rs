@@ -1124,11 +1124,15 @@ async fn run_mesh(
                             // beacon older than or equal to what we hold is
                             // ignored by `observe`, so a stale replay cannot
                             // resurrect a dead node's freshness.
-                            if let GossipMessage::LivenessBeacon { node_id, incarnation, counter } = &msg {
+                            if let GossipMessage::LivenessBeacon { node_id, incarnation, counter, egress } = &msg {
+                                // `egress` (5lw) rides the beacon: recording it
+                                // here builds the positively-expiring
+                                // live-gateway set (`live_gateways`). A stale
+                                // replay is still dropped by `observe_with_egress`.
                                 liveness
                                     .lock()
                                     .expect("liveness tracker poisoned")
-                                    .observe(node_id, *incarnation, *counter, mjolnir_mesh::monotonic_now_ms());
+                                    .observe_with_egress(node_id, *incarnation, *counter, *egress, mjolnir_mesh::monotonic_now_ms());
                                 return;
                             }
                             // Address book (0yb): learn a peer's self-announced
@@ -3065,6 +3069,11 @@ async fn emit_liveness_beacon<T: GossipTransport>(
             node_id: self_id.to_string(),
             incarnation,
             counter: c,
+            // egress (5lw): None until the reconciler wires local-uplink
+            // detection (classify_egress over the kernel default routes) and
+            // threads the result in here — Lever 1 of gateway-liveness.md. The
+            // wire field + tracker plumbing land now so that step is a one-liner.
+            egress: None,
         })
         .await
     {

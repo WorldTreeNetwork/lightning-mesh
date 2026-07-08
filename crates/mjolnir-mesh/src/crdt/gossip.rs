@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::crdt::{
     dns::DnsEntry,
+    egress::EgressAd,
     hlc::HLC,
     lease::LeaseEntry,
     peer_addr::PeerAddrEntry,
@@ -91,6 +92,12 @@ pub enum GossipMessage {
         node_id: String,
         incarnation: u64,
         counter: u64,
+        /// Internet-egress advertisement (mjolnir-mesh-5lw): `Some` iff the
+        /// origin is a live local gateway this tick. Rides the beacon so gateway
+        /// presence AND absence are liveness-gated by the same tracker — a
+        /// gateway that stops beaconing goes stale like any other record, rather
+        /// than lingering as a FIB route nobody withdrew. Not persisted.
+        egress: Option<EgressAd>,
     },
 }
 
@@ -312,10 +319,25 @@ mod tests {
             node_id: "abcd1234".repeat(8),
             incarnation: 1_700_000_020_000,
             counter: 42,
+            egress: Some(crate::crdt::egress::EgressAd {
+                healthy: true,
+                cost_hint: 0,
+            }),
         };
         let bytes = postcard::to_allocvec(&msg).unwrap();
         let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+
+        // And the non-gateway case (egress: None) round-trips too.
+        let non_gw = GossipMessage::LivenessBeacon {
+            node_id: "deadbeef".repeat(8),
+            incarnation: 1_700_000_020_001,
+            counter: 7,
+            egress: None,
+        };
+        let nb = postcard::to_allocvec(&non_gw).unwrap();
+        let nd: GossipMessage = postcard::from_bytes(&nb).unwrap();
+        assert_eq!(nb, postcard::to_allocvec(&nd).unwrap());
     }
 }
 

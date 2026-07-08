@@ -64,26 +64,26 @@ procd handle the restart. Consequences:
 Advertise the local egress fact on the beacon plane and let every node build a
 **live-gateway set** it can positively expire.
 
-New ephemeral gossip variant (appended last — wire-safe; old nodes decode-error
-and the `GossipSync` recv loop log-and-skips, same as every prior variant, and
-old nodes have no gateway logic to miss):
+**No mixed-fleet constraint** (decision 2026-07-08: 4 prototype nodes, all
+upgrade together — see `bd memories mixed-fleet`). So don't add a second
+variant; extend `LivenessBeacon` itself to carry the egress fact:
 
 ```rust
-GatewayBeacon {
+LivenessBeacon {
     node_id: String,
-    incarnation: u64,   // reuse the liveness incarnation (boot wall-clock ms)
-    counter: u64,       // reuse the liveness per-boot tick counter
-    egress: EgressAd,   // { healthy: bool, cost_hint: u16 }  — cost_hint mirrors
-                        // the babel metric headroom (e.g. RTT/hop estimate)
+    incarnation: u64,          // boot wall-clock ms (unchanged)
+    counter: u64,              // per-boot tick sequence (unchanged)
+    egress: Option<EgressAd>,  // NEW: Some(..) iff this node is a live local
+                               // gateway this tick. { healthy: bool, cost_hint: u16 }
 }
 ```
 
-Keep `LivenessBeacon` **unchanged and still emitted** so liveness of
-services/`.mesh`/address-book keeps working with un-upgraded nodes. New nodes
-emit both. A `GatewayTracker` (thin wrapper over the same `Seen`/`superseded_by`
-logic, or literally a second `LivenessTracker` keyed to gateway ads) marks a
-gateway stale via `is_stale(node_id, now)` within `stale_threshold_ms` — a
-gateway that stops beaconing is **known gone**, not guessed-gone.
+One beacon, one tick, one tracker — gateway-ness and node liveness share fate by
+construction (you can't be "live but with a stale gateway status"). Extend
+`LivenessTracker` to stash the last-accepted `egress` alongside `Seen`, exposing
+`live_gateways(now) -> impl Iterator<Item=(&str, EgressAd)>` that filters out
+`is_stale` origins. A gateway that stops beaconing is **known gone** within
+`stale_threshold_ms`, not guessed-gone.
 
 meshd then:
 - Keeps babeld as the **forwarding-plane installer** (don't reinvent
@@ -104,18 +104,21 @@ churn). Gateway-ness is recency-of-contact, not a value to converge — it belon
 on the ephemeral, receiver-clock-judged, skew-immune beacon plane. `incarnation`
 already handles restart with zero persisted state.
 
-## Migration / wire-compat
+## Build order
 
-1. Ship `bii` (stale-route flush) first — safe on the current fleet, no protocol
-   change. **[done: commit ac2f397]**
-2. Add `GatewayBeacon` variant (appended last) + `GatewayTracker`, emit-only, no
-   behaviour change. Mixed fleet safe (old nodes skip it).
-3. Flip Lever 1: gate the render on local egress. Roll node-by-node; a mixed
-   fleet just means some nodes still advertise unconditionally (today's
-   behaviour) while upgraded ones are correct — monotonic improvement.
-4. Flip Lever 2: meshd consumes the tracker and owns proactive withdraw.
-5. Once the whole fleet is upgraded, optionally collapse `GatewayBeacon` into
-   `LivenessBeacon` (single beacon carries `Option<EgressAd>`).
+No mixed-fleet dance — all 4 nodes upgrade together, so flip each piece for the
+whole fleet at once.
+
+1. Ship `bii` (stale-route flush) first — defence in depth for the
+   crash/interrupted-restart window. **[done: commit ac2f397]**
+2. `EgressAd` + local-egress detection (kernel non-babel default, oif exclusion,
+   probe stub); extend `LivenessBeacon` with `egress: Option<EgressAd>` and
+   `LivenessTracker` to stash/expose it. Emit-only, no behaviour change yet.
+3. Flip Lever 1: gate the `0.0.0.0/0` render on local egress. **This fixes the
+   field bug** (a no-WAN node can no longer re-export a stale default).
+4. Flip Lever 2: meshd consumes `live_gateways()` and owns proactive withdraw.
+5. Fold in `42j`: replace the probe stub with the real ICMP + HTTP-204 captive
+   check + hysteresis.
 
 ## Test plan
 
