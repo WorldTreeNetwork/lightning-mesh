@@ -2434,14 +2434,39 @@ struct DirectoryIdentity {
 }
 
 /// One service-directory record, projected for the front desk. `name` is the
-/// `ServiceBook` map key (the fully-qualified service name), not
-/// [`ServiceEntry::hostname`].
+/// `ServiceBook` map key (the fully-qualified service name, e.g.
+/// `printer._ipp._tcp`), not [`ServiceEntry::hostname`].
+///
+/// `hostname`, `txt`, and `host_mac` are additive detail (bead — front-desk
+/// mDNS panel): they let the UI show "any information" a client advertised
+/// without another round-trip. All three are `#[serde(default)]`/`Option` so
+/// an older `mjolnir-hello` (or a v2 record with no hostname) stays schema-safe.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct DirectoryService {
     name: String,
     ip: String,
     port: u16,
     protocol: String,
+    /// The advertised instance hostname (v1 `ServiceEntry::hostname`). `None`
+    /// for v2 records, which don't carry a hostname.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<String>,
+    /// Advertised `key=value` TXT records. Omitted from the wire when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    txt: BTreeMap<String, String>,
+    /// The advertising device's MAC, colon-hex (`de:ad:be:ef:00:01`). `None`
+    /// when unknown (v2 records may omit it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_mac: Option<String>,
+}
+
+/// Render a 6-byte MAC as lower-case colon-hex (`de:ad:be:ef:00:01`) for the
+/// front-desk projection.
+fn format_mac(mac: &[u8; 6]) -> String {
+    mac.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// Find the client `/24` (if any) owned by `node_id` in the claim map, e.g.
@@ -2506,6 +2531,9 @@ fn build_directory_snapshot(
             ip: entry.ip.to_string(),
             port: entry.port,
             protocol: entry.protocol.clone(),
+            hostname: Some(entry.hostname.clone()),
+            txt: entry.txt.clone(),
+            host_mac: Some(format_mac(&entry.host_mac)),
         })
         .collect();
 
@@ -2575,6 +2603,10 @@ fn build_directory_snapshot_v2(
             ip: entry.ip.to_string(),
             port: entry.port,
             protocol: entry.protocol.clone(),
+            // v2 records carry no hostname; MAC is optional.
+            hostname: None,
+            txt: entry.txt.clone(),
+            host_mac: entry.host_mac.as_ref().map(format_mac),
         })
         .collect();
 
@@ -7373,6 +7405,66 @@ config meshd 'meshd'
         assert_eq!(snapshot.services[0].name, "printer._ipp._tcp");
         assert_eq!(snapshot.services[0].port, 631);
         assert_eq!(snapshot.services[0].protocol, "_ipp._tcp");
+        // Additive detail for the mDNS front-desk panel: hostname + MAC are
+        // surfaced (v1 records always carry both), formatted colon-hex.
+        assert_eq!(snapshot.services[0].hostname.as_deref(), Some("printer"));
+        assert_eq!(
+            snapshot.services[0].host_mac.as_deref(),
+            Some("de:ad:be:ef:00:01")
+        );
+    }
+
+    #[test]
+    fn build_directory_snapshot_projects_service_txt_records() {
+        let mut txt = BTreeMap::new();
+        txt.insert("path".to_string(), "/print".to_string());
+        txt.insert("model".to_string(), "LaserJet".to_string());
+        let mut entry = svc_entry("printer", 631, 100, "peer-a");
+        entry.txt = txt;
+
+        let mut service_book = ServiceBook::new();
+        service_book.insert("printer._ipp._tcp".to_string(), entry);
+
+        let snapshot = build_directory_snapshot(
+            &HashMap::new(),
+            &AddrBook::new(),
+            &UserBook::new(),
+            &service_book,
+            "self",
+            "10.254.1.1".parse().unwrap(),
+            &[],
+        );
+
+        assert_eq!(
+            snapshot.services[0].txt.get("path").map(String::as_str),
+            Some("/print")
+        );
+        assert_eq!(
+            snapshot.services[0].txt.get("model").map(String::as_str),
+            Some("LaserJet")
+        );
+
+        // Empty TXT + None hostname/mac are omitted from the wire (schema-safe).
+        let json = serde_json::to_string(&snapshot).expect("serializes");
+        assert!(json.contains("\"path\":\"/print\""));
+    }
+
+    #[test]
+    fn directory_service_omits_empty_optional_detail() {
+        // A record with empty TXT still serializes; the empty map is dropped.
+        let service = DirectoryService {
+            name: "x._http._tcp".to_string(),
+            ip: "10.42.1.5".to_string(),
+            port: 80,
+            protocol: "_http._tcp".to_string(),
+            hostname: None,
+            txt: BTreeMap::new(),
+            host_mac: None,
+        };
+        let json = serde_json::to_string(&service).expect("serializes");
+        assert!(!json.contains("txt"), "empty txt should be omitted: {json}");
+        assert!(!json.contains("hostname"), "None hostname omitted: {json}");
+        assert!(!json.contains("host_mac"), "None host_mac omitted: {json}");
     }
 
     #[test]
