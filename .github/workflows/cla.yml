@@ -30,7 +30,7 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/identikey/lightning-mesh/blob/main/CLA.md'
           branch: 'cla-signatures'
-          allowlist: 'dependabot[bot],*[bot]'
+          allowlist: 'dukedorje,dependabot[bot],*[bot]'
           remote-organization-name: 'identikey'
           remote-repository-name: 'lightning-mesh'
           custom-notsigned-prcomment: >
