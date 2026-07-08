@@ -3048,6 +3048,87 @@ async fn anti_entropy_loop<T: GossipTransport>(
     }
 }
 
+/// Read the kernel's IPv4 default routes (dst `/0`) as egress candidates for
+/// [`local_egress`] (mjolnir-mesh-5lw). Each carries its output-interface name
+/// and whether babel installed it (`proto babel`) — the two facts
+/// [`classify_egress`](mjolnir_mesh::classify_egress) needs to tell a real local
+/// uplink from a learned mesh path. Netlink failure yields an empty list (no
+/// gateway), never a panic. A route with no `Oif` (e.g. a blackhole default) is
+/// skipped, so it cannot masquerade as an uplink.
+#[cfg(target_os = "linux")]
+async fn read_default_routes() -> Vec<mjolnir_mesh::DefaultRoute> {
+    use futures_util::stream::TryStreamExt;
+    use rtnetlink::packet_route::link::LinkAttribute;
+    use rtnetlink::packet_route::route::{RouteAttribute, RouteProtocol};
+    use rtnetlink::{RouteMessageBuilder, new_connection};
+    use std::collections::HashMap;
+
+    let (connection, handle, _) = match new_connection() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("egress: could not open netlink to read default routes: {e}");
+            return Vec::new();
+        }
+    };
+    tokio::spawn(connection);
+
+    // ifindex -> interface name, so we can resolve each route's Oif.
+    let mut names: HashMap<u32, String> = HashMap::new();
+    let mut links = handle.link().get().execute();
+    while let Ok(Some(link)) = links.try_next().await {
+        if let Some(name) = link.attributes.iter().find_map(|a| match a {
+            LinkAttribute::IfName(n) => Some(n.clone()),
+            _ => None,
+        }) {
+            names.insert(link.header.index, name);
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut rstream = handle
+        .route()
+        .get(RouteMessageBuilder::<Ipv4Addr>::new().build())
+        .execute();
+    while let Ok(Some(r)) = rstream.try_next().await {
+        // Default route == destination prefix length 0 (a `/0` has no
+        // Destination attribute, so match on the header length, not the attr).
+        if r.header.destination_prefix_length != 0 {
+            continue;
+        }
+        let Some(oif_idx) = r.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Oif(i) => Some(*i),
+            _ => None,
+        }) else {
+            continue; // no output interface (blackhole/unreachable) -> not an uplink
+        };
+        let oif = names
+            .get(&oif_idx)
+            .cloned()
+            .unwrap_or_else(|| format!("if{oif_idx}"));
+        out.push(mjolnir_mesh::DefaultRoute {
+            oif,
+            proto_babel: r.header.protocol == RouteProtocol::Babel,
+        });
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn read_default_routes() -> Vec<mjolnir_mesh::DefaultRoute> {
+    Vec::new()
+}
+
+/// This node's internet-egress advertisement right now (mjolnir-mesh-5lw), or
+/// `None` if it is not a live local gateway. Reads the kernel default routes and
+/// runs the pure [`classify_egress`](mjolnir_mesh::classify_egress): a candidate
+/// qualifies only if it is NOT `proto babel` and its interface is not the
+/// backhaul/overlay. Shared by the beacon emitter (what we advertise) and the
+/// babel reconcilers (whether we render the `0.0.0.0/0` redistribute line).
+async fn local_egress() -> Option<mjolnir_mesh::EgressAd> {
+    let routes = read_default_routes().await;
+    mjolnir_mesh::classify_egress(&routes, mjolnir_mesh::EXCLUDED_EGRESS_IFACES)
+}
+
 /// Broadcast this node's ephemeral liveness beacon (bead e21.9) and refresh our
 /// own liveness locally. `counter` is a per-boot monotonic sequence bumped each
 /// call; `incarnation` is our boot wall-clock time (constant for this process).
@@ -3064,16 +3145,17 @@ async fn emit_liveness_beacon<T: GossipTransport>(
 ) {
     let c = *counter;
     *counter = counter.wrapping_add(1);
+    // egress (5lw): advertise our internet-uplink status ON the beacon so gateway
+    // presence AND absence are liveness-gated by the same tracker. Sampled fresh
+    // each tick from the kernel FIB — a learned/stale `proto babel` default is
+    // excluded by `classify_egress`, so only a real local uplink advertises.
+    let egress = local_egress().await;
     if let Err(e) = sync
         .publish(GossipMessage::LivenessBeacon {
             node_id: self_id.to_string(),
             incarnation,
             counter: c,
-            // egress (5lw): None until the reconciler wires local-uplink
-            // detection (classify_egress over the kernel default routes) and
-            // threads the result in here — Lever 1 of gateway-liveness.md. The
-            // wire field + tracker plumbing land now so that step is a one-liner.
-            egress: None,
+            egress,
         })
         .await
     {
@@ -4831,10 +4913,17 @@ async fn babel_reconciler(
                 })
         };
 
+        // Gateway render is now DYNAMIC (mjolnir-mesh-5lw, Lever 1): the
+        // `--gateway` flag only says this node is *allowed* to be a gateway; we
+        // render the `0.0.0.0/0` redistribute line iff it *currently* has a real
+        // local uplink. A no-WAN node therefore never emits the line, so it can
+        // never re-export a stale `proto babel` default and hijack the mesh's
+        // egress (the field bug). Re-sampled every loop, so plug/unplug flips it.
+        let gateway_now = gateway && local_egress().await.is_some();
         let iface_refs: Vec<&str> = ifaces.iter().map(String::as_str).collect();
         let inputs = BabelConfigInputs::new(local_subnet, &iface_refs)
             .l2_interfaces(&l2_refs)
-            .gateway(gateway);
+            .gateway(gateway_now);
         let conf = render_babeld_conf(&inputs);
 
         // Debounce (qz9): when the desired config changes, let the mesh state
@@ -5360,8 +5449,18 @@ async fn babel_reconciler_overlay(
                     _ => None,
                 })
         };
-        let conf =
-            render_overlay_babeld_conf(OVERLAY_IFACE, local_subnet, OverlayRtt::default(), gateway);
+        // Dynamic gateway render (mjolnir-mesh-5lw, Lever 1) — same as the LAN
+        // reconciler: `--gateway` allows it, a live local uplink gates it. The
+        // EXCLUDED_EGRESS_IFACES guard (br-mesh, mjolnir0) is what stops a
+        // mode=internet overlay node from re-announcing its own underlay uplink
+        // back into the overlay (buw.7).
+        let gateway_now = gateway && local_egress().await.is_some();
+        let conf = render_overlay_babeld_conf(
+            OVERLAY_IFACE,
+            local_subnet,
+            OverlayRtt::default(),
+            gateway_now,
+        );
         if last_rendered.as_deref() != Some(conf.as_str()) {
             match write_atomic_if_changed(&config_path, &conf) {
                 Ok(_) => {
