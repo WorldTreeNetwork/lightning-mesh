@@ -44,11 +44,44 @@ reap_stray_babelds() {
 	done
 }
 
+# True (0) if a babeld running OUR exact config is currently alive. Same
+# exact-cmdline /proc match as reap_stray_babelds — never pgrep -f, whose
+# substring matching reaps innocent processes (see the reap note above).
+babeld_running() {
+	local p cmd want
+	want="$PROG -c $CONF"
+	for p in /proc/[0-9]*; do
+		cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+		[ "${cmd% }" = "$want" ] && return 0
+	done
+	return 1
+}
+
+# Flush routes a dead babeld left behind (mjolnir-mesh-bii). babeld installs
+# mesh routes with proto 'babel'; on a crash / SIGKILL / interrupted restart
+# those routes LINGER in the kernel FIB — reap_stray_babelds reaps the stray
+# PROCESS but not its routes. A lingering 'proto babel' default is then
+# (a) re-exported by the next babeld as a foreign kernel route, breaking chj's
+# split-horizon invariant so a no-WAN node advertises a bogus 0.0.0.0/0, and
+# (b) learnable by the real gateway OVER its own DHCP WAN default, blackholing
+# egress back into the mesh (mjolnir-mesh-5lw). Before this, only a reboot
+# cleared it. Safe: the fresh babeld re-installs every route it still believes
+# in within one update cycle. GUARDED on babeld_running so we never yank routes
+# out from under a healthy instance (e.g. a no-op `start` while already up) —
+# only flush when we are genuinely bringing babeld up with no live instance.
+flush_stale_babel_routes() {
+	babeld_running && return 0
+	logger -t mjolnir-babeld "flushing stale proto-babel routes before (re)start"
+	ip route flush proto babel 2>/dev/null
+	ip -6 route flush proto babel 2>/dev/null
+}
+
 start_service() {
 	# meshd renders CONF and (re)starts us once it has an interface to route over.
 	# If it isn't there yet (early boot), do nothing — meshd will start us when it is.
 	[ -f "$CONF" ] || return 0
 	reap_stray_babelds
+	flush_stale_babel_routes
 	procd_open_instance
 	procd_set_param command "$PROG" -c "$CONF"
 	# procd watches the meshd-rendered config and restarts babeld on change
