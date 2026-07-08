@@ -57,23 +57,37 @@ babeld_running() {
 	return 1
 }
 
-# Flush routes a dead babeld left behind (mjolnir-mesh-bii). babeld installs
-# mesh routes with proto 'babel'; on a crash / SIGKILL / interrupted restart
-# those routes LINGER in the kernel FIB — reap_stray_babelds reaps the stray
-# PROCESS but not its routes. A lingering 'proto babel' default is then
-# (a) re-exported by the next babeld as a foreign kernel route, breaking chj's
-# split-horizon invariant so a no-WAN node advertises a bogus 0.0.0.0/0, and
-# (b) learnable by the real gateway OVER its own DHCP WAN default, blackholing
-# egress back into the mesh (mjolnir-mesh-5lw). Before this, only a reboot
-# cleared it. Safe: the fresh babeld re-installs every route it still believes
-# in within one update cycle. GUARDED on babeld_running so we never yank routes
-# out from under a healthy instance (e.g. a no-op `start` while already up) —
-# only flush when we are genuinely bringing babeld up with no live instance.
+# Clear stale mesh-learned DEFAULT routes before (re)starting babeld
+# (mjolnir-mesh-bii). babeld installs the learned internet default via a MESH
+# interface (br-mesh, or mjolnir0 in overlay mode); on a crash / SIGKILL /
+# interrupted restart it LINGERS in the kernel FIB — reap_stray_babelds reaps the
+# stray PROCESS but not its routes. A lingering mesh default is then
+# (a) re-exportable by the next babeld, breaking chj's split-horizon invariant so
+# a no-WAN node advertises a bogus 0.0.0.0/0, and (b) learnable by the real
+# gateway OVER its own WAN default, blackholing egress back into the mesh
+# (mjolnir-mesh-5lw). Before this, only a reboot cleared it.
+#
+# We must NOT filter by `proto babel`: OpenWrt's busybox `ip` SILENTLY IGNORES the
+# proto selector (verified on the mt7981 fleet — `ip route show proto babel`
+# returns the whole table), so `ip route flush proto babel` would flush EVERY
+# route and cut the node off. Match surgically by output interface instead: only
+# a mesh-interface DEFAULT is ever babel-learned; a real uplink default is out
+# eth0/wan and link routes are not defaults, so neither is ever touched. Safe: the
+# fresh babeld re-installs a still-valid learned default within one update cycle.
+# GUARDED on babeld_running so a healthy instance (e.g. a no-op `start`) is never
+# disturbed — only clean up when bringing babeld up with no live instance.
 flush_stale_babel_routes() {
 	babeld_running && return 0
-	logger -t mjolnir-babeld "flushing stale proto-babel routes before (re)start"
-	ip route flush proto babel 2>/dev/null
-	ip -6 route flush proto babel 2>/dev/null
+	# Lines look like: default via 10.254.12.214 dev br-mesh onlink
+	ip -4 route show default 2>/dev/null | while read -r kw _via gw devkw ifname _rest; do
+		[ "$kw" = default ] && [ "$devkw" = dev ] || continue
+		case "$ifname" in
+			br-mesh|mjolnir0)
+				logger -t mjolnir-babeld "clearing stale mesh default before restart: via $gw dev $ifname"
+				ip -4 route del default via "$gw" dev "$ifname" 2>/dev/null
+				;;
+		esac
+	done
 }
 
 start_service() {
