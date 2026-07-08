@@ -5,6 +5,7 @@
 	import { generateKeyPair, publicKeyHex, signChallengeHex } from '$lib/identity/keys';
 	import { loadIdentity, saveIdentity, type StoredIdentity } from '$lib/identity/storage';
 	import CustodyNotice from './CustodyNotice.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
 
 	type AnnounceState = 'idle' | 'announcing' | 'success' | 'error';
 
@@ -54,66 +55,48 @@
 	}
 </script>
 
-<section class="flex flex-col gap-4 rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+<section class="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 text-card-foreground">
 	<CustodyNotice />
 
 	{#if !dismissedAnonymous && !identity}
 		<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-			<p class="text-sm text-slate-300">The net is open — you don't need an identity to use it.</p>
-			<button
-				type="button"
-				class="rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
-				onclick={() => (dismissedAnonymous = true)}
-			>
+			<p class="text-sm text-muted-foreground">
+				The net is open — you don't need an identity to use it.
+			</p>
+			<Button variant="outline" size="sm" onclick={() => (dismissedAnonymous = true)}>
 				Just browse
-			</button>
+			</Button>
 		</div>
 	{/if}
 
 	{#if identityLoaded && !identity}
 		<div class="flex flex-col gap-2">
-			<p class="text-sm text-slate-300">
+			<p class="text-sm text-muted-foreground">
 				Create a browser-held identity to be named and reachable in the directory.
 			</p>
-			<button
-				type="button"
-				class="w-fit rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500"
-				onclick={createIdentity}
-			>
-				Create an identity
-			</button>
+			<Button class="w-fit" size="sm" onclick={createIdentity}>Create an identity</Button>
 		</div>
 	{/if}
 
 	{#if identity}
 		<div class="flex flex-col gap-2">
-			<p class="text-sm text-slate-300">
-				Your identity: <code class="rounded bg-slate-800 px-1 py-0.5 text-xs">{pubkeyDisplay}</code>
+			<p class="text-sm">
+				Your identity: <code class="rounded bg-muted px-1 py-0.5 text-xs">{pubkeyDisplay}</code>
 			</p>
 
 			{#if announceState === 'announcing'}
-				<p class="text-sm text-slate-400">Announcing to this node…</p>
+				<p class="text-sm text-muted-foreground">Announcing to this node…</p>
 			{:else if announceState === 'success'}
-				<p class="text-sm text-emerald-400">Announced — you're visible in this node's directory.</p>
+				<p class="text-sm text-success">Announced — you're visible in this node's directory.</p>
 			{:else if announceState === 'error'}
 				<div class="flex flex-col gap-1">
-					<p class="text-sm text-rose-400">Couldn't announce: {announceError}</p>
-					<button
-						type="button"
-						class="w-fit rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
-						onclick={reannounce}
-					>
-						Retry
-					</button>
+					<p class="text-sm text-destructive">Couldn't announce: {announceError}</p>
+					<Button variant="outline" size="sm" class="w-fit" onclick={reannounce}>Retry</Button>
 				</div>
 			{:else}
-				<button
-					type="button"
-					class="w-fit rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
-					onclick={reannounce}
-				>
+				<Button variant="outline" size="sm" class="w-fit" onclick={reannounce}>
 					Announce to this node
-				</button>
+				</Button>
 			{/if}
 		</div>
 	{/if}

@@ -20,10 +20,17 @@ export interface DirectoryIdentity {
 }
 
 export interface DirectoryService {
+	/** Fully-qualified advertised service name, e.g. `printer._ipp._tcp`. */
 	name: string;
 	ip: string;
 	port: number;
 	protocol: string;
+	/** Advertised instance hostname (absent on owner-bound v2 records). */
+	hostname?: string;
+	/** Advertised `key=value` TXT records (absent/empty omitted by the daemon). */
+	txt?: Record<string, string>;
+	/** Advertising device MAC as colon-hex, e.g. `de:ad:be:ef:00:01`. */
+	host_mac?: string;
 }
 
 export interface Directory {

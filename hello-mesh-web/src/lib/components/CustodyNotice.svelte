@@ -5,7 +5,7 @@
 	custody. See docs/network-coordination/user-identity.md §3, §4.2.
 -->
 <p
-	class="flex items-start gap-2 rounded-md border border-amber-800/40 bg-amber-950/30 px-3 py-2 text-sm text-amber-200"
+	class="text-warning border-warning/30 bg-warning/10 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
 >
 	<span aria-hidden="true">⚠</span>
 	<span>
