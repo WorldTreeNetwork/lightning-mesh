@@ -126,6 +126,58 @@ struct IdentityRecord<'a> {
     label: &'a Option<String>,
 }
 
+/// Subdirectory of the identity spool that holds name-claim submissions
+/// (bead mjolnir-mesh-lex). Kept OUT of the top-level spool dir on purpose:
+/// meshd's identity sweep globs `spool_dir/*.json` non-recursively, so a
+/// sibling `names/` subdir is invisible to it — the name-claim sweep (a
+/// separate meshd stage, bead 71x) reads `spool_dir/names/*.json` instead.
+const NAME_SPOOL_SUBDIR: &str = "names";
+
+/// Domain-separation prefix for the bytes a name-claim signs. The identity
+/// ceremony signs the raw nonce; a name claim signs a *distinct* preimage that
+/// binds the nonce to the claimed name+port, so (a) a signature captured from
+/// the identity ceremony can never be replayed as a name claim, and (b) a MITM
+/// cannot swap the name/port under an otherwise-valid signature. The client
+/// must sign exactly [`name_claim_signing_message`]'s bytes.
+const NAME_CLAIM_DOMAIN: &str = "mjolnir-name-claim:v1";
+
+#[derive(Debug, Deserialize)]
+struct NameClaimRequest {
+    pubkey: String,
+    sig: String,
+    challenge: String,
+    /// The flat `.mesh` name to claim (single DNS label, e.g. `walkie-talkie`).
+    name: String,
+    /// Port the claimant listens on; folded into the signed message. Absent →
+    /// `0` (an A-only claim, no SRV).
+    #[serde(default)]
+    port: Option<u16>,
+}
+
+/// What meshd's name-claim sweep (bead 71x) ingests. Unlike [`IdentityRecord`],
+/// this carries the `sig` as a LOAD-BEARING field: the name lane is trustless,
+/// so the signature is gossiped into the CRDT and every node re-verifies it
+/// against `pubkey` over [`name_claim_signing_message`] — a node cannot forge a
+/// key-owned claim the way it could a `/users` record.
+#[derive(Debug, Serialize)]
+struct NameClaimRecord<'a> {
+    pubkey: &'a str,
+    sig: &'a str,
+    challenge: &'a str,
+    name: &'a str,
+    port: u16,
+}
+
+/// The exact bytes a name claim signs: the domain prefix, the hex challenge,
+/// the (already-normalized) name, and the port, newline-separated. Shared by
+/// the client (to sign) and the server (to verify) — they MUST agree byte for
+/// byte, so the name is required to be pre-normalized (see [`submit_name_claim`])
+/// rather than normalized here, keeping the browser from having to reproduce
+/// meshd's normalization to know what it signed.
+fn name_claim_signing_message(challenge_hex: &str, name: &str, port: u16) -> Vec<u8> {
+    format!("{NAME_CLAIM_DOMAIN}\n{challenge_hex}\n{name}\n{port}").into_bytes()
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct RouteResponse {
     pub status: u16,
@@ -353,6 +405,103 @@ fn submit_identity(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path) -
     RouteResponse::json(200, record_json)
 }
 
+/// `POST /api/name-claim` — validate a signed claim to a flat `.mesh` name and,
+/// on success, spool it for meshd's name-claim sweep (bead mjolnir-mesh-lex).
+///
+/// Mirrors [`submit_identity`] but binds the signature to the claim, not just
+/// the nonce: the client signs [`name_claim_signing_message`]. The server holds
+/// no key — it only verifies. The name must arrive already normalized to a
+/// single lowercase DNS label (so client and server sign identical bytes) and
+/// must not be a reserved well-known name. Authority over the name is the KEY,
+/// arbitrated downstream (leased, first-writer-wins per key, reclaimable after
+/// lapse — bead p43); this endpoint only authenticates the request.
+fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path) -> RouteResponse {
+    let req: NameClaimRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(_) => return bad_request("invalid request body"),
+    };
+
+    // Name must be a valid, single-label DNS name and not reserved. Require it
+    // to be *already* normalized: the signed message contains `req.name`
+    // verbatim, so silently normalizing here would verify a signature over
+    // bytes the client never signed.
+    match mjolnir_mesh::normalize_device_host(&req.name) {
+        Ok(normalized) if normalized == req.name => {}
+        _ => return bad_request("invalid name"),
+    }
+    if mjolnir_mesh::is_reserved_service_name(&req.name) {
+        return bad_request("reserved name");
+    }
+
+    let Ok(pubkey_bytes) = HEXLOWER.decode(req.pubkey.as_bytes()) else {
+        return bad_request("invalid pubkey encoding");
+    };
+    let Ok(sig_bytes) = HEXLOWER.decode(req.sig.as_bytes()) else {
+        return bad_request("invalid signature encoding");
+    };
+    let Ok(pubkey_arr): Result<[u8; 32], _> = pubkey_bytes.try_into() else {
+        return bad_request("invalid pubkey length");
+    };
+    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
+        return bad_request("invalid signature length");
+    };
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&pubkey_arr) else {
+        return bad_request("invalid pubkey");
+    };
+    let signature = Signature::from_bytes(&sig_arr);
+
+    let port = req.port.unwrap_or(0);
+    let signed_message = name_claim_signing_message(&req.challenge, &req.name, port);
+
+    // Peek at the challenge (known + unexpired) before verifying, so a bad
+    // signature doesn't burn a nonce the legitimate holder might retry —
+    // identical discipline to `submit_identity`.
+    {
+        let store = challenges.lock().expect("challenge store poisoned");
+        match store.get(&req.challenge) {
+            Some(issued_at) if issued_at.elapsed() < CHALLENGE_TTL => {}
+            _ => return bad_request("unknown or expired challenge"),
+        }
+    }
+
+    if verifying_key.verify(&signed_message, &signature).is_err() {
+        return bad_request("invalid signature");
+    }
+
+    // Consume the challenge (single-use) now that the claim is valid.
+    let mut store = challenges.lock().expect("challenge store poisoned");
+    if store.remove(&req.challenge).is_none() {
+        return bad_request("unknown or expired challenge");
+    }
+    drop(store);
+
+    let name_spool = spool_dir.join(NAME_SPOOL_SUBDIR);
+    if let Err(err) = std::fs::create_dir_all(&name_spool) {
+        tracing::error!(%err, "failed to create name spool dir");
+        return RouteResponse::json(500, r#"{"error":"spool unavailable"}"#);
+    }
+
+    let record = NameClaimRecord {
+        pubkey: &req.pubkey,
+        sig: &req.sig,
+        challenge: &req.challenge,
+        name: &req.name,
+        port,
+    };
+    let record_json = serde_json::to_string(&record).expect("record serializes");
+
+    // Keyed by pubkey: one pending claim per key (the one-name-per-key rule is
+    // enforced authoritatively at ingest; this just keeps a key's latest claim
+    // from piling up spool files).
+    let dest = name_spool.join(format!("{}.json", req.pubkey));
+    if let Err(err) = std::fs::write(&dest, &record_json) {
+        tracing::error!(%err, path = %dest.display(), "failed to write name-claim spool entry");
+        return RouteResponse::json(500, r#"{"error":"spool write failed"}"#);
+    }
+
+    RouteResponse::json(200, record_json)
+}
+
 /// Route a `(method, path)` pair to a response. `static_root` is the optional
 /// on-disk override of the embedded bundle (`--static-root`, dev only).
 /// `body` is the raw request body (only consulted for `POST` handlers).
@@ -385,6 +534,7 @@ pub fn route(
         // --- S4 (mjolnir-mesh-5zn): identity ceremony -------------------
         ("GET", "/api/challenge") => issue_challenge(challenges),
         ("POST", "/api/identity") => submit_identity(body, challenges, spool_dir),
+        ("POST", "/api/name-claim") => submit_name_claim(body, challenges, spool_dir),
 
         ("GET", _) => serve_static(path, static_root),
         _ => RouteResponse {
@@ -961,5 +1111,147 @@ mod tests {
         assert!(!route_for("GET", "/").cors);
         assert!(!route_for("GET", "/some/client/route").cors);
         assert!(!route_for("POST", "/api/identity").cors);
+    }
+
+    // --- name-claim ceremony (bead mjolnir-mesh-lex) ---------------------
+
+    /// Fetch a fresh challenge from the shared store so a follow-up name-claim
+    /// can consume it (the `route_for` helper makes a throwaway store per call).
+    fn fresh_challenge(challenges: &ChallengeStore, spool: &Path) -> String {
+        let resp = route(
+            "GET",
+            "/api/challenge",
+            None,
+            b"",
+            challenges,
+            spool,
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+        );
+        let json: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        json["challenge"].as_str().unwrap().to_string()
+    }
+
+    fn post_name_claim(challenges: &ChallengeStore, spool: &Path, body: &str) -> RouteResponse {
+        route(
+            "POST",
+            "/api/name-claim",
+            None,
+            body.as_bytes(),
+            challenges,
+            spool,
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+        )
+    }
+
+    #[test]
+    fn name_claim_valid_signature_spools_to_names_subdir_and_consumes_nonce() {
+        let (challenges, spool) = no_state();
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let sig = key.sign(&name_claim_signing_message(&challenge_hex, "walkie-talkie", 3000));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000}}"#
+        );
+
+        let resp = post_name_claim(&challenges, spool.path(), &body);
+        assert_eq!(resp.status, 200, "body: {}", String::from_utf8_lossy(&resp.body));
+
+        // Spooled under names/ (NOT the top-level dir the identity sweep globs).
+        let spooled = spool.path().join("names").join(format!("{pubkey_hex}.json"));
+        assert!(spooled.exists(), "expected name-claim at {spooled:?}");
+        let rec: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&spooled).unwrap()).unwrap();
+        assert_eq!(rec["name"], "walkie-talkie");
+        assert_eq!(rec["port"], 3000);
+        assert_eq!(rec["sig"], sig_hex, "signature must be carried for mesh-wide verify");
+
+        // Single-use nonce: replaying the exact same claim now fails.
+        let replay = post_name_claim(&challenges, spool.path(), &body);
+        assert_eq!(replay.status, 400);
+    }
+
+    #[test]
+    fn name_claim_wrong_signature_is_rejected_and_spools_nothing() {
+        let (challenges, spool) = no_state();
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        // Sign the RIGHT name but claim a DIFFERENT one — a MITM rebinding the
+        // name must not verify.
+        let sig = key.sign(&name_claim_signing_message(&challenge_hex, "walkie-talkie", 3000));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"impostor","port":3000}}"#
+        );
+
+        let resp = post_name_claim(&challenges, spool.path(), &body);
+        assert_eq!(resp.status, 400);
+        assert!(!spool.path().join("names").join(format!("{pubkey_hex}.json")).exists());
+    }
+
+    #[test]
+    fn name_claim_domain_separation_rejects_identity_style_signature() {
+        // A signature over the RAW nonce (what POST /api/identity signs) must
+        // NOT be replayable as a name claim — the domain prefix breaks it.
+        let (challenges, spool) = no_state();
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let raw_nonce = HEXLOWER.decode(challenge_hex.as_bytes()).unwrap();
+        let sig = key.sign(&raw_nonce); // identity-ceremony style
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000}}"#
+        );
+
+        let resp = post_name_claim(&challenges, spool.path(), &body);
+        assert_eq!(resp.status, 400, "identity signature must not satisfy a name claim");
+    }
+
+    #[test]
+    fn name_claim_reserved_name_is_rejected() {
+        let (challenges, spool) = no_state();
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let sig = key.sign(&name_claim_signing_message(&challenge_hex, "hello", 0));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"hello"}}"#
+        );
+        assert_eq!(post_name_claim(&challenges, spool.path(), &body).status, 400);
+    }
+
+    #[test]
+    fn name_claim_non_normalized_name_is_rejected() {
+        // Uppercase / dotted / boundary-hyphen names are rejected before any
+        // signature check, so the client and server always sign identical bytes.
+        for bad in ["Walkie", "a.b", "-nope", "has_underscore"] {
+            let (challenges, spool) = no_state();
+            let key = test_keypair();
+            let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+            let challenge_hex = fresh_challenge(&challenges, spool.path());
+            let sig = key.sign(&name_claim_signing_message(&challenge_hex, bad, 0));
+            let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+            let body = format!(
+                r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"{bad}"}}"#
+            );
+            assert_eq!(
+                post_name_claim(&challenges, spool.path(), &body).status,
+                400,
+                "name {bad:?} should be rejected"
+            );
+        }
     }
 }
