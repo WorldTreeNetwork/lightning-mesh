@@ -1052,6 +1052,15 @@ I should say: half the ideas in this talk got sharp inside this community
 — people in this room pushed on them, lent me theirs, told me where I was
 wrong. That's what a commons does.
 
+*[Beat. One more admission — quieter, then done.]*
+
+And one thing about ownership, since the whole talk is about not having any.
+This project used to belong to my company. As of this week, it doesn't. I
+signed it over to a foundation — the World Tree Network Foundation — that
+exists to hold it and nothing else. Same reason as everything else tonight:
+a thing that's locked open can't have *me* as its throat either. No center
+to seize, and now no owner to pressure.
+
 And one last thing about the network you all made at the top of this hour.
 It's still running. It'll be running when I walk off this stage — and it
 isn't mine to turn off. A network is created by the people who join it.
@@ -1081,6 +1090,12 @@ Thank you.
   resist expanding into a policy argument.
 - **The community-gratitude line is spoken to the room, like beat 5's
   Freifunk moment** — specific and warm, one breath.
+- **The ownership admission is the thesis enacted, not announced** — spoken
+  as a quiet aside, one breath, no applause line. It's the ownership-layer
+  proof of "no throat": the speaker removes *himself* as the center. It
+  sets up "it isn't mine to turn off" so that line now rhymes — not the
+  code, not the network. If the talk is over time this is the first cut in
+  the beat; the network callback must survive.
 - **The last move is the demo, re-seen** — not a callback for charm, but
   the thesis made physical: the network exists because they joined it, and
   it outlives the speaker. "It isn't mine to turn off" is the whole talk

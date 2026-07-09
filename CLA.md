@@ -11,9 +11,9 @@ copyright to your contribution** — this is a license, not an assignment. But
 you grant the Project the rights below, including the right to include your
 contribution in commercially-licensed releases.
 
-> **Who is "the Project":** **Identikey Inc.**, the entity that stewards
-> Lightning Mesh (contact `duke@identikey.io`). The rights granted here run to
-> Identikey Inc. and its successors and assigns.
+> **Who is "the Project":** **World Tree Network Foundation**, the entity that stewards
+> Lightning Mesh (contact `duke@worldtree.io`). The rights granted here run to
+> World Tree Network Foundation and its successors and assigns.
 
 By signing this CLA (see **How to sign** below), you accept and agree to the
 following terms for your present and future Contributions to the Project.
@@ -130,7 +130,7 @@ your name to `contributors/individual.md` in a pull request with the statement:
 
 If you are contributing as part of your employment, an authorized
 representative of your employer must agree to this CLA on the company's behalf
-and list the employees authorized to contribute. Email **duke@identikey.io**
+and list the employees authorized to contribute. Email **duke@worldtree.io**
 with:
 
 > Company: <legal entity name>

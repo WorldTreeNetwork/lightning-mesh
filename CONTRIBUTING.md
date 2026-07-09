@@ -6,7 +6,7 @@ up, our conventions, and the one legal step (the CLA) every contributor takes.
 ## Contributor License Agreement (required)
 
 Lightning Mesh is **dual-licensed** — AGPL-3.0-or-later for everyone, plus a
-commercial license from **Identikey Inc.** for closed products. That model only
+commercial license from **World Tree Network Foundation** for closed products. That model only
 works if the project can license every contribution under both. So **before
 your first pull request is merged, you must agree to the
 [Contributor License Agreement](CLA.md)**.
@@ -18,7 +18,7 @@ your first pull request is merged, you must agree to the
   the statement in CLA.md → *How to sign* → Option A.)
 - **Contributing on behalf of an employer:** have an authorized representative
   complete the Corporate CLA (CLA.md → Option B) by emailing
-  **duke@identikey.io**.
+  **duke@worldtree.io**.
 
 You keep the copyright to your work — the CLA is a license, not an assignment.
 
@@ -73,7 +73,7 @@ The beads database syncs via the git-committed `.beads/issues.jsonl`.
 - **License headers.** New source files start with:
   ```rust
   // SPDX-License-Identifier: AGPL-3.0-or-later
-  // Copyright (C) 2026 Identikey Inc. and the Lightning Mesh contributors
+  // Copyright (C) 2026 World Tree Network Foundation and the Lightning Mesh contributors
   ```
 - **Naming.** The public project name is *Lightning Mesh*; crates, binaries,
   and the overlay interface keep the `mjolnir-` prefix (`mjolnir-meshd`,
@@ -86,7 +86,7 @@ The beads database syncs via the git-committed `.beads/issues.jsonl`.
 ## Reporting security issues
 
 Please do **not** open a public issue for security vulnerabilities. Email
-**duke@identikey.io** with details and we'll coordinate a fix and disclosure.
+**duke@worldtree.io** with details and we'll coordinate a fix and disclosure.
 
 ## License of contributions
 

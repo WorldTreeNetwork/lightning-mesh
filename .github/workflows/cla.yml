@@ -28,14 +28,14 @@ jobs:
           PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         with:
           path-to-signatures: 'signatures/version1/cla.json'
-          path-to-document: 'https://github.com/identikey/lightning-mesh/blob/main/CLA.md'
+          path-to-document: 'https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/CLA.md'
           branch: 'cla-signatures'
           allowlist: 'dukedorje,dependabot[bot],*[bot]'
-          remote-organization-name: 'identikey'
+          remote-organization-name: 'WorldTreeNetwork'
           remote-repository-name: 'lightning-mesh'
           custom-notsigned-prcomment: >
             Thank you for your contribution to **Lightning Mesh**! Before we can
-            merge, please read our [Contributor License Agreement](https://github.com/identikey/lightning-mesh/blob/main/CLA.md)
+            merge, please read our [Contributor License Agreement](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/CLA.md)
             and sign it by posting a comment on this PR with exactly:
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
           custom-allsigned-prcomment: >

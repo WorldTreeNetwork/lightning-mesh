@@ -61,7 +61,7 @@ source in this repository.
 
 ## How to obtain one
 
-Email **duke@identikey.io** with:
+Email **duke@worldtree.io** with:
 
 - your company and product,
 - roughly how Lightning Mesh will be used (embedded appliance, hosted

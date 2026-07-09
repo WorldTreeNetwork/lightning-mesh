@@ -160,7 +160,7 @@ Lightning Mesh is **dual-licensed**:
   a feature: it keeps the mesh un-enclosable.
 - **[Commercial license](COMMERCIAL-LICENSE.md)** — for embedding Lightning
   Mesh in a proprietary appliance or hosted service without AGPL
-  source-disclosure obligations. Contact **duke@identikey.io**.
+  source-disclosure obligations. Contact **duke@worldtree.io**.
 
 Contributions are accepted under the **[Contributor License Agreement](CLA.md)**,
 which is what makes the dual-licensing model possible — the CLA bot will ask you
