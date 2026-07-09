@@ -40,13 +40,13 @@ use mjolnir_mesh::tun::{
     classify, spawn_overlay_tun, spawn_tunnel,
 };
 use mjolnir_mesh::{
-    AddrBook, GossipError, GossipSync, GossipTransport, HLC, LivenessTracker, LostNameMap,
-    MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome,
-    ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError, ServiceTombstone,
-    ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
-    apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
-    merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, parse_host_mac,
-    publish_service_v2,
+    AddrBook, GossipError, GossipSync, GossipTransport, HLC, LeasedName, LeasedNameBook,
+    LivenessTracker, LostNameMap, MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry,
+    PeerEntry, PeerRoster, PublishOutcome, ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2,
+    ServicePublishError, ServiceTombstone, ServiceTombstoneBook, SubnetClaim, UnpublishOutcome,
+    UserBook, UserEntry, alloc, apply_leased_name, apply_service_publish_v2_tracking_loss,
+    apply_service_unpublish_v2, device_service_key, merge_node_name, merge_peer_addr, merge_service,
+    merge_subnet_claim, merge_user, name_owned_by, parse_host_mac, publish_service_v2,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -802,6 +802,22 @@ async fn run_mesh(
         Arc::new(Mutex::new(restored_v2.tombstones));
     let lost_names_v2: Arc<Mutex<LostNameMap>> = Arc::new(Mutex::new(restored_v2.lost_names));
 
+    // Key-owned leased names (bead mjolnir-mesh-71x): the client-claimed name
+    // lane, restored up front like the v2 service book so the DNS responder's
+    // `LeasedNameTable` can read it before the responder binds.
+    let leased_names_file = leased_names_path(&claims_file);
+    let leased_names: Arc<Mutex<LeasedNameBook>> =
+        Arc::new(Mutex::new(load_leased_names(&leased_names_file)));
+    if let Ok(b) = leased_names.lock()
+        && !b.is_empty()
+    {
+        info!(
+            leased_names = b.len(),
+            path = %leased_names_file.display(),
+            "restored leased-name directory from disk"
+        );
+    }
+
     // Ephemeral liveness tracker (bead e21.9): the in-memory view of which
     // nodes have beaconed recently, shared by the DNS read filter (below), the
     // gossip dispatch (beacon ingest), and the anti-entropy sweep (emit +
@@ -828,6 +844,12 @@ async fn run_mesh(
             Arc::new(mjolnir_mesh::dns_responder::ServiceTable::with_liveness(
                 service_book_v2.clone(),
                 liveness.clone(),
+            )),
+            // Key-owned leased names (71x): resolve-freshness filtering lives in
+            // the table itself (LEASED_NAME_RESOLVE_STALE_MS), so no liveness
+            // tracker is threaded — the owner is a client key, not a beaconing node.
+            Arc::new(mjolnir_mesh::dns_responder::LeasedNameTable::new(
+                leased_names.clone(),
             )),
         ]));
     let dns_responder = mjolnir_mesh::dns_responder::start(
@@ -1153,6 +1175,8 @@ async fn run_mesh(
                     let service_tombstones_v2 = service_tombstones_v2.clone();
                     let lost_names_v2 = lost_names_v2.clone();
                     let service_book_v2_persist_path = service_book_v2_file.clone();
+                    let leased_names = leased_names.clone();
+                    let leased_names_persist_path = leased_names_file.clone();
                     let liveness = liveness.clone();
                     tokio::spawn(async move {
                         let result = sync
@@ -1309,6 +1333,26 @@ async fn run_mesh(
                                 }
                                 return;
                             }
+                            // Leased key-owned name publish/renewal (71x): apply
+                            // the lease/reclaim merge and persist. Early return so
+                            // it never touches the claim-store lock below. NOTE:
+                            // the claim signature is NOT re-verified here — for the
+                            // demo we trust the ingesting node's ceremony-time
+                            // verification, same trust model as /users; mesh-wide
+                            // re-verification is a follow-up (needs ed25519 in the
+                            // daemon build).
+                            if let GossipMessage::LeasedNamePublish { name, entry } = &msg {
+                                let outcome = {
+                                    let mut b = leased_names.lock().expect("leased names poisoned");
+                                    apply_leased_name(&mut b, name, entry.clone())
+                                };
+                                info!(name = %name, owner = %entry.owner_pubkey, ?outcome,
+                                    "gossip: received leased-name publish");
+                                let snapshot =
+                                    leased_names.lock().expect("leased names poisoned").clone();
+                                persist_leased_names(&snapshot, &leased_names_persist_path);
+                                return;
+                            }
                             // Log peer claims received over gossip — proves CRDT
                             // convergence (a node seeing another's claim cross the mesh).
                             if let GossipMessage::SubnetClaimUpdate { cidr, entry } = &msg
@@ -1423,6 +1467,30 @@ async fn run_mesh(
                         .await
                     })
                 };
+
+                // Leased key-owned name sweep (71x): a standalone loop that
+                // ingests client name-claims spooled by hello.mesh under
+                // `<spool>/names/`, applies the lease/reclaim merge, broadcasts
+                // each accepted claim, and persists. Faster than the anti-entropy
+                // cadence so a fresh claim resolves within a few seconds. Runs
+                // independently so it needn't thread through `anti_entropy_loop`.
+                {
+                    let sync = sync.clone();
+                    let leased_names = leased_names.clone();
+                    let spool_path = spool_dir.clone();
+                    let leased_names_path = leased_names_file.clone();
+                    let self_id = self_id_str.clone();
+                    tokio::spawn(async move {
+                        name_claim_sweep_loop(
+                            sync,
+                            leased_names,
+                            spool_path,
+                            leased_names_path,
+                            self_id,
+                        )
+                        .await
+                    });
+                }
 
                 // Radio telemetry (bead ng9): a standalone ~10s loop shelling out
                 // to `iw` for 802.11s station/mpath/info, writing `radio.json`
@@ -2509,6 +2577,216 @@ fn snapshot_service_state_v2(
         book,
         tombstones,
         lost_names,
+    }
+}
+
+// --- Key-owned leased names (bead mjolnir-mesh-71x) ----------------------
+
+/// Persistence path for the leased-name book, a sibling of the claims file
+/// (mirrors [`service_book_v2_path`]).
+fn leased_names_path(claims_file: &Path) -> PathBuf {
+    claims_file.with_file_name("leased-names.state")
+}
+
+/// Load the leased-name book from disk, tolerant of a missing/corrupt file
+/// (returns an empty book) — same discipline as [`load_service_state_v2`].
+fn load_leased_names(path: &Path) -> LeasedNameBook {
+    match std::fs::read(path) {
+        Ok(bytes) => postcard::from_bytes(&bytes).unwrap_or_else(|e| {
+            warn!(path = %path.display(), "failed to decode leased-name state, starting empty: {e}");
+            LeasedNameBook::new()
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LeasedNameBook::new(),
+        Err(e) => {
+            warn!(path = %path.display(), "failed to read leased-name state, starting empty: {e}");
+            LeasedNameBook::new()
+        }
+    }
+}
+
+/// Persist the leased-name book atomically (tmp + rename), mirroring
+/// [`persist_service_state_v2`].
+fn persist_leased_names(book: &LeasedNameBook, path: &Path) {
+    let bytes = match postcard::to_allocvec(book) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("failed to encode leased-name state for persistence: {e}");
+            return;
+        }
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), "failed to create leased-name state dir: {e}");
+        return;
+    }
+    let tmp_path = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        warn!(path = %tmp_path.display(), "failed to write leased-name tmp file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        warn!(path = %path.display(), "failed to rename leased-name tmp file into place: {e}");
+    }
+}
+
+/// A name-claim spooled by `mjolnir-hello` under `<spool>/names/{pubkey}.json`
+/// (bead `lex`). hello has already Ed25519-verified `sig` over the canonical
+/// claim message before spooling; the `sig`/`challenge` ride along so a future
+/// stage can re-verify mesh-wide (not done for the demo).
+#[derive(Debug, Clone, Deserialize)]
+struct NameClaimSpool {
+    pubkey: String,
+    sig: String,
+    challenge: String,
+    name: String,
+    #[serde(default)]
+    port: u16,
+    #[serde(default)]
+    ip: Option<IpAddr>,
+}
+
+/// Sweep the name-claim spool (`<spool>/names/*.json`), applying each accepted
+/// claim to `leased_names` and returning the `(name, entry)` pairs that were
+/// newly inserted, renewed, or won a reclaim (so the caller can gossip them).
+/// A same-key renewal preserves the original `first_claimed_at` (tenure); a key
+/// that already owns a *different* live name is rejected (one-name-per-key). The
+/// spool file is removed after processing — the client re-POSTs on each renewal.
+fn ingest_name_claim_spool(
+    spool_dir: &Path,
+    leased_names: &Arc<Mutex<LeasedNameBook>>,
+    self_id: &str,
+) -> Vec<(String, LeasedName)> {
+    let names_dir = spool_dir.join("names");
+    let entries = match std::fs::read_dir(&names_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            warn!(path = %names_dir.display(), "name-claim spool: failed to read dir: {e}");
+            return Vec::new();
+        }
+    };
+    let mut applied = Vec::new();
+    for dir_entry in entries.flatten() {
+        let path = dir_entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(path = %path.display(), "name-claim spool: failed to read file: {e}");
+                continue;
+            }
+        };
+        let claim: NameClaimSpool = match serde_json::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(path = %path.display(), "name-claim spool: malformed, quarantining: {e}");
+                let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                continue;
+            }
+        };
+        // Defense in depth: hello already validated, but never trust a spool
+        // file blindly — a bad name or a missing target IP is dropped.
+        let name_ok = mjolnir_mesh::normalize_device_host(&claim.name)
+            .map(|n| n == claim.name)
+            .unwrap_or(false)
+            && !mjolnir_mesh::is_reserved_service_name(&claim.name);
+        let Some(ip) = claim.ip else {
+            warn!(name = %claim.name, "name-claim spool: no target ip, dropping");
+            let _ = std::fs::remove_file(&path);
+            continue;
+        };
+        if !name_ok {
+            warn!(name = %claim.name, "name-claim spool: invalid/reserved name, dropping");
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        {
+            let mut book = leased_names.lock().expect("leased names poisoned");
+            let now = now_hlc(self_id);
+            // One-name-per-key: a key may hold exactly one live name. A renewal
+            // of the SAME name is fine; claiming a second (different) name while
+            // the first is still live is rejected.
+            let already_owns_other = name_owned_by(&book, &claim.pubkey, now.wall_clock)
+                .map(|n| n.to_string())
+                .filter(|n| n != &claim.name);
+            if let Some(other) = already_owns_other {
+                warn!(pubkey = %claim.pubkey, name = %claim.name, owns = %other,
+                    "name-claim spool: key already owns another live name, rejecting");
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+            // Preserve tenure across renewals: a claim by the same owner keeps
+            // the original first_claimed_at (the reclaim arbitration clock).
+            let first_claimed_at = match book.get(&claim.name) {
+                Some(e) if e.owner_pubkey == claim.pubkey => e.first_claimed_at.clone(),
+                _ => now.clone(),
+            };
+            let entry = LeasedName {
+                owner_pubkey: claim.pubkey.clone(),
+                sig: claim.sig.clone(),
+                challenge: claim.challenge.clone(),
+                ip,
+                port: claim.port,
+                first_claimed_at,
+                renewed_at: now,
+            };
+            match apply_leased_name(&mut book, &claim.name, entry.clone()) {
+                MergeResult::Inserted | MergeResult::Updated => {
+                    applied.push((claim.name.clone(), entry));
+                }
+                MergeResult::Conflict { winner, .. } if winner.owner_pubkey == claim.pubkey => {
+                    // We won a reclaim of a lapsed name — broadcast our entry.
+                    applied.push((claim.name.clone(), entry));
+                }
+                MergeResult::Conflict { .. } | MergeResult::Unchanged => {}
+            }
+        }
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!(path = %path.display(), "name-claim spool: failed to remove ingested file: {e}");
+        }
+    }
+    applied
+}
+
+/// How often to sweep the name-claim spool. Shorter than
+/// [`ANTI_ENTROPY_INTERVAL`] so a just-submitted claim resolves within a few
+/// seconds — the sweep is cheap (a local directory read).
+const NAME_CLAIM_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Periodic task: ingest spooled name-claims, gossip each accepted claim, and
+/// persist the book (bead 71x). Runs for the life of the daemon.
+async fn name_claim_sweep_loop<T: GossipTransport>(
+    sync: Arc<GossipSync<T>>,
+    leased_names: Arc<Mutex<LeasedNameBook>>,
+    spool_dir: PathBuf,
+    leased_names_file: PathBuf,
+    self_id: String,
+) {
+    let mut ticker = tokio::time::interval(NAME_CLAIM_SWEEP_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let applied = ingest_name_claim_spool(&spool_dir, &leased_names, &self_id);
+        if applied.is_empty() {
+            continue;
+        }
+        for (name, entry) in &applied {
+            info!(name = %name, owner = %entry.owner_pubkey, ip = %entry.ip,
+                "leased-name: ingested claim, broadcasting");
+            if let Err(e) = sync
+                .publish(GossipMessage::LeasedNamePublish {
+                    name: name.clone(),
+                    entry: entry.clone(),
+                })
+                .await
+            {
+                warn!(%name, "leased-name: broadcast failed: {e}");
+            }
+        }
+        let snapshot = leased_names.lock().expect("leased names poisoned").clone();
+        persist_leased_names(&snapshot, &leased_names_file);
     }
 }
 

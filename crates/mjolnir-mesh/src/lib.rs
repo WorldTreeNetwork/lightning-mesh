@@ -40,6 +40,7 @@ pub use crdt::{
     gossip::GossipMessage,
     hlc::HLC,
     lease::LeaseEntry,
+    leased_name::{LEASE_TTL_MS, LeasedName, LeasedNameBook, apply_leased_name, name_owned_by},
     liveness::{LivenessTracker, monotonic_now_ms},
     merge::{
         MergeResult, ReservedServiceName, merge_node_name, merge_peer_addr, merge_service,

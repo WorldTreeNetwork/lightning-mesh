@@ -5,6 +5,7 @@ use crate::crdt::{
     egress::EgressAd,
     hlc::HLC,
     lease::LeaseEntry,
+    leased_name::LeasedName,
     node_name::NodeNameEntry,
     peer_addr::PeerAddrEntry,
     service::{ServiceEntry, ServiceEntryV2},
@@ -111,6 +112,17 @@ pub enum GossipMessage {
     NodeNameAnnounce {
         node_id: String,
         entry: NodeNameEntry,
+    },
+    /// Key-owned leased `.mesh` name publish/renewal (bead mjolnir-mesh-71x).
+    /// The owner is a client Ed25519 pubkey (carried on `entry`), not a node;
+    /// merge is the lease/reclaim rule in
+    /// [`merge_leased_name`](crate::crdt::leased_name::merge_leased_name).
+    /// Appended last so existing discriminants are undisturbed; same mixed-fleet
+    /// caveat as `ServicePublishV2` — a node that predates this variant
+    /// decode-errors on it and the `GossipSync` recv loop log-and-skips.
+    LeasedNamePublish {
+        name: String,
+        entry: LeasedName,
     },
 }
 
