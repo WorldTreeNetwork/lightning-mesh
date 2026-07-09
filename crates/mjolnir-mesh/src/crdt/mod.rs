@@ -6,6 +6,7 @@ pub mod lease;
 pub mod leased_name;
 pub mod liveness;
 pub mod merge;
+pub mod node_name;
 pub mod peer_addr;
 pub mod service;
 pub mod service_apply;

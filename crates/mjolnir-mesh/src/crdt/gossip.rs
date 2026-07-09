@@ -5,6 +5,7 @@ use crate::crdt::{
     egress::EgressAd,
     hlc::HLC,
     lease::LeaseEntry,
+    node_name::NodeNameEntry,
     peer_addr::PeerAddrEntry,
     service::{ServiceEntry, ServiceEntryV2},
     subnet::SubnetClaim,
@@ -98,6 +99,18 @@ pub enum GossipMessage {
         /// gateway that stops beaconing goes stale like any other record, rather
         /// than lingering as a FIB route nobody withdrew. Not persisted.
         egress: Option<EgressAd>,
+    },
+    /// Self-announced human router name, keyed by node_id (bead
+    /// mjolnir-mesh-t7i). Only the subject node announces its own name, so
+    /// merge is pure LWW (see [`merge_node_name`](crate::crdt::merge::merge_node_name)).
+    /// Appended last so existing discriminants are undisturbed; same mixed-fleet
+    /// caveat as `ServicePublishV2` — a node that predates this variant
+    /// decode-errors on it, and the `GossipSync` recv loop log-and-skips (a
+    /// dropped name announce just means that peer shows its bare node id on the
+    /// old node, which has no node-name concept anyway).
+    NodeNameAnnounce {
+        node_id: String,
+        entry: NodeNameEntry,
     },
 }
 
@@ -339,6 +352,22 @@ mod tests {
         let nd: GossipMessage = postcard::from_bytes(&nb).unwrap();
         assert_eq!(nb, postcard::to_allocvec(&nd).unwrap());
     }
+
+    #[test]
+    fn postcard_roundtrip_node_name_announce() {
+        let node_id = "abcd1234".repeat(8);
+        let msg = GossipMessage::NodeNameAnnounce {
+            node_id: node_id.clone(),
+            entry: crate::crdt::node_name::NodeNameEntry {
+                node_id,
+                name: "attic".to_string(),
+                announced_at: make_hlc(1_700_000_030_000, 0, "abcd1234abcd1234"),
+            },
+        };
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+    }
 }
 
 /// Mixed-fleet wire-compatibility tests (bead e21.2.2, FLAGGED thorough).
@@ -454,6 +483,19 @@ mod mixed_fleet {
         postcard::to_allocvec(&msg).unwrap()
     }
 
+    fn node_name_announce_bytes() -> Vec<u8> {
+        let node_id = "abcd1234".repeat(8);
+        let msg = GossipMessage::NodeNameAnnounce {
+            node_id: node_id.clone(),
+            entry: crate::crdt::node_name::NodeNameEntry {
+                node_id,
+                name: "attic".to_string(),
+                announced_at: hlc(1_700_000_031_000, 0, "abcd1234abcd1234"),
+            },
+        };
+        postcard::to_allocvec(&msg).unwrap()
+    }
+
     #[test]
     fn old_enum_decode_of_service_publish_v2_bytes_errors() {
         let bytes = service_publish_v2_bytes();
@@ -474,6 +516,22 @@ mod mixed_fleet {
             result.is_err(),
             "expected the old (pre-e21.2.2) enum to hard-error on the new \
              ServiceUnpublishV2 discriminant"
+        );
+    }
+
+    #[test]
+    fn old_enum_decode_of_node_name_announce_bytes_errors() {
+        // The node-name variant (bead mjolnir-mesh-t7i) is appended after
+        // LivenessBeacon — an even higher discriminant than the two v2 service
+        // variants above — so the pre-t7i `OldGossipMessage` decoder must
+        // likewise hard-error on it (postcard has no forward-compat skip). The
+        // recv-loop log-and-skip below is what keeps an un-upgraded node alive.
+        let bytes = node_name_announce_bytes();
+        let result: Result<OldGossipMessage, _> = postcard::from_bytes(&bytes);
+        assert!(
+            result.is_err(),
+            "expected the old enum to hard-error on the new NodeNameAnnounce \
+             discriminant, not silently skip it"
         );
     }
 
@@ -568,6 +626,7 @@ mod mixed_fleet {
         a.inject_raw(Bytes::from(service_publish_v2_bytes())).await;
         a.inject_raw(Bytes::from(service_unpublish_v2_bytes()))
             .await;
+        a.inject_raw(Bytes::from(node_name_announce_bytes())).await;
         let old_good_2 = OldGossipMessage::UserUpdate {
             username: "ada".to_string(),
             entry: UserEntry {

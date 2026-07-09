@@ -20,6 +20,13 @@ config meshd 'meshd'
 	option babeld 'babeld'
 	option babel_config '/etc/mjolnir/babeld.conf'
 
+	# Human router name (mjolnir-mesh-t7i). When set, this node announces the
+	# name mesh-wide (gossiped, last-writer-wins) so the hello.mesh front desk
+	# and topology show a handle instead of a bare 64-hex node id, and the
+	# system hostname is set to match at startup. Nameless by default. Seed the
+	# whole fleet at once from the inventory with deploy/openwrt/seed-names.sh.
+	# option name 'attic'
+
 	# Transport mode: 'lan' (offline mDNS, no relay) or 'internet' (n0/relay).
 	option mode 'lan'
 	# option relay 'https://your-relay.example/'   # only when mode='internet'

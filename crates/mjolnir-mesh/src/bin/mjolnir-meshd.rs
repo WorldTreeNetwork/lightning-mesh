@@ -41,11 +41,11 @@ use mjolnir_mesh::tun::{
 };
 use mjolnir_mesh::{
     AddrBook, GossipError, GossipSync, GossipTransport, HLC, LivenessTracker, LostNameMap,
-    MergeResult, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome, ServiceBook, ServiceBookV2,
-    ServiceEntry, ServiceEntryV2, ServicePublishError, ServiceTombstone, ServiceTombstoneBook,
-    SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
+    MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome,
+    ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError, ServiceTombstone,
+    ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
     apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
-    merge_peer_addr, merge_service, merge_subnet_claim, merge_user, parse_host_mac,
+    merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, parse_host_mac,
     publish_service_v2,
 };
 use serde::{Deserialize, Serialize};
@@ -272,6 +272,14 @@ enum Command {
         /// and OpenWrt's `wan` zone already masquerades lan->wan forwards.
         #[arg(long)]
         gateway: bool,
+        /// Human router name (bead mjolnir-mesh-t7i), e.g. `attic`. When set,
+        /// this node announces the name mesh-wide (gossiped, LWW) so the front
+        /// desk / topology shows a handle instead of a bare 64-hex node id, and
+        /// sets the system hostname to match at startup. Omitted → the node
+        /// stays nameless (shows its short node id). The init script sources
+        /// this from UCI `mjolnir.meshd.name`.
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -441,11 +449,19 @@ async fn main() -> Result<()> {
             spool_dir,
             overlay,
             gateway,
+            name,
         } => {
             // In LAN mode babel routes over the shared-L2 backhaul directly; pass
             // the resolved interface so the reconciler can add it as the wireless L2 iface
             // and skip the per-peer iroh tunnels (mjolnir-mesh-auu).
             let l2 = if lan { l2_backhaul } else { None };
+            // Human router name (t7i): explicit `--name` wins, else the UCI
+            // `meshd.name` option (how the init script passes it), else nameless.
+            // A blank/whitespace value is treated as unset.
+            let node_name = name
+                .or_else(uci_node_name)
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty());
             run_mesh(
                 endpoint,
                 no_relay,
@@ -461,6 +477,7 @@ async fn main() -> Result<()> {
                 spool_dir,
                 overlay,
                 gateway,
+                node_name,
                 backhaul_ip,
                 restored_claims,
             )
@@ -749,6 +766,7 @@ async fn run_mesh(
     spool_dir: PathBuf,
     overlay: bool,
     gateway: bool,
+    node_name: Option<String>,
     backhaul_ip: Ipv4Addr,
     restored_claims: HashMap<String, SubnetClaim>,
 ) -> Result<()> {
@@ -962,6 +980,26 @@ async fn run_mesh(
     }
     let user_book: Arc<Mutex<UserBook>> = Arc::new(Mutex::new(restored_users));
 
+    // Node-name book (mjolnir-mesh-t7i): node_id → self-announced human name.
+    // Same persistence pattern as the address book — a sibling `nodenames.state`
+    // restored on boot so a name shows immediately without waiting to relearn it
+    // over gossip, rewritten each anti-entropy tick.
+    let node_name_book_file = node_name_book_path(&claims_file);
+    let restored_node_names = load_node_name_book(&node_name_book_file);
+    if !restored_node_names.is_empty() {
+        info!(count = restored_node_names.len(), path = %node_name_book_file.display(), "restored node-name book from disk");
+    }
+    let node_name_book: Arc<Mutex<NodeNameBook>> = Arc::new(Mutex::new(restored_node_names));
+
+    // Human hostname (t7i): when a name is configured, set the system hostname to
+    // match at startup so `logread`, SSH prompts, and `uname -n` agree with the
+    // mesh-wide name. Log-and-continue on failure — dev/test hosts and any
+    // non-Linux target simply keep their existing hostname (never a hard error,
+    // and never requires root on the daemon-test path, which passes no name).
+    if let Some(name) = node_name.as_deref() {
+        set_system_hostname(name);
+    }
+
     // Service directory (mjolnir-mesh-7jb): service name → service record, the
     // focused e21 slice the hello.mesh directory needs. Same persistence pattern
     // as the user directory — a sibling `services.state`, tolerant load,
@@ -1107,6 +1145,8 @@ async fn run_mesh(
                     let lookup = addr_lookup.clone();
                     let user_book = user_book.clone();
                     let user_book_path = user_book_file.clone();
+                    let node_name_book = node_name_book.clone();
+                    let node_name_book_path = node_name_book_file.clone();
                     let service_book = service_book.clone();
                     let service_book_path = service_book_file.clone();
                     let service_book_v2 = service_book_v2.clone();
@@ -1175,6 +1215,25 @@ async fn run_mesh(
                                     persist_user_book(&snapshot, &user_book_path);
                                     info!(user = %entry.username, display = %entry.display_name,
                                         by = %entry.registered_by, "gossip: received user record");
+                                }
+                                return;
+                            }
+                            // Node-name book (t7i): learn a peer's self-announced
+                            // human name, persist it, and log. Early return so it
+                            // never takes the claim-store lock below. Own echoes,
+                            // forged (subject != key) entries, and stale (LWW)
+                            // updates are dropped by apply_node_name_message.
+                            if matches!(msg, GossipMessage::NodeNameAnnounce { .. }) {
+                                let learned = {
+                                    let mut n = node_name_book.lock().expect("node-name book poisoned");
+                                    apply_node_name_message(&mut n, &msg, &me)
+                                };
+                                if let Some(entry) = learned {
+                                    let snapshot =
+                                        node_name_book.lock().expect("node-name book poisoned").clone();
+                                    persist_node_name_book(&snapshot, &node_name_book_path);
+                                    info!(node = %entry.node_id, name = %entry.name,
+                                        "gossip: received node name");
                                 }
                                 return;
                             }
@@ -1325,6 +1384,8 @@ async fn run_mesh(
                     let tombstones_v2 = service_tombstones_v2.clone();
                     let lost_names_v2 = lost_names_v2.clone();
                     let services_v2_path = service_book_v2_file.clone();
+                    let node_names = node_name_book.clone();
+                    let node_names_path = node_name_book_file.clone();
                     let directory_path = directory_file.clone();
                     let spool_path = spool_dir.clone();
                     let liveness = liveness.clone();
@@ -1333,6 +1394,7 @@ async fn run_mesh(
                         self_id: self_id_str.clone(),
                         backhaul_ip,
                         no_relay,
+                        node_name: node_name.clone(),
                     };
                     tokio::spawn(async move {
                         anti_entropy_loop(
@@ -1350,6 +1412,8 @@ async fn run_mesh(
                             tombstones_v2,
                             lost_names_v2,
                             services_v2_path,
+                            node_names,
+                            node_names_path,
                             directory_path,
                             spool_path,
                             announce,
@@ -1387,6 +1451,7 @@ async fn run_mesh(
                     let claims = claims.clone();
                     let addr_book = addr_book.clone();
                     let user_book = user_book.clone();
+                    let node_name_book = node_name_book.clone();
                     match control_api_start(
                         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), CONTROL_API_PORT),
                         sync,
@@ -1399,6 +1464,7 @@ async fn run_mesh(
                         claims,
                         addr_book,
                         user_book,
+                        node_name_book,
                         backhaul_ip,
                     )
                     .await
@@ -1652,6 +1718,25 @@ const TOMBSTONE_RETENTION: Duration = Duration::from_secs(3600);
 /// apply loop and the local claim routine; babeld (mjolnir-mesh-83k) will read
 /// it for the local subnet to redistribute.
 type ClaimStore = Arc<Mutex<HashMap<String, SubnetClaim>>>;
+
+/// Set the running system's hostname to the operator-chosen router name (t7i).
+///
+/// Best effort by design: writes the kernel's live hostname via
+/// `/proc/sys/kernel/hostname` (the no-extra-dependency path — `nix`/`libc`
+/// aren't wired into the daemon build). Any failure — non-Linux target where the
+/// file is absent, or a non-root test process without write permission — is
+/// logged at debug and ignored, so the daemon never refuses to start over a
+/// cosmetic hostname and `cargo test` needs no privileges. On OpenWrt this is
+/// the live hostname; the UCI `system.@system[0].hostname` isn't touched (procd
+/// owns that), which is fine — the mesh-wide name is the CRDT one regardless.
+fn set_system_hostname(name: &str) {
+    match std::fs::write("/proc/sys/kernel/hostname", name.as_bytes()) {
+        Ok(()) => info!(hostname = %name, "set system hostname to configured router name"),
+        Err(e) => {
+            debug!(hostname = %name, "could not set system hostname (non-fatal): {e}")
+        }
+    }
+}
 
 /// Build an HLC stamped with the current wall clock for `node_id`.
 fn now_hlc(node_id: &str) -> HLC {
@@ -2227,6 +2312,60 @@ fn persist_user_book(snapshot: &UserBook, path: &Path) {
     }
 }
 
+/// The node-name state file path (t7i): a sibling of the claims file (default
+/// `/etc/mjolnir/nodenames.state`). Derived, not a new CLI flag, so the fleet
+/// picks it up with no config change. Mirrors [`addr_book_path`].
+fn node_name_book_path(claims_file: &Path) -> PathBuf {
+    claims_file.with_file_name("nodenames.state")
+}
+
+/// Load the persisted node-name book from `path`. Empty (not an error) if the
+/// file is absent (first boot) or fails to decode — the book is best-effort and
+/// relearns over gossip. Mirrors [`load_addr_book`].
+fn load_node_name_book(path: &Path) -> NodeNameBook {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return NodeNameBook::new(),
+        Err(e) => {
+            warn!(path = %path.display(), "failed to read persisted node-name book: {e}");
+            return NodeNameBook::new();
+        }
+    };
+    match postcard::from_bytes(&bytes) {
+        Ok(book) => book,
+        Err(e) => {
+            warn!(path = %path.display(), "failed to decode persisted node-name book: {e}");
+            NodeNameBook::new()
+        }
+    }
+}
+
+/// Persist a node-name book snapshot via tmp+rename (crash-safe). Best effort:
+/// failures are logged, not fatal. Mirrors [`persist_addr_book`].
+fn persist_node_name_book(snapshot: &NodeNameBook, path: &Path) {
+    let bytes = match postcard::to_allocvec(snapshot) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("failed to encode node-name book for persistence: {e}");
+            return;
+        }
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), "failed to create node-name book dir: {e}");
+        return;
+    }
+    let tmp_path = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        warn!(path = %tmp_path.display(), "failed to write node-name book tmp file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        warn!(path = %path.display(), "failed to rename node-name book tmp file into place: {e}");
+    }
+}
+
 /// The service-directory state file path (7jb): a sibling of the claims file
 /// (default `/etc/mjolnir/services.state`). Derived, not a new CLI flag, so the
 /// fleet picks it up with no config change. Mirrors [`user_book_path`].
@@ -2427,6 +2566,11 @@ struct DirectoryNode {
     /// claimed one yet. `None` during the post-boot warmup window.
     subnet: Option<String>,
     backhaul_addr: String,
+    /// Operator-set human router name (bead mjolnir-mesh-t7i), from the
+    /// node-name CRDT book. `None` when this node is nameless. Additive
+    /// `skip_serializing_if` field — an older `mjolnir-hello` stays schema-safe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 /// One other mesh node, joining its [`AddrBook`] entry with any subnet claim
@@ -2436,6 +2580,11 @@ struct DirectoryNeighbor {
     node_id: String,
     addrs: Vec<String>,
     subnet: Option<String>,
+    /// Operator-set human router name (bead mjolnir-mesh-t7i), from the
+    /// node-name CRDT book. `None` when that node is nameless. Additive
+    /// `skip_serializing_if` field — an older `mjolnir-hello` stays schema-safe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 /// One live internet gateway, projected for the front desk (mjolnir-mesh-5lw
@@ -2452,6 +2601,13 @@ struct DirectoryGateway {
 struct DirectoryIdentity {
     username: String,
     display_name: String,
+    /// Wall-clock (ms since Unix epoch) of this identity's most recent CRDT
+    /// write — i.e. `UserEntry.updated_at.wall_clock` (bead mjolnir-mesh-t7i).
+    /// Lets the front desk show a recency / "last seen" indicator instead of
+    /// treating every identity as equally current. Additive
+    /// `skip_serializing_if` field — an older `mjolnir-hello` stays schema-safe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_seen_unix: Option<u64>,
 }
 
 /// One service-directory record, projected for the front desk. `name` is the
@@ -2515,6 +2671,7 @@ fn build_directory_snapshot(
     addr_book: &AddrBook,
     user_book: &UserBook,
     service_book: &ServiceBook,
+    node_name_book: &NodeNameBook,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
     // Live internet gateways (mjolnir-mesh-5lw Lever 2), already filtered to the
@@ -2525,6 +2682,7 @@ fn build_directory_snapshot(
         node_id: self_id.to_string(),
         subnet: owned_client_subnet(claims, self_id),
         backhaul_addr: backhaul_ip.to_string(),
+        name: node_name_book.get(self_id).map(|e| e.name.clone()),
     };
 
     let neighbors = addr_book
@@ -2534,6 +2692,7 @@ fn build_directory_snapshot(
             node_id: entry.node_id.clone(),
             addrs: entry.direct_addrs.iter().map(ToString::to_string).collect(),
             subnet: owned_client_subnet(claims, &entry.node_id),
+            name: node_name_book.get(&entry.node_id).map(|e| e.name.clone()),
         })
         .collect();
 
@@ -2542,6 +2701,7 @@ fn build_directory_snapshot(
         .map(|u| DirectoryIdentity {
             username: u.username.clone(),
             display_name: u.display_name.clone(),
+            last_seen_unix: Some(u.updated_at.wall_clock),
         })
         .collect();
 
@@ -2590,6 +2750,7 @@ fn build_directory_snapshot_v2(
     user_book: &UserBook,
     service_book_v2: &ServiceBookV2,
     lost_names: &LostNameMap,
+    node_name_book: &NodeNameBook,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
 ) -> DirectorySnapshot {
@@ -2597,6 +2758,7 @@ fn build_directory_snapshot_v2(
         node_id: self_id.to_string(),
         subnet: owned_client_subnet(claims, self_id),
         backhaul_addr: backhaul_ip.to_string(),
+        name: node_name_book.get(self_id).map(|e| e.name.clone()),
     };
 
     let neighbors = addr_book
@@ -2606,6 +2768,7 @@ fn build_directory_snapshot_v2(
             node_id: entry.node_id.clone(),
             addrs: entry.direct_addrs.iter().map(ToString::to_string).collect(),
             subnet: owned_client_subnet(claims, &entry.node_id),
+            name: node_name_book.get(&entry.node_id).map(|e| e.name.clone()),
         })
         .collect();
 
@@ -2614,6 +2777,7 @@ fn build_directory_snapshot_v2(
         .map(|u| DirectoryIdentity {
             username: u.username.clone(),
             display_name: u.display_name.clone(),
+            last_seen_unix: Some(u.updated_at.wall_clock),
         })
         .collect();
 
@@ -2689,11 +2853,13 @@ fn persist_directory(snapshot: &DirectorySnapshot, path: &Path) {
 /// (bead avs). Called once up front and once per anti-entropy tick from
 /// [`anti_entropy_loop`], mirroring how the other books re-persist on the same
 /// cadence.
+#[allow(clippy::too_many_arguments)] // one more cohesive CRDT store (node names) to project
 fn write_directory_projection(
     claims: &ClaimStore,
     addr_book: &Arc<Mutex<AddrBook>>,
     user_book: &Arc<Mutex<UserBook>>,
     service_book: &Arc<Mutex<ServiceBook>>,
+    node_name_book: &Arc<Mutex<NodeNameBook>>,
     liveness: &Arc<Mutex<LivenessTracker>>,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
@@ -2705,6 +2871,10 @@ fn write_directory_projection(
     let service_snapshot = service_book
         .lock()
         .expect("service directory poisoned")
+        .clone();
+    let node_name_snapshot = node_name_book
+        .lock()
+        .expect("node-name book poisoned")
         .clone();
     // Live-gateway set (5lw Lever 2): read under the liveness lock, released
     // before persist. Held separately from the book locks (same discipline as
@@ -2723,6 +2893,7 @@ fn write_directory_projection(
         &addr_snapshot,
         &user_snapshot,
         &service_snapshot,
+        &node_name_snapshot,
         self_id,
         backhaul_ip,
         &gateways,
@@ -2881,13 +3052,25 @@ fn short_pubkey(pubkey: &str) -> String {
 /// Ed25519 signature here was left out: `mjolnir-hello` already verified it
 /// before spooling, and the daemon build (`--features daemon`) has no ed25519
 /// dependency wired in today — see the p6u Dev Agent Record for the tradeoff.
-fn spool_submission_to_user_entry(sub: &SpoolSubmission, self_id: &str) -> UserEntry {
+///
+/// `existing` is this pubkey's current `/users` record, if any (t7i clobber
+/// guard): when a submission carries NO usable label, we prefer the existing
+/// `display_name` over the [`short_pubkey`] fallback — so a re-announce with no
+/// label (e.g. a browser re-attesting the same key) never overwrites a name the
+/// user already set back to a bare hex stub. A fresh pubkey with no label still
+/// gets the short-pubkey fallback (there is nothing to preserve).
+fn spool_submission_to_user_entry(
+    sub: &SpoolSubmission,
+    existing: Option<&UserEntry>,
+    self_id: &str,
+) -> UserEntry {
     let display_name = sub
         .label
         .as_deref()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(str::to_string)
+        .or_else(|| existing.map(|e| e.display_name.clone()))
         .unwrap_or_else(|| short_pubkey(&sub.pubkey));
     let mut attrs = std::collections::BTreeMap::new();
     attrs.insert("pubkey".to_string(), sub.pubkey.clone());
@@ -2944,9 +3127,12 @@ fn ingest_identity_spool(spool_dir: &Path, user_book: &Arc<Mutex<UserBook>>, sel
                 continue;
             }
         };
-        let entry = spool_submission_to_user_entry(&sub, self_id);
         {
             let mut book = user_book.lock().expect("user directory poisoned");
+            // Build the record under the lock so the clobber guard can see this
+            // pubkey's current display_name (t7i): a no-label re-announce keeps
+            // the existing name instead of resetting it to the short-pubkey stub.
+            let entry = spool_submission_to_user_entry(&sub, book.get(&sub.pubkey), self_id);
             match merge_user(book.get(&entry.username), &entry) {
                 MergeResult::Inserted | MergeResult::Updated => {
                     info!(pubkey = %entry.username, display = %entry.display_name,
@@ -2978,6 +3164,39 @@ fn apply_user_message(book: &mut UserBook, msg: &GossipMessage) -> Option<UserEn
             Some(entry.clone())
         }
         // merge_user is pure LWW — never Conflict.
+        MergeResult::Unchanged | MergeResult::Conflict { .. } => None,
+    }
+}
+
+/// Apply an inbound node-name CRDT message to the node-name book (t7i). Returns
+/// the entry newly inserted or updated (so the caller can persist and log), or
+/// `None` for another CRDT type, our own self-announcement echoed back, a forged
+/// entry (subject != announce key), or an LWW-stale/duplicate update. Pure over
+/// the map (no I/O) so it's unit-tested below — mirrors [`apply_peer_addr_message`].
+fn apply_node_name_message(
+    book: &mut NodeNameBook,
+    msg: &GossipMessage,
+    self_id: &str,
+) -> Option<NodeNameEntry> {
+    let GossipMessage::NodeNameAnnounce { node_id, entry } = msg else {
+        return None;
+    };
+    // Integrity: a node only announces its OWN name, so the entry's subject must
+    // match the announce key. Drop a forged/misrouted entry rather than key it
+    // under someone else's id.
+    if entry.node_id != *node_id {
+        return None;
+    }
+    // Never learn our own name from the mesh — we announce it authoritatively.
+    if node_id == self_id {
+        return None;
+    }
+    match merge_node_name(book.get(node_id), entry) {
+        MergeResult::Inserted | MergeResult::Updated => {
+            book.insert(node_id.clone(), entry.clone());
+            Some(entry.clone())
+        }
+        // merge_node_name is pure LWW — never Conflict.
         MergeResult::Unchanged | MergeResult::Conflict { .. } => None,
     }
 }
@@ -3063,6 +3282,8 @@ async fn anti_entropy_loop<T: GossipTransport>(
     service_tombstones_v2: Arc<Mutex<ServiceTombstoneBook>>,
     lost_names_v2: Arc<Mutex<LostNameMap>>,
     service_book_v2_file: PathBuf,
+    node_name_book: Arc<Mutex<NodeNameBook>>,
+    node_name_book_file: PathBuf,
     directory_file: PathBuf,
     spool_dir: PathBuf,
     self_announce: SelfAnnounce,
@@ -3100,6 +3321,9 @@ async fn anti_entropy_loop<T: GossipTransport>(
         &self_announce.self_id,
     )
     .await;
+    // Likewise announce this node's own human name up front (t7i), if one is
+    // configured — a nameless node stays silent.
+    announce_node_name(&sync, &node_name_book, &node_name_book_file, &self_announce).await;
     // Write the initial directory.json projection up front too (avs), so
     // mjolnir-hello has a snapshot to read before the first anti-entropy tick.
     write_directory_projection(
@@ -3107,6 +3331,7 @@ async fn anti_entropy_loop<T: GossipTransport>(
         &addr_book,
         &user_book,
         &service_book,
+        &node_name_book,
         &liveness,
         &self_announce.self_id,
         self_announce.backhaul_ip,
@@ -3201,6 +3426,10 @@ async fn anti_entropy_loop<T: GossipTransport>(
             &self_announce.self_id,
         )
         .await;
+        // Re-announce this node's own human name on the same cadence (t7i), so a
+        // late joiner learns it without waiting for a config change; nameless
+        // nodes stay silent.
+        announce_node_name(&sync, &node_name_book, &node_name_book_file, &self_announce).await;
         // Re-project the read-only directory.json snapshot on the same cadence
         // (avs), after the books above have been refreshed for this tick.
         write_directory_projection(
@@ -3208,6 +3437,7 @@ async fn anti_entropy_loop<T: GossipTransport>(
             &addr_book,
             &user_book,
             &service_book,
+            &node_name_book,
             &liveness,
             &self_announce.self_id,
             self_announce.backhaul_ip,
@@ -3559,6 +3789,10 @@ struct SelfAnnounce {
     self_id: String,
     backhaul_ip: Ipv4Addr,
     no_relay: bool,
+    /// Operator-set human router name (t7i), or `None` when nameless. When set,
+    /// `announce_node_name` gossips it each tick; when `None`, that node stays
+    /// silent on the node-name lane.
+    node_name: Option<String>,
 }
 
 /// Build this node's self-announced address-book entry: our observed direct
@@ -3622,6 +3856,56 @@ async fn announce_addr_book<T: GossipTransport>(
         "addrbook anti-entropy: re-broadcast full address book"
     );
     persist_addr_book(&snapshot, addr_book_file);
+}
+
+/// Announce this node's own human name (t7i) and re-broadcast the FULL known
+/// node-name book — ours and every peer's — then rewrite the on-disk book.
+/// Full-map anti-entropy mirroring [`announce_addr_book`], so a late joiner or a
+/// node that missed a packet still converges without a pull protocol.
+///
+/// A NAMELESS node (`self_announce.node_name == None`) returns immediately
+/// WITHOUT touching or re-broadcasting the book: names are deliberately-set
+/// operator state, so an unnamed node neither invents one nor relays others'
+/// via this lane (it still learns + serves them through gossip dispatch). Our
+/// own entry is re-stamped with a fresh HLC each tick so LWW always carries the
+/// latest edit, same discipline as the address book's self entry. The lock is
+/// held only to insert-and-clone the snapshot; never across an `.await`.
+async fn announce_node_name<T: GossipTransport>(
+    sync: &GossipSync<T>,
+    node_name_book: &Arc<Mutex<NodeNameBook>>,
+    node_name_book_file: &Path,
+    self_announce: &SelfAnnounce,
+) {
+    let Some(name) = self_announce.node_name.as_deref() else {
+        return;
+    };
+    let snapshot = {
+        let entry = NodeNameEntry {
+            node_id: self_announce.self_id.clone(),
+            name: name.to_string(),
+            announced_at: now_hlc(&self_announce.self_id),
+        };
+        let mut book = node_name_book.lock().expect("node-name book poisoned");
+        book.insert(self_announce.self_id.clone(), entry);
+        book.clone()
+    };
+    for (node_id, entry) in &snapshot {
+        if let Err(e) = sync
+            .publish(GossipMessage::NodeNameAnnounce {
+                node_id: node_id.clone(),
+                entry: entry.clone(),
+            })
+            .await
+        {
+            warn!(%node_id, "node-name anti-entropy: re-broadcast failed: {e}");
+        }
+    }
+    info!(
+        count = snapshot.len(),
+        name = %name,
+        "node-name anti-entropy: re-broadcast full node-name book"
+    );
+    persist_node_name_book(&snapshot, node_name_book_file);
 }
 
 /// Re-read the seed file, merge our originated records (fresh HLC each tick, so
@@ -4271,6 +4555,7 @@ fn control_api_handle_directory(
     user_book: &Arc<Mutex<UserBook>>,
     service_book_v2: &Arc<Mutex<ServiceBookV2>>,
     lost_names_v2: &Arc<Mutex<LostNameMap>>,
+    node_name_book: &Arc<Mutex<NodeNameBook>>,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
 ) -> (u16, Vec<u8>) {
@@ -4285,12 +4570,17 @@ fn control_api_handle_directory(
         .lock()
         .expect("v2 service lost-names poisoned")
         .clone();
+    let node_name_snapshot = node_name_book
+        .lock()
+        .expect("node-name book poisoned")
+        .clone();
     let snapshot = build_directory_snapshot_v2(
         &claims_snapshot,
         &addr_snapshot,
         &user_snapshot,
         &service_snapshot,
         &lost_snapshot,
+        &node_name_snapshot,
         self_id,
         backhaul_ip,
     );
@@ -4320,6 +4610,7 @@ async fn control_api_route<T: GossipTransport>(
     claims: &ClaimStore,
     addr_book: &Arc<Mutex<AddrBook>>,
     user_book: &Arc<Mutex<UserBook>>,
+    node_name_book: &Arc<Mutex<NodeNameBook>>,
     backhaul_ip: Ipv4Addr,
 ) -> (u16, Vec<u8>) {
     match path {
@@ -4354,6 +4645,7 @@ async fn control_api_route<T: GossipTransport>(
             user_book,
             service_book_v2,
             lost_names_v2,
+            node_name_book,
             self_id,
             backhaul_ip,
         ),
@@ -4381,6 +4673,7 @@ async fn control_api_handle_conn<T: GossipTransport>(
     claims: ClaimStore,
     addr_book: Arc<Mutex<AddrBook>>,
     user_book: Arc<Mutex<UserBook>>,
+    node_name_book: Arc<Mutex<NodeNameBook>>,
     backhaul_ip: Ipv4Addr,
 ) {
     let (status, resp_body) = {
@@ -4401,6 +4694,7 @@ async fn control_api_handle_conn<T: GossipTransport>(
                     &claims,
                     &addr_book,
                     &user_book,
+                    &node_name_book,
                     backhaul_ip,
                 )
                 .await
@@ -4439,6 +4733,7 @@ async fn control_api_start<T: GossipTransport + 'static>(
     claims: ClaimStore,
     addr_book: Arc<Mutex<AddrBook>>,
     user_book: Arc<Mutex<UserBook>>,
+    node_name_book: Arc<Mutex<NodeNameBook>>,
     backhaul_ip: Ipv4Addr,
 ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = TcpListener::bind(addr).await?;
@@ -4465,6 +4760,7 @@ async fn control_api_start<T: GossipTransport + 'static>(
                 claims.clone(),
                 addr_book.clone(),
                 user_book.clone(),
+                node_name_book.clone(),
                 backhaul_ip,
             ));
         }
@@ -6304,6 +6600,30 @@ fn parse_uci_secret_file(text: &str) -> Option<PathBuf> {
     None
 }
 
+/// Best-effort read of `option name '<name>'` from the `meshd` section of the
+/// UCI config (`/etc/config/mjolnir`), the human router name (t7i). Any
+/// read/parse miss returns None and the node stays nameless. Mirrors
+/// [`uci_secret_file`].
+fn uci_node_name() -> Option<String> {
+    let text = std::fs::read_to_string("/etc/config/mjolnir").ok()?;
+    parse_uci_node_name(&text)
+}
+
+/// Pure parse of the `option name '<name>'` value out of UCI config text.
+/// Split from the file read so it's unit-testable. Mirrors
+/// [`parse_uci_secret_file`].
+fn parse_uci_node_name(text: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix("option name") {
+            let val = rest.trim().trim_matches(|c| c == '\'' || c == '"');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Read-only secret load for `status`: never generates or writes a key (unlike
 /// `load_or_create_secret`, which provisions on miss). Returns None when neither
 /// the file nor `IROH_SECRET` yields an identity, so the caller reports UNKNOWN
@@ -7499,6 +7819,7 @@ config meshd 'meshd'
             &addr_book,
             &user_book,
             &service_book,
+            &NodeNameBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -7540,6 +7861,7 @@ config meshd 'meshd'
             &addr_book,
             &user_book,
             &service_book,
+            &NodeNameBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &gateways,
@@ -7586,6 +7908,7 @@ config meshd 'meshd'
             &addr_book,
             &user_book,
             &service_book,
+            &NodeNameBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -7640,6 +7963,7 @@ config meshd 'meshd'
             &AddrBook::new(),
             &UserBook::new(),
             &service_book,
+            &NodeNameBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -7690,6 +8014,7 @@ config meshd 'meshd'
             &AddrBook::new(),
             &UserBook::new(),
             &ServiceBook::new(),
+            &NodeNameBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -7703,6 +8028,160 @@ config meshd 'meshd'
         assert_eq!(decoded["node"]["node_id"], "self");
     }
 
+    // --- node names + identity recency (mjolnir-mesh-t7i) ----------------------
+
+    fn node_name_entry(node_id: &str, name: &str, wall_clock: u64) -> NodeNameEntry {
+        NodeNameEntry {
+            node_id: node_id.to_string(),
+            name: name.to_string(),
+            announced_at: HLC {
+                wall_clock,
+                counter: 0,
+                node_id: node_id.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn build_directory_snapshot_projects_node_names_and_last_seen() {
+        let mut claims = HashMap::new();
+        claims.insert(
+            "10.42.1.0/24".to_string(),
+            claim("10.42.1.0/24", "self", 100),
+        );
+
+        let mut addr_book = AddrBook::new();
+        addr_book.insert(
+            "self".to_string(),
+            addr_entry("self", 100, "10.254.1.1:49737"),
+        );
+        addr_book.insert(
+            "peer-a".to_string(),
+            addr_entry("peer-a", 100, "10.254.2.2:49737"),
+        );
+
+        let mut user_book = UserBook::new();
+        // updated_at.wall_clock == 4242 → surfaced as last_seen_unix.
+        user_book.insert("ada".to_string(), user_entry("ada", "Ada Lovelace", 4242));
+
+        let mut node_name_book = NodeNameBook::new();
+        node_name_book.insert("self".to_string(), node_name_entry("self", "attic", 100));
+        node_name_book.insert("peer-a".to_string(), node_name_entry("peer-a", "garage", 100));
+
+        let snapshot = build_directory_snapshot(
+            &claims,
+            &addr_book,
+            &user_book,
+            &ServiceBook::new(),
+            &node_name_book,
+            "self",
+            "10.254.1.1".parse().unwrap(),
+            &[],
+        );
+
+        // "You are here" carries this node's own configured name.
+        assert_eq!(snapshot.node.name.as_deref(), Some("attic"));
+        // Each neighbor carries its own gossiped name.
+        assert_eq!(snapshot.neighbors.len(), 1);
+        assert_eq!(snapshot.neighbors[0].node_id, "peer-a");
+        assert_eq!(snapshot.neighbors[0].name.as_deref(), Some("garage"));
+        // Identity recency comes from UserEntry.updated_at.wall_clock.
+        assert_eq!(snapshot.identities.len(), 1);
+        assert_eq!(snapshot.identities[0].last_seen_unix, Some(4242));
+    }
+
+    #[test]
+    fn directory_node_omits_name_when_nameless() {
+        // A nameless node (no entry in the book) omits `name` from the wire so
+        // an older mjolnir-hello stays schema-safe.
+        let snapshot = build_directory_snapshot(
+            &HashMap::new(),
+            &AddrBook::new(),
+            &UserBook::new(),
+            &ServiceBook::new(),
+            &NodeNameBook::new(),
+            "self",
+            "10.254.1.1".parse().unwrap(),
+            &[],
+        );
+        assert_eq!(snapshot.node.name, None);
+        let json = serde_json::to_string(&snapshot).expect("serializes");
+        assert!(!json.contains("\"name\""), "None name omitted: {json}");
+    }
+
+    #[test]
+    fn apply_node_name_message_learns_peer_name() {
+        let mut book = NodeNameBook::new();
+        let msg = GossipMessage::NodeNameAnnounce {
+            node_id: "peer-a".to_string(),
+            entry: node_name_entry("peer-a", "garage", 100),
+        };
+        let learned = apply_node_name_message(&mut book, &msg, "self");
+        assert!(learned.is_some(), "a peer's name is learned");
+        assert_eq!(book.get("peer-a").map(|e| e.name.as_str()), Some("garage"));
+    }
+
+    #[test]
+    fn apply_node_name_message_rejects_self_echo() {
+        // We announce our own name authoritatively; never learn it from the mesh.
+        let mut book = NodeNameBook::new();
+        let msg = GossipMessage::NodeNameAnnounce {
+            node_id: "self".to_string(),
+            entry: node_name_entry("self", "spoofed", 100),
+        };
+        assert!(apply_node_name_message(&mut book, &msg, "self").is_none());
+        assert!(book.is_empty(), "self-echo is dropped, not stored");
+    }
+
+    #[test]
+    fn apply_node_name_message_rejects_forged_subject() {
+        // A node may only announce its OWN name: entry.node_id must equal the
+        // announce key, else the entry is a forgery and is dropped.
+        let mut book = NodeNameBook::new();
+        let msg = GossipMessage::NodeNameAnnounce {
+            node_id: "peer-a".to_string(),
+            entry: node_name_entry("peer-b", "impersonated", 100),
+        };
+        assert!(apply_node_name_message(&mut book, &msg, "self").is_none());
+        assert!(book.is_empty(), "forged (subject != key) entry is dropped");
+    }
+
+    #[test]
+    fn apply_node_name_message_lww_drops_stale() {
+        let mut book = NodeNameBook::new();
+        book.insert("peer-a".to_string(), node_name_entry("peer-a", "garage", 200));
+        // An older announcement for the same node loses to LWW and is ignored.
+        let stale = GossipMessage::NodeNameAnnounce {
+            node_id: "peer-a".to_string(),
+            entry: node_name_entry("peer-a", "attic", 100),
+        };
+        assert!(apply_node_name_message(&mut book, &stale, "self").is_none());
+        assert_eq!(
+            book.get("peer-a").map(|e| e.name.as_str()),
+            Some("garage"),
+            "stale name did not clobber the newer one"
+        );
+    }
+
+    #[test]
+    fn node_name_book_path_is_sibling_of_claims_file() {
+        assert_eq!(
+            node_name_book_path(Path::new("/etc/mjolnir/claims.state")),
+            PathBuf::from("/etc/mjolnir/nodenames.state")
+        );
+    }
+
+    #[test]
+    fn parse_uci_node_name_reads_meshd_option() {
+        let cfg = "config meshd 'meshd'\n\toption name 'attic'\n\toption enabled '1'\n";
+        assert_eq!(parse_uci_node_name(cfg).as_deref(), Some("attic"));
+        // A commented example line must not match.
+        let commented = "config meshd 'meshd'\n\t# option name 'attic'\n";
+        assert_eq!(parse_uci_node_name(commented), None);
+        // Absent option → None.
+        assert_eq!(parse_uci_node_name("config meshd 'meshd'\n"), None);
+    }
+
     // --- identity-submission spool ingest (mjolnir-mesh-p6u) -------------------
 
     #[test]
@@ -7713,7 +8192,7 @@ config meshd 'meshd'
             challenge: "cafef00d".to_string(),
             label: Some("Ada".to_string()),
         };
-        let entry = spool_submission_to_user_entry(&sub, "router-a");
+        let entry = spool_submission_to_user_entry(&sub, None, "router-a");
 
         assert_eq!(
             entry.username, "abcdef0123456789",
@@ -7742,7 +8221,7 @@ config meshd 'meshd'
             challenge: "cafef00d".to_string(),
             label: None,
         };
-        let entry = spool_submission_to_user_entry(&sub, "router-a");
+        let entry = spool_submission_to_user_entry(&sub, None, "router-a");
         assert_eq!(entry.display_name, "abcdef01…");
     }
 
@@ -7754,8 +8233,41 @@ config meshd 'meshd'
             challenge: "cafef00d".to_string(),
             label: Some("   ".to_string()),
         };
-        let entry = spool_submission_to_user_entry(&sub, "router-a");
+        let entry = spool_submission_to_user_entry(&sub, None, "router-a");
         assert_eq!(entry.display_name, "abcdef01…");
+    }
+
+    #[test]
+    fn spool_submission_no_label_prefers_existing_name_over_short_pubkey() {
+        // t7i clobber guard: a re-announce with no label must keep the name the
+        // user already set, not reset it to the short-pubkey stub.
+        let existing = user_entry("abcdef0123456789", "Alice", 100);
+        let sub = SpoolSubmission {
+            pubkey: "abcdef0123456789".to_string(),
+            sig: "deadbeef".to_string(),
+            challenge: "cafef00d".to_string(),
+            label: None,
+        };
+        let entry = spool_submission_to_user_entry(&sub, Some(&existing), "router-a");
+        assert_eq!(
+            entry.display_name, "Alice",
+            "existing name is preserved when the re-announce carries no label"
+        );
+    }
+
+    #[test]
+    fn spool_submission_label_still_wins_over_existing_name() {
+        // An explicit new label overrides even an existing name (an intentional
+        // rename), so the clobber guard only kicks in for a MISSING label.
+        let existing = user_entry("abcdef0123456789", "Alice", 100);
+        let sub = SpoolSubmission {
+            pubkey: "abcdef0123456789".to_string(),
+            sig: "deadbeef".to_string(),
+            challenge: "cafef00d".to_string(),
+            label: Some("Bob".to_string()),
+        };
+        let entry = spool_submission_to_user_entry(&sub, Some(&existing), "router-a");
+        assert_eq!(entry.display_name, "Bob");
     }
 
     #[test]
@@ -7765,7 +8277,7 @@ config meshd 'meshd'
         assert_eq!(sub.pubkey, "abcdef0123456789");
         assert_eq!(sub.label.as_deref(), Some("Ada"));
 
-        let entry = spool_submission_to_user_entry(&sub, "router-a");
+        let entry = spool_submission_to_user_entry(&sub, None, "router-a");
         assert_eq!(entry.username, "abcdef0123456789");
         assert_eq!(entry.display_name, "Ada");
         assert_eq!(entry.registered_by, "router-a");
@@ -7824,6 +8336,61 @@ config meshd 'meshd'
 
         let book = user_book.lock().unwrap();
         assert_eq!(book.len(), 1, "merge_user LWW keeps this idempotent");
+    }
+
+    #[test]
+    fn ingest_identity_spool_no_label_reannounce_keeps_existing_name() {
+        // End-to-end clobber guard (t7i): first ingest with label "Alice", then a
+        // second submission for the SAME pubkey with no label must leave the
+        // display_name as "Alice", not the short-pubkey stub.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abcdef0123456789.json");
+        let user_book: Arc<Mutex<UserBook>> = Arc::new(Mutex::new(UserBook::new()));
+
+        std::fs::write(
+            &path,
+            r#"{"pubkey":"abcdef0123456789","sig":"deadbeef","challenge":"cafef00d","label":"Alice"}"#,
+        )
+        .unwrap();
+        ingest_identity_spool(dir.path(), &user_book, "router-a");
+        assert_eq!(
+            user_book.lock().unwrap()["abcdef0123456789"].display_name,
+            "Alice"
+        );
+
+        // Re-announce the same key with no label at all.
+        std::fs::write(
+            &path,
+            r#"{"pubkey":"abcdef0123456789","sig":"deadbeef","challenge":"cafef00d"}"#,
+        )
+        .unwrap();
+        ingest_identity_spool(dir.path(), &user_book, "router-a");
+
+        assert_eq!(
+            user_book.lock().unwrap()["abcdef0123456789"].display_name,
+            "Alice",
+            "no-label re-announce preserved the existing name"
+        );
+    }
+
+    #[test]
+    fn ingest_identity_spool_fresh_pubkey_no_label_uses_short_pubkey() {
+        // The clobber guard only preserves an EXISTING name; a brand-new pubkey
+        // with no label still falls back to the short-pubkey form.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abcdef0123456789.json");
+        std::fs::write(
+            &path,
+            r#"{"pubkey":"abcdef0123456789","sig":"deadbeef","challenge":"cafef00d"}"#,
+        )
+        .unwrap();
+
+        let user_book: Arc<Mutex<UserBook>> = Arc::new(Mutex::new(UserBook::new()));
+        ingest_identity_spool(dir.path(), &user_book, "router-a");
+        assert_eq!(
+            user_book.lock().unwrap()["abcdef0123456789"].display_name,
+            "abcdef01…"
+        );
     }
 
     #[test]
@@ -7923,6 +8490,7 @@ config meshd 'meshd'
         let claims: ClaimStore = Arc::new(Mutex::new(HashMap::new()));
         let addr_book = Arc::new(Mutex::new(AddrBook::new()));
         let user_book = Arc::new(Mutex::new(UserBook::new()));
+        let node_name_book = Arc::new(Mutex::new(NodeNameBook::new()));
 
         let (addr, handle) = control_api_start(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -7936,6 +8504,7 @@ config meshd 'meshd'
             claims,
             addr_book,
             user_book,
+            node_name_book,
             "10.254.1.1".parse().unwrap(),
         )
         .await

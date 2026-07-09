@@ -1,3 +1,4 @@
+use crate::crdt::node_name::NodeNameEntry;
 use crate::crdt::peer_addr::PeerAddrEntry;
 use crate::crdt::service::{ServiceEntry, ServiceEntryV2, is_reserved_service_name};
 use crate::crdt::subnet::SubnetClaim;
@@ -85,6 +86,30 @@ pub fn merge_peer_addr(
     local: Option<&PeerAddrEntry>,
     incoming: &PeerAddrEntry,
 ) -> MergeResult<PeerAddrEntry> {
+    match local {
+        None => MergeResult::Inserted,
+        Some(existing) => match incoming.announced_at.cmp(&existing.announced_at) {
+            Ordering::Greater => MergeResult::Updated,
+            _ => MergeResult::Unchanged,
+        },
+    }
+}
+
+/// Last-writer-wins merge for self-announced node-name entries (bead
+/// mjolnir-mesh-t7i).
+///
+/// Identical shape to [`merge_peer_addr`]: only the subject node announces its
+/// own name, so there is no conflict arm — a newer `announced_at` always wins
+/// outright, with HLC tie-break (wall_clock → counter → node_id) keeping the
+/// verdict deterministic across nodes.
+///
+/// Note: this function does not enforce that the map key matches
+/// `incoming.node_id` — the caller (`apply_node_name_message`) drops entries
+/// whose subject differs from the announce key before calling.
+pub fn merge_node_name(
+    local: Option<&NodeNameEntry>,
+    incoming: &NodeNameEntry,
+) -> MergeResult<NodeNameEntry> {
     match local {
         None => MergeResult::Inserted,
         Some(existing) => match incoming.announced_at.cmp(&existing.announced_at) {
@@ -428,6 +453,69 @@ mod tests {
         };
         assert!(matches!(
             merge_peer_addr(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
+    }
+
+    // --- merge_node_name tests (bead mjolnir-mesh-t7i) ---
+
+    fn node_name(node_id: &str, name: &str, wall_clock: u64, counter: u32) -> NodeNameEntry {
+        NodeNameEntry {
+            node_id: node_id.to_string(),
+            name: name.to_string(),
+            announced_at: HLC {
+                wall_clock,
+                counter,
+                node_id: node_id.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn node_name_inserted_when_no_local() {
+        let incoming = node_name("node-a", "attic", 1_000, 0);
+        assert!(matches!(
+            merge_node_name(None, &incoming),
+            MergeResult::Inserted
+        ));
+    }
+
+    #[test]
+    fn node_name_updated_on_newer_announced_at() {
+        let local = node_name("node-a", "attic", 1_000, 0);
+        let incoming = node_name("node-a", "garage", 2_000, 0);
+        assert!(matches!(
+            merge_node_name(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
+    }
+
+    #[test]
+    fn node_name_unchanged_on_equal_announced_at() {
+        let entry = node_name("node-a", "attic", 1_000, 0);
+        assert!(matches!(
+            merge_node_name(Some(&entry), &entry),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn node_name_unchanged_on_older_announced_at() {
+        let local = node_name("node-a", "garage", 2_000, 0);
+        let incoming = node_name("node-a", "attic", 1_000, 0);
+        assert!(matches!(
+            merge_node_name(Some(&local), &incoming),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn node_name_counter_breaks_wall_clock_tie() {
+        // Same wall_clock, higher counter → newer.
+        let local = node_name("node-a", "attic", 1_000, 0);
+        let incoming = node_name("node-a", "garage", 1_000, 1);
+        assert!(matches!(
+            merge_node_name(Some(&local), &incoming),
             MergeResult::Updated
         ));
     }

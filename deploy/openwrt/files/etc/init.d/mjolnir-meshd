@@ -36,7 +36,7 @@ append_peer() {
 start_service() {
 	config_load mjolnir
 
-	local enabled backhaul_iface secret_file babel_config roster mode relay client_iface log_level lan_tunnels
+	local enabled backhaul_iface secret_file babel_config roster mode relay client_iface log_level lan_tunnels name
 	config_get_bool enabled meshd enabled 1
 	[ "$enabled" -gt 0 ] || return 0
 
@@ -48,6 +48,9 @@ start_service() {
 	config_get relay          meshd relay          ''
 	config_get client_iface   meshd client_iface   'br-lan'
 	config_get log_level      meshd log_level      'info'
+	# Human router name (mjolnir-mesh-t7i): gossiped mesh-wide and set as the
+	# system hostname at startup. Empty by default (node stays nameless).
+	config_get name           meshd name           ''
 	# auu retest (mjolnir-mesh-auu / 0yb.1): re-enable per-peer iroh tunnels in LAN
 	# mode. Default 0 = data rides the shared-L2 backhaul (babel).
 	config_get_bool lan_tunnels meshd lan_tunnels 0
@@ -79,6 +82,8 @@ start_service() {
 	# Client-facing bridge for this node's devices; meshd puts the claimed /24's .1
 	# here as a connected route babeld redistributes (mjolnir-mesh-e4r).
 	procd_append_param command --client-iface "$client_iface"
+	# Human router name (t7i): only passed when set, so a nameless node stays nameless.
+	[ -n "$name" ] && procd_append_param command --name "$name"
 	config_list_foreach meshd peer append_peer
 
 	# Transport mode. Default (lan) = offline mDNS, no relay. internet = n0/relay.

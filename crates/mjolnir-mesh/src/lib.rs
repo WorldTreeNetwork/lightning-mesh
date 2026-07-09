@@ -42,9 +42,10 @@ pub use crdt::{
     lease::LeaseEntry,
     liveness::{LivenessTracker, monotonic_now_ms},
     merge::{
-        MergeResult, ReservedServiceName, merge_peer_addr, merge_service, merge_service_v2,
-        merge_subnet_claim, merge_user, resolve_subnet_conflict,
+        MergeResult, ReservedServiceName, merge_node_name, merge_peer_addr, merge_service,
+        merge_service_v2, merge_subnet_claim, merge_user, resolve_subnet_conflict,
     },
+    node_name::{NodeNameBook, NodeNameEntry},
     peer_addr::{AddrBook, PeerAddrEntry},
     service::{
         DeviceHostError, LostName, LostNameMap, RESERVED_SERVICE_NAMES, ServiceBook, ServiceBookV2,
