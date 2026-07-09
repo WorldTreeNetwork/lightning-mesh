@@ -35,6 +35,14 @@
 	--warning: hsl(38 92% 40%);
 	--warning-foreground: hsl(0 0% 98%);
 	--ring: hsl(240 10% 3.9%);
+
+	/* Presence recency dots (People). Decaying "seen recently", never "online":
+	   active = seen just now, recent = within the hour, today = within the day,
+	   stale/unknown = older or no timestamp. Tuned for light backgrounds here. */
+	--presence-active: hsl(142 71% 40%);
+	--presence-recent: hsl(38 92% 45%);
+	--presence-today: hsl(240 4% 55%);
+	--presence-stale: hsl(240 5% 75%);
 }
 
 .dark {
@@ -61,6 +69,35 @@
 	--warning: hsl(38 92% 60%);
 	--warning-foreground: hsl(240 6% 10%);
 	--ring: hsl(240 4.9% 83.9%);
+
+	--presence-active: hsl(142 69% 55%);
+	--presence-recent: hsl(38 92% 60%);
+	--presence-today: hsl(240 5% 60%);
+	--presence-stale: hsl(240 4% 38%);
+}
+
+/* Gentle breathing pulse for the "here now" presence dot. Respects reduced
+   motion — the dot still shows, it just stops animating. */
+@keyframes presence-pulse {
+	0%,
+	100% {
+		opacity: 1;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 0.55;
+		transform: scale(0.82);
+	}
+}
+
+.presence-dot-active {
+	animation: presence-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.presence-dot-active {
+		animation: none;
+	}
 }
 
 @theme inline {

@@ -8,8 +8,10 @@ import type { RadioSnapshot } from './api';
 export interface TopoNode {
 	/** Stable key: the node's backhaul (overlay) address. */
 	key: string;
-	/** Short human label — subnet's third octet, falling back to a short node id. */
+	/** Short fallback label — subnet's third octet, falling back to a short node id. */
 	label: string;
+	/** Human router name when one has been set; UI prefers this over `label`. */
+	name?: string;
 	nodeId: string;
 	subnet: string | null;
 	isSelf: boolean;
@@ -82,6 +84,7 @@ export function buildTopology(
 	nodes.push({
 		key: selfKey,
 		label: labelFor(directory.node.node_id, directory.node.subnet),
+		name: directory.node.name,
 		nodeId: directory.node.node_id,
 		subnet: directory.node.subnet,
 		isSelf: true,
@@ -94,6 +97,7 @@ export function buildTopology(
 		nodes.push({
 			key,
 			label: labelFor(neighbor.node_id, neighbor.subnet),
+			name: neighbor.name,
 			nodeId: neighbor.node_id,
 			subnet: neighbor.subnet,
 			isSelf: false,

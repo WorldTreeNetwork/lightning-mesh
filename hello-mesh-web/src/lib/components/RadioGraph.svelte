@@ -1,35 +1,18 @@
 <!--
-	Live mesh topology panel (bead 4le). Renders the radio-layer graph — which
-	nodes hear each other, at what expected throughput, and which links HWMP
-	actually uses vs. hears-but-doesn't-use — as a static circular SVG layout.
-	No chart libs; positions are computed once per node count.
-
-	Data: directoryStore gives node identity (already polled by the page);
-	topologyStore layers in /api/radio telemetry (self same-origin, neighbors
-	cross-origin) every 10s and builds the graph. A node with no /api/radio
-	(404, timeout, or pre-upgrade firmware) still appears from directory data,
-	styled as "no telemetry".
-
-	Preview without a live mesh: append `?mockTopology=1` to the page URL to
-	render the hardcoded 4-node fixture instead of the live store.
+	Presentational radio-layer graph (bead 4le): which nodes hear each other, at
+	what expected throughput, and which links HWMP uses vs. only hears. Static
+	circular SVG, no chart libs. Purely driven by props so both the live store and
+	the mock fixture can feed it. Node labels prefer the human router name, falling
+	back to the subnet-octet / short-id label. Extracted from the old TopologyPanel.
 -->
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { Waypoints } from '@lucide/svelte';
-	import { topologyStore, startTopologyPolling } from '$lib/topology/store.svelte';
 	import { edgeStrength, type TopoEdge, type TopoGraph, type TopoNode } from '$lib/topology/graph';
-	import { mockTopologyGraph } from '$lib/topology/fixtures';
 
-	const useMock =
-		browser && new URLSearchParams(window.location.search).get('mockTopology') === '1';
-
-	if (!useMock) {
-		$effect(startTopologyPolling);
-	}
-
-	const graph = $derived<TopoGraph | undefined>(useMock ? mockTopologyGraph : topologyStore.graph);
-	const loaded = $derived(useMock || topologyStore.loaded);
-	const lastUpdated = $derived(useMock ? Date.now() : topologyStore.lastUpdated);
+	let {
+		graph,
+		loaded = true,
+		lastUpdated
+	}: { graph: TopoGraph | undefined; loaded?: boolean; lastUpdated?: number } = $props();
 
 	const WIDTH = 560;
 	const HEIGHT = 360;
@@ -41,6 +24,13 @@
 		node: TopoNode;
 		x: number;
 		y: number;
+	}
+
+	/** Node display label: human name if set, else the short fallback label. */
+	function nodeLabel(node: TopoNode): string {
+		const name = node.name?.trim();
+		if (!name) return node.label;
+		return name.length > 14 ? `${name.slice(0, 13)}…` : name;
 	}
 
 	function layout(nodes: TopoNode[]): Placed[] {
@@ -120,24 +110,15 @@
 	}
 </script>
 
-<section
-	class="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 text-card-foreground"
->
-	<header class="flex flex-wrap items-center justify-between gap-2">
-		<div class="flex items-center gap-2">
-			<Waypoints class="size-4 text-muted-foreground" aria-hidden="true" />
-			<h2 class="text-lg font-semibold">Mesh topology</h2>
-		</div>
-		{#if loaded && lastUpdated}
-			<span class="text-xs text-muted-foreground">updated {lastUpdatedLabel(lastUpdated)}</span>
-		{/if}
-	</header>
+<div class="flex flex-col gap-3">
+	{#if lastUpdated}
+		<span class="self-end text-xs text-muted-foreground">
+			signal updated {lastUpdatedLabel(lastUpdated)}
+		</span>
+	{/if}
 
 	{#if !loaded}
-		<div class="flex flex-col gap-3">
-			<div class="h-[240px] w-full animate-pulse rounded-md bg-muted"></div>
-			<p class="text-sm text-muted-foreground">Loading radio topology…</p>
-		</div>
+		<div class="h-[240px] w-full animate-pulse rounded-md bg-muted"></div>
 	{:else if !graph || graph.nodes.length === 0}
 		<p class="text-sm text-muted-foreground">No mesh nodes known yet.</p>
 	{:else}
@@ -194,10 +175,10 @@
 							y={p.y - 2}
 							text-anchor="middle"
 							fill="var(--foreground)"
-							font-size="12"
+							font-size="11"
 							font-weight="600"
 						>
-							{p.node.label}
+							{nodeLabel(p.node)}
 						</text>
 						<text
 							x={p.x}
@@ -235,4 +216,4 @@
 			</span>
 		</div>
 	{/if}
-</section>
+</div>

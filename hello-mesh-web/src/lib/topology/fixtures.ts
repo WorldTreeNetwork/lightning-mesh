@@ -11,6 +11,7 @@ export const mockTopologyGraph: TopoGraph = {
 			key: '10.254.242.84',
 			label: '243',
 			nodeId: 'wr3000s-a',
+			name: 'Front Porch',
 			subnet: '10.42.243.0/24',
 			isSelf: true,
 			radio: {
@@ -29,6 +30,7 @@ export const mockTopologyGraph: TopoGraph = {
 			key: '10.254.12.214',
 			label: '12',
 			nodeId: 'm3000-b',
+			name: 'Kitchen',
 			subnet: '10.42.12.0/24',
 			isSelf: false,
 			radio: {
@@ -47,6 +49,7 @@ export const mockTopologyGraph: TopoGraph = {
 			key: '10.254.61.115',
 			label: '61',
 			nodeId: 'tr3000',
+			name: 'Workshop',
 			subnet: '10.42.61.0/24',
 			isSelf: false,
 			radio: {

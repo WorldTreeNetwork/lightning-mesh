@@ -12,6 +12,9 @@ export interface StoredIdentity {
 	publicKey: Uint8Array;
 	secretKey: Uint8Array;
 	createdAt: number;
+	/** Human display name the user chose (additive; records saved before names
+	    were a thing simply lack it and fall back to the short-key display). */
+	label?: string;
 }
 
 function openDb(): Promise<IDBDatabase> {

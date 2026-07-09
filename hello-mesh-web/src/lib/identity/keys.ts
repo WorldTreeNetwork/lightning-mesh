@@ -25,6 +25,18 @@ export async function generateKeyPair(): Promise<KeyPair> {
 	return { secretKey, publicKey };
 }
 
+/**
+ * Rebuild a keypair from a 32-byte secret seed (import path). noble's
+ * `secretKey` IS the seed, and `getPublicKey` deterministically derives the
+ * matching public key, so this round-trips whatever `generateKeyPair` produced.
+ */
+export function keyPairFromSecret(secretKey: Uint8Array): KeyPair {
+	if (secretKey.byteLength !== 32) {
+		throw new Error(`secret key must be 32 bytes, got ${secretKey.byteLength}`);
+	}
+	return { secretKey, publicKey: ed.getPublicKey(secretKey) };
+}
+
 /** Sign a hex-encoded challenge, returning the hex-encoded signature. */
 export async function signChallengeHex(
 	secretKey: Uint8Array,

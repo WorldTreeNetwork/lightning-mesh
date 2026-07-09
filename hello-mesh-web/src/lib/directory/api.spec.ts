@@ -3,9 +3,11 @@ import { fetchDirectory, type Directory } from './api';
 
 const sampleDirectory: Directory = {
 	version: 1,
-	node: { node_id: 'aaaa1111', subnet: '10.42.1.0/24', backhaul_addr: '10.254.1.1' },
-	neighbors: [{ node_id: 'bbbb2222', addrs: ['10.254.2.1'], subnet: '10.42.2.0/24' }],
-	identities: [{ username: 'alice', display_name: 'Alice' }],
+	node: { node_id: 'aaaa1111', subnet: '10.42.1.0/24', backhaul_addr: '10.254.1.1', name: 'Porch' },
+	neighbors: [
+		{ node_id: 'bbbb2222', addrs: ['10.254.2.1'], subnet: '10.42.2.0/24', name: 'Kitchen' }
+	],
+	identities: [{ username: 'alice', display_name: 'Alice', last_seen_unix: 1_700_000_000_000 }],
 	services: [{ name: 'moq-relay', ip: '10.42.1.5', port: 4433, protocol: 'quic' }]
 };
 

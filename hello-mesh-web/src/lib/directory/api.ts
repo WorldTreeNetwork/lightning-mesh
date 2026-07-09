@@ -6,17 +6,24 @@ export interface DirectoryNode {
 	node_id: string;
 	subnet: string | null;
 	backhaul_addr: string;
+	/** Human router name, if one has been set (additive; older daemons omit it). */
+	name?: string;
 }
 
 export interface DirectoryNeighbor {
 	node_id: string;
 	addrs: string[];
 	subnet: string | null;
+	/** Human router name, if one has been set (additive; older daemons omit it). */
+	name?: string;
 }
 
 export interface DirectoryIdentity {
 	username: string;
 	display_name: string;
+	/** ms since epoch of this identity's last announce (writer clock, approximate;
+	    additive — older daemons omit it, in which case recency is unknown). */
+	last_seen_unix?: number;
 }
 
 export interface DirectoryService {
