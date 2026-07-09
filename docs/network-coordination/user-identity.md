@@ -374,9 +374,12 @@ secure storage) as a dependency.
    custodian implements — must be simple enough that a self-hosted custodian
    is an afternoon project (that's the anti-lock-in test); and how the
    OIDC-style redirect back into a `.mesh` origin works over plain HTTP.
-3. Cross-origin assertion flow: how a `.mesh` service (e.g. `wiki.mesh`) gets a
+3. ~~Cross-origin assertion flow: how a `.mesh` service (e.g. `wiki.mesh`) gets a
    token from the `hello.mesh` origin — redirect + signed token vs. a scoped
-   postMessage channel; token format services verify statelessly.
+   postMessage channel; token format services verify statelessly.~~
+   **Resolved** (bead `mjolnir-mesh-1f2`): redirect + self-certifying signed
+   token, carried in the return-URL fragment, verified offline. Wire format and
+   RP verifier spec in [identity-assertion.md](identity-assertion.md).
 4. Lease↔identity binding lifetime and re-auth cadence; roaming a rung-1 key's
    *session* across nodes within an island (the key itself already roams via
    the stable origin; dovetails with the 802.11r/FT key-management spike).

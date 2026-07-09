@@ -220,6 +220,18 @@ impl RouteResponse {
         }
     }
 
+    /// A JSON body served with a caller-chosen `Content-Type` (e.g.
+    /// `application/captive+json` per RFC 8908), rather than the default
+    /// `application/json`.
+    fn json_typed(status: u16, content_type: &'static str, body: impl Into<String>) -> Self {
+        RouteResponse {
+            status,
+            content_type,
+            body: body.into().into_bytes(),
+            cors: false,
+        }
+    }
+
     /// Serve a static asset with a Content-Type derived from its path
     /// extension. Load-bearing for the SvelteKit bundle: a `.js` ES module
     /// served as `text/html` is refused by the browser, leaving a blank page.
@@ -256,6 +268,22 @@ fn content_type_for(path: &str) -> &'static str {
 /// `GET /api/health` — liveness for the deploy health-gate.
 fn health() -> RouteResponse {
     RouteResponse::json(200, r#"{"status":"ok"}"#)
+}
+
+/// `GET /api/captive-portal` — RFC 8908 CAPPORT API response (bead
+/// mjolnir-mesh-5eo). `captive` is always `false`: the mesh never gates
+/// traffic, so this is purely a venue-info banner to get phones to surface
+/// the hello page (never a walled garden).
+///
+/// Deployment wiring (follow-up, not this bead): a node must advertise this
+/// endpoint via DHCP option 114 (uci: `dhcp option '114,http://10.42.<x>.1/api/captive-portal'`)
+/// and/or IPv6 RA CAPPORT option so client OSes discover it automatically.
+fn captive_portal() -> RouteResponse {
+    RouteResponse::json_typed(
+        200,
+        "application/captive+json",
+        r#"{"captive":false,"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}"#,
+    )
 }
 
 /// `GET /api/directory` — serve `directory.json` verbatim (cached, last-good
@@ -536,6 +564,9 @@ pub fn route(
 ) -> RouteResponse {
     let mut resp = match (method, path) {
         ("GET", "/api/health") => health(),
+
+        // RFC 8908 CAPPORT API (mjolnir-mesh-5eo): venue-info banner, never gates traffic.
+        ("GET", "/api/captive-portal") => captive_portal(),
 
         // --- S3 (mjolnir-mesh-11l): read-only mesh state ---------------
         ("GET", "/api/directory") => directory(directory_cache, directory_file),
@@ -1116,6 +1147,26 @@ mod tests {
         assert!(route_for("GET", "/api/node").cors);
         assert!(route_for("GET", "/api/health").cors);
         assert!(route_for("GET", "/api/challenge").cors);
+        assert!(route_for("GET", "/api/captive-portal").cors);
+    }
+
+    #[test]
+    fn captive_portal_returns_rfc8908_body() {
+        let resp = route_for("GET", "/api/captive-portal");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.content_type, "application/captive+json");
+
+        let value: serde_json::Value = serde_json::from_slice(&resp.body)
+            .expect("captive-portal body must be valid JSON");
+        assert_eq!(value["captive"], serde_json::json!(false));
+        assert_eq!(
+            value["user-portal-url"],
+            serde_json::json!("http://hello.mesh/")
+        );
+        assert_eq!(
+            value["venue-info-url"],
+            serde_json::json!("http://hello.mesh/")
+        );
     }
 
     #[test]
