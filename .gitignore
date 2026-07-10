@@ -70,3 +70,4 @@ deploy/mikrotik/secrets/
 # commit; only the checked-in .example template survives this ignore.
 deploy/openwrt/fleet-secrets/*
 !deploy/openwrt/fleet-secrets/*.example
+.playwright-mcp
