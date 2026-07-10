@@ -1,10 +1,12 @@
 <!-- hello.mesh front desk, one page. Top to bottom: an orientation hero that
      names this router and carries your identity (create/rename/reveal/export/
      import behind an expander, custody notice included — bead c3f); People on
-     the network; the Routers that make up the mesh + their radio links; and the
-     Services you can open. One shared /api/directory poll (directoryStore) backs
-     People, Routers, and Services; the identity store rides the same poll to
-     derive your status live. No external hosts — must run fully offline. -->
+     the network; the Services you can open (above the router topology — it's how
+     walk-up users find apps like KEYED, so it leads and opens by default,
+     mjolnir-mesh-kgq); and the Routers that make up the mesh + their radio links.
+     One shared /api/directory poll (directoryStore) backs People, Services, and
+     Routers; the identity store rides the same poll to derive your status live.
+     No external hosts — must run fully offline. -->
 <script lang="ts">
 	import HeroStrip from '$lib/components/HeroStrip.svelte';
 	import PeoplePanel from '$lib/components/PeoplePanel.svelte';
@@ -24,7 +26,7 @@
 
 	<PeoplePanel />
 
-	<RoutersPanel />
-
 	<ServicesPanel {services} loaded={directoryStore.loaded} />
+
+	<RoutersPanel />
 </main>

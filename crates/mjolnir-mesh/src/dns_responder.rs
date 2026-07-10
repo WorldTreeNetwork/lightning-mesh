@@ -1100,6 +1100,7 @@ mod leased_name_table_tests {
             challenge: "ab".repeat(32),
             ip: IpAddr::V4(Ipv4Addr::new(10, 42, 5, 23)),
             port: 3000,
+            scheme: None,
             first_claimed_at: HLC {
                 wall_clock: renewed_ms,
                 counter: 0,

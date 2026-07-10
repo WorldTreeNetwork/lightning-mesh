@@ -2646,6 +2646,11 @@ struct NameClaimSpool {
     port: u16,
     #[serde(default)]
     ip: Option<IpAddr>,
+    /// URL scheme the claimant serves (`"https"`/`"http"`), so the front desk can
+    /// render the name as a clickable link. Self-reported, unsigned (like `ip`);
+    /// `#[serde(default)]` so pre-scheme spool files still parse (mjolnir-mesh-kgq).
+    #[serde(default)]
+    scheme: Option<String>,
 }
 
 /// Sweep the name-claim spool (`<spool>/names/*.json`), applying each accepted
@@ -2732,6 +2737,7 @@ fn ingest_name_claim_spool(
                 challenge: claim.challenge.clone(),
                 ip,
                 port: claim.port,
+                scheme: claim.scheme.clone(),
                 first_claimed_at,
                 renewed_at: now,
             };
@@ -3207,11 +3213,20 @@ fn leased_directory_services(book: &LeasedNameBook, now_ms: u64) -> Vec<Director
         .map(|(name, e)| {
             let mut txt = BTreeMap::new();
             txt.insert("owner".to_string(), short_pubkey(&e.owner_pubkey));
+            // A web scheme (http/https) projects as the directory protocol so the
+            // front desk renders a clickable `scheme://ip:port` link; anything
+            // else (or no scheme, e.g. a pre-scheme claim) stays a bare `_tcp`
+            // address (mjolnir-mesh-kgq).
+            let protocol = match e.scheme.as_deref() {
+                Some("http") => "http".to_string(),
+                Some("https") => "https".to_string(),
+                _ => "_tcp".to_string(),
+            };
             DirectoryService {
                 name: name.clone(),
                 ip: e.ip.to_string(),
                 port: e.port,
-                protocol: "_tcp".to_string(),
+                protocol,
                 hostname: None,
                 txt,
                 host_mac: None,
@@ -9134,5 +9149,74 @@ config meshd 'meshd'
         assert_eq!(status, 405);
 
         fixture.handle.abort();
+    }
+
+    fn leased(name_scheme: Option<&str>, renewed_ms: u64) -> LeasedName {
+        LeasedName {
+            owner_pubkey: "aa".repeat(32),
+            sig: "00".repeat(64),
+            challenge: "ab".repeat(32),
+            ip: IpAddr::V4(Ipv4Addr::new(10, 42, 12, 109)),
+            port: 5173,
+            scheme: name_scheme.map(str::to_string),
+            first_claimed_at: HLC {
+                wall_clock: renewed_ms,
+                counter: 0,
+                node_id: "n".into(),
+            },
+            renewed_at: HLC {
+                wall_clock: renewed_ms,
+                counter: 0,
+                node_id: "n".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn leased_directory_services_maps_scheme_to_clickable_protocol() {
+        let now = 1_000_000;
+        let mut book = LeasedNameBook::new();
+        book.insert("walkie-talkie".to_string(), leased(Some("https"), now));
+        book.insert("plain-http".to_string(), leased(Some("http"), now));
+        book.insert("bare".to_string(), leased(None, now));
+        book.insert("weird".to_string(), leased(Some("ftp"), now));
+
+        let services = leased_directory_services(&book, now);
+        let proto = |name: &str| {
+            services
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .protocol
+                .clone()
+        };
+        // http/https project verbatim so the front desk renders a clickable link.
+        assert_eq!(proto("walkie-talkie"), "https");
+        assert_eq!(proto("plain-http"), "http");
+        // No scheme, or a non-web scheme, stays a bare `_tcp` address.
+        assert_eq!(proto("bare"), "_tcp");
+        assert_eq!(proto("weird"), "_tcp");
+        // The owner short-pubkey still rides in txt regardless of scheme.
+        assert_eq!(
+            services.iter().find(|s| s.name == "walkie-talkie").unwrap().txt["owner"],
+            short_pubkey(&"aa".repeat(32))
+        );
+    }
+
+    #[test]
+    fn leased_directory_services_filters_stale_names() {
+        // A name whose lease went stale (renewed outside the resolve window) is
+        // omitted, so the list only shows names that actually still resolve.
+        let now = 1_000_000;
+        let mut book = LeasedNameBook::new();
+        book.insert("fresh".to_string(), leased(Some("https"), now));
+        let stale_ms = mjolnir_mesh::dns_responder::LEASED_NAME_RESOLVE_STALE_MS;
+        book.insert("stale".to_string(), leased(Some("https"), now - stale_ms - 1));
+        let names: Vec<_> = leased_directory_services(&book, now)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(names.contains(&"fresh".to_string()));
+        assert!(!names.contains(&"stale".to_string()));
     }
 }

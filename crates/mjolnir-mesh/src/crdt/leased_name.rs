@@ -61,6 +61,21 @@ pub struct LeasedName {
     /// NOT covered by `sig`.
     pub ip: IpAddr,
     pub port: u16,
+    /// URL scheme the claimant serves at `ip:port` — `"https"`/`"http"` for a
+    /// web app the front desk can render as a clickable link, or `None`/other
+    /// for a non-web service (rendered as a bare address). Self-reported and NOT
+    /// covered by `sig` (same trust model as `ip`).
+    ///
+    /// This trails the struct so JSON spool records omitting it still parse
+    /// (`#[serde(default)]`). NOTE: gossip and the on-disk book use postcard,
+    /// which is NOT self-describing — a mixed-version fleet cannot exchange
+    /// `LeasedNamePublish` across this change (old↔new decode fails and the
+    /// message is dropped). That's tolerable here and needs no ALPN bump: leased
+    /// names are best-effort and re-published every ~25s, on-disk load already
+    /// falls back to empty on any decode error, and the field lands via a
+    /// whole-fleet redeploy so mixed-version is only the brief rollout window.
+    #[serde(default)]
+    pub scheme: Option<String>,
     /// HLC of this owner's FIRST claim on the name. Preserved verbatim across
     /// renewals; it is the arbitration clock for cross-owner reclaim.
     pub first_claimed_at: HLC,
@@ -197,6 +212,7 @@ mod tests {
             challenge: "ab".repeat(32),
             ip: IpAddr::V4(Ipv4Addr::new(10, 42, 5, 23)),
             port: 3000,
+            scheme: None,
             first_claimed_at: hlc(first_ms),
             renewed_at: hlc(renewed_ms),
         }

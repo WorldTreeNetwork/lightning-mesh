@@ -161,6 +161,13 @@ struct NameClaimRequest {
     /// the signed message so the shipped ceremony's preimage is unchanged.
     #[serde(default)]
     ip: Option<IpAddr>,
+    /// URL scheme the claimant serves at `ip:port` (`"https"`/`"http"`), so the
+    /// front desk can list the name as a clickable app link instead of a bare
+    /// address (mjolnir-mesh-kgq). Self-reported and, like `ip`, kept OUT of the
+    /// signed message — the v1 ceremony preimage is unchanged. `#[serde(default)]`
+    /// so an older client that omits it still claims (name renders non-clickable).
+    #[serde(default)]
+    scheme: Option<String>,
 }
 
 /// What meshd's name-claim sweep (bead 71x) ingests. Unlike [`IdentityRecord`],
@@ -178,6 +185,10 @@ struct NameClaimRecord<'a> {
     /// Self-reported target IP (see [`NameClaimRequest::ip`]); `null` when the
     /// claimant didn't supply one and meshd should use the source address.
     ip: Option<IpAddr>,
+    /// Self-reported URL scheme (see [`NameClaimRequest::scheme`]); `null` when
+    /// the claimant didn't supply one (the name then lists as a bare address).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scheme: &'a Option<String>,
 }
 
 /// The exact bytes a name claim signs: the domain prefix, the hex challenge,
@@ -528,6 +539,7 @@ fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path)
         name: &req.name,
         port,
         ip: req.ip,
+        scheme: &req.scheme,
     };
     let record_json = serde_json::to_string(&record).expect("record serializes");
 

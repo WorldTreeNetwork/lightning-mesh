@@ -13,7 +13,9 @@
 
 	let { services, loaded = true }: { services: DirectoryService[]; loaded?: boolean } = $props();
 
-	let open = $state(false);
+	// Open by default: Services is how walk-up users find apps on this mesh, so it
+	// leads the page and shows its contents without a tap (mjolnir-mesh-kgq).
+	let open = $state(true);
 	const count = $derived(services.length);
 
 	function txtEntries(svc: DirectoryService): [string, string][] {
