@@ -5486,9 +5486,14 @@ const MESH_DNS_SERVER_LINE: &str = "/mesh/127.0.0.1#5335";
 /// the network as "DoH not wanted here" and stays on the system resolver, so
 /// `.mesh` names keep working through client-side DoH (FR11).
 const DOH_CANARY_SERVER_LINE: &str = "/use-application-dns.net/";
-/// RFC 8910 DHCP option 114 (`default-url`): points clients at the
-/// hello.mesh front desk (bc7) without any manual URL entry (FR12).
-const DHCP_OPTION_114: &str = "114,http://hello.mesh";
+/// RFC 8910 DHCP option 114 (`default-url`): the RFC 8908 CAPPORT API endpoint,
+/// NOT the HTML front desk. Client OSes read this URL as an `application/
+/// captive+json` API — pointing it at the HTML page means the OS never engages
+/// CAPPORT and shows no affordance at all (mjolnir-mesh-6gk). The API answers
+/// `captive:false` with `user-portal-url`/`venue-info-url` → the hello.mesh front
+/// desk (bc7), so the phone surfaces a passive venue-info tap-through, never a
+/// blocking login wall (the mesh never gates traffic). FR12.
+const DHCP_OPTION_114: &str = "114,http://hello.mesh/api/captive-portal";
 /// dnsmasq rebind-protection whitelist for the `.mesh` zone. OpenWrt ships
 /// `stop-dns-rebind` on by default, which DROPS any upstream answer carrying
 /// an RFC1918 address — and every `.mesh` answer is an RFC1918 address, so
@@ -5599,6 +5604,17 @@ async fn reconcile_dnsmasq_uci() {
         ));
     }
     if !options.contains(&DHCP_OPTION_114) {
+        // Drop any stale option-114 default-url first (e.g. the pre-CAPPORT
+        // `114,http://hello.mesh` HTML front-desk URL). default-url must be
+        // singular — leaving the old value alongside the new one hands clients
+        // two conflicting CAPPORT URLs (mjolnir-mesh-6gk). del_list of an absent
+        // value is a harmless no-op.
+        for stale in options
+            .iter()
+            .filter(|o| o.starts_with("114,") && **o != DHCP_OPTION_114)
+        {
+            script.push_str(&format!("uci del_list dhcp.lan.dhcp_option='{stale}'; "));
+        }
         script.push_str(&format!(
             "uci add_list dhcp.lan.dhcp_option='{DHCP_OPTION_114}'; "
         ));
@@ -7762,7 +7778,7 @@ config meshd 'meshd'
             ""
         ));
         // Only option 114 present, DNS lines missing.
-        assert!(!dnsmasq_uci_is_current("", "114,http://hello.mesh", ""));
+        assert!(!dnsmasq_uci_is_current("", "114,http://hello.mesh/api/captive-portal", ""));
     }
 
     #[test]
@@ -7774,7 +7790,7 @@ config meshd 'meshd'
         // arg this config would have wrongly read as "current".
         assert!(!dnsmasq_uci_is_current(
             "/mesh/127.0.0.1#5335 /use-application-dns.net/",
-            "114,http://hello.mesh",
+            "114,http://hello.mesh/api/captive-portal",
             ""
         ));
     }
@@ -7794,6 +7810,20 @@ config meshd 'meshd'
     fn reconciled_dnsmasq_config_is_idempotent() {
         assert!(dnsmasq_uci_is_current(
             "/mesh/127.0.0.1#5335 /use-application-dns.net/",
+            "114,http://hello.mesh/api/captive-portal",
+            "/mesh/"
+        ));
+    }
+
+    #[test]
+    fn legacy_html_option_114_needs_reconcile() {
+        // Migration (mjolnir-mesh-6gk): a node provisioned before the CAPPORT fix
+        // carries the old HTML front-desk default-url. Even with every other line
+        // present, the stale 114 is NOT the current CAPPORT-API value, so the
+        // config must read as needing reconcile (which then del_lists the old one
+        // and adds the API endpoint).
+        assert!(!dnsmasq_uci_is_current(
+            "/mesh/127.0.0.1#5335 /use-application-dns.net/",
             "114,http://hello.mesh",
             "/mesh/"
         ));
@@ -7804,7 +7834,7 @@ config meshd 'meshd'
         // Ours plus pre-existing unrelated entries, any order — still current.
         assert!(dnsmasq_uci_is_current(
             "8.8.8.8 /use-application-dns.net/ /corp.example/10.1.1.1 /mesh/127.0.0.1#5335",
-            "6,10.0.0.53 114,http://hello.mesh",
+            "6,10.0.0.53 114,http://hello.mesh/api/captive-portal",
             "/other.lan/ /mesh/"
         ));
     }
@@ -7816,7 +7846,7 @@ config meshd 'meshd'
         // or count, matching `uci add_list`'s own dedup-on-repeat behavior).
         assert!(dnsmasq_uci_is_current(
             "/mesh/127.0.0.1#5335 /mesh/127.0.0.1#5335 /use-application-dns.net/",
-            "114,http://hello.mesh 114,http://hello.mesh",
+            "114,http://hello.mesh/api/captive-portal 114,http://hello.mesh/api/captive-portal",
             "/mesh/ /mesh/"
         ));
     }
