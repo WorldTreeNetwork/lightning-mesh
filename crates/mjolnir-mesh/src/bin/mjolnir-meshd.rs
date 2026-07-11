@@ -5869,14 +5869,7 @@ async fn babel_reconciler(
         let have_ifaces = !ifaces.is_empty() || !l2_refs.is_empty();
 
         match write_atomic_if_changed(&config_path, &conf) {
-            Ok(_changed) => {
-                // procd owns babeld restarts now: the mjolnir-babeld init watches
-                // this file (`procd_set_param file`) and restarts babeld whenever
-                // it changes. meshd only (a) starts babeld once when the first
-                // valid config is ready and (b) stops it on zero interfaces
-                // (dynamic --internet mode; LAN keeps the L2 backhaul permanently).
-                // meshd no longer drives per-change restarts — that synchronous
-                // procd loop wedged the daemon (qz9).
+            Ok(changed) => {
                 if !have_ifaces {
                     if started {
                         warn!("no live interfaces — stopping babeld until one returns");
@@ -5884,13 +5877,35 @@ async fn babel_reconciler(
                         started = false;
                     }
                 } else if !started {
-                    // Enable (survive reboot) then start it once; from here procd's
-                    // file-watch handles every config-change restart.
+                    // Enable (survive reboot) then start it once; the first start
+                    // reads whatever config is on disk right now.
                     babeld_service("enable").await;
                     if babeld_service("restart").await {
                         started = true;
                         let count = ifaces.len() + l2_refs.len();
-                        info!(config = %config_path.display(), ifaces = count, "babeld started (procd: mjolnir-babeld); procd watches the config from here");
+                        info!(config = %config_path.display(), ifaces = count, "babeld started (procd: mjolnir-babeld)");
+                    }
+                } else if changed {
+                    // babeld is already running and the rendered config just changed
+                    // on disk — drive the restart ourselves (mjolnir-mesh-a9e).
+                    //
+                    // The init sets `procd_set_param file "$CONF"`, but that inotify
+                    // watch is bound to the file's inode and we write via tmp-file +
+                    // rename (write_atomic_if_changed), so the replacement swaps the
+                    // inode and procd never sees it. Any node whose /24 claim
+                    // converges AFTER babeld's first start would otherwise keep stale
+                    // config forever and never originate `redistribute ip
+                    // 10.42.x.0/24` — the field bug where cross-/24 client routing
+                    // (and the hello.mesh topology panel) silently dies.
+                    //
+                    // Gated on `changed`, which only holds for a genuine content
+                    // change that already survived the BABEL_SETTLE debounce above —
+                    // so this fires ~once per convergence, never in a loop, and can't
+                    // reproduce the qz9 restart-thrash that made meshd stop driving
+                    // per-change restarts in the first place. babeld_service has its
+                    // own 10s timeout + kill_on_drop backstop.
+                    if babeld_service("restart").await {
+                        info!(config = %config_path.display(), "babeld config changed — restarted to re-read (procd file-watch misses our atomic rename)");
                     }
                 }
             }
@@ -6390,12 +6405,22 @@ async fn babel_reconciler_overlay(
         );
         if last_rendered.as_deref() != Some(conf.as_str()) {
             match write_atomic_if_changed(&config_path, &conf) {
-                Ok(_) => {
+                Ok(changed) => {
                     if !started {
                         babeld_service("enable").await;
                         if babeld_service("restart").await {
                             started = true;
                             info!(config = %config_path.display(), iface = OVERLAY_IFACE, "babeld started (overlay: single mjolnir0)");
+                        }
+                    } else if changed {
+                        // Already running and the on-disk config changed: restart so
+                        // babeld re-reads it. procd's `file` watch can't see our
+                        // atomic rename (new inode), same as the L2 reconciler
+                        // (mjolnir-mesh-a9e). Fires only on a genuine content change
+                        // (outer `last_rendered != conf` guard + write returned true),
+                        // so it can't thrash.
+                        if babeld_service("restart").await {
+                            info!(config = %config_path.display(), iface = OVERLAY_IFACE, "overlay babeld config changed — restarted to re-read");
                         }
                     }
                     last_rendered = Some(conf);
