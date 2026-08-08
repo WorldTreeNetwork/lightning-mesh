@@ -109,7 +109,10 @@ impl LeasedName {
 /// (legitimate reclaim after lapse). Symmetric in `a`/`b` — the incumbent is
 /// picked by HLC order, not argument order — so the merge is deterministic
 /// regardless of gossip arrival order.
-fn cross_owner_winner<'a>(a: &'a LeasedName, b: &'a LeasedName) -> (&'a LeasedName, &'a LeasedName) {
+fn cross_owner_winner<'a>(
+    a: &'a LeasedName,
+    b: &'a LeasedName,
+) -> (&'a LeasedName, &'a LeasedName) {
     let (incumbent, challenger) = if a.first_claimed_at <= b.first_claimed_at {
         (a, b)
     } else {

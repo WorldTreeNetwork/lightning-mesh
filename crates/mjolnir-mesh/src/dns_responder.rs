@@ -395,7 +395,8 @@ impl NameTable for LeasedNameTable {
     fn lookup_srv(&self, name: &str) -> Option<u16> {
         let key = self.book_key(name)?;
         // Port 0 → A-only claim, no SRV (NODATA, not NXDOMAIN).
-        self.get_if_fresh(key, wall_now_ms(), |e| e.port).filter(|p| *p != 0)
+        self.get_if_fresh(key, wall_now_ms(), |e| e.port)
+            .filter(|p| *p != 0)
     }
 }
 
@@ -1089,7 +1090,7 @@ mod leased_name_table_tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::{Arc, Mutex};
 
-    use super::{wall_now_ms, LeasedNameTable, NameTable, LEASED_NAME_RESOLVE_STALE_MS};
+    use super::{LEASED_NAME_RESOLVE_STALE_MS, LeasedNameTable, NameTable, wall_now_ms};
     use crate::crdt::hlc::HLC;
     use crate::crdt::leased_name::{LeasedName, LeasedNameBook};
 

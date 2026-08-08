@@ -11,7 +11,7 @@
 //!   listen             accept inbound connections, echo ping datagrams
 //!   connect <addr>     dial a peer by address blob, measure a datagram round-trip
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -42,11 +42,12 @@ use mjolnir_mesh::tun::{
 use mjolnir_mesh::{
     AddrBook, GossipError, GossipSync, GossipTransport, HLC, LeasedName, LeasedNameBook,
     LivenessTracker, LostNameMap, MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry,
-    PeerEntry, PeerRoster, PublishOutcome, ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2,
-    ServicePublishError, ServiceTombstone, ServiceTombstoneBook, SubnetClaim, UnpublishOutcome,
-    UserBook, UserEntry, alloc, apply_leased_name, apply_service_publish_v2_tracking_loss,
-    apply_service_unpublish_v2, device_service_key, merge_node_name, merge_peer_addr, merge_service,
-    merge_subnet_claim, merge_user, name_owned_by, parse_host_mac, publish_service_v2,
+    PeerEntry, PeerRoster, PublishOutcome, ServiceBook, ServiceBookV2, ServiceEntry,
+    ServiceEntryV2, ServicePublishError, ServiceTombstone, ServiceTombstoneBook, SubnetClaim,
+    UnpublishOutcome, UserBook, UserEntry, alloc, apply_leased_name,
+    apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
+    merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, name_owned_by,
+    parse_host_mac, publish_service_v2,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -1504,6 +1505,17 @@ async fn run_mesh(
                     tokio::spawn(radio_telemetry_loop(directory_path, backhaul_ip));
                 }
 
+                // Roaming (bead sz9): hold a mobility /32 for every client that
+                // is attached here but carries an address another node vended,
+                // so a phone keeps its IP — and its connections — when it walks
+                // between rooms. Needs only the claim store (to know which
+                // addresses are ours) and the client interface.
+                tokio::spawn(roam_loop(
+                    claims.clone(),
+                    self_id_str.clone(),
+                    client_iface.clone(),
+                ));
+
                 // Control API (S3.1, bead e21.2.5): needs `sync` for the immediate
                 // publish/unpublish gossip broadcast (FR25), so — like the tasks
                 // above — it's only started once gossip subscribe succeeds. A
@@ -2135,6 +2147,7 @@ async fn claim_and_publish<T: GossipTransport>(
         }
         assign_client_addr(net, client_iface).await;
         reconcile_client_uci(net).await;
+        reconcile_portal_dns(net).await;
         *gateway.write().expect("gateway handle poisoned") = Some(client_gateway_addr(net));
         return;
     }
@@ -2177,6 +2190,7 @@ async fn claim_and_publish<T: GossipTransport>(
     // /24 is delivered on-link (mjolnir-mesh-e4r, supersedes the df4 gateway route).
     assign_client_addr(net, client_iface).await;
     reconcile_client_uci(net).await;
+    reconcile_portal_dns(net).await;
     *gateway.write().expect("gateway handle poisoned") = Some(client_gateway_addr(net));
 }
 
@@ -3297,6 +3311,183 @@ async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
         }
     }
 }
+
+// --- roaming: mobility /32s for clients that kept another node's address ----
+// (mjolnir-mesh-sz9; the mechanism and the flap guard live in `roam.rs`)
+
+/// Reconcile cadence for roamed-client host routes. Faster than
+/// [`RADIO_INTERVAL`] because this is the roam-latency path: it bounds how long
+/// inbound traffic to a just-arrived client keeps following the stale route.
+const ROAM_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Enable proxy ARP (and loosen reverse-path filtering) on the client bridge —
+/// the half of roaming that makes *outbound* traffic work the instant a client
+/// associates, before any route has propagated.
+///
+/// - `proxy_arp=1`: answer a roamed client's ARP for its *home* gateway
+///   (`10.42.<home>.1`), which we reach over the mesh. Linux does not proxy-ARP
+///   when the route egresses the interface the request arrived on, so ARP among
+///   this node's own clients is unaffected.
+/// - `rp_filter=2` (loose): a guest's packets arrive with a source address that
+///   is not in our subnet. Under strict RPF the kernel drops them in the window
+///   before the `/32` is installed; loose mode accepts anything we have *a*
+///   route back to.
+///
+/// Best-effort and OpenWrt/Linux-only: a missing `/proc` entry (non-Linux, or a
+/// bridge that does not exist yet) is logged at debug, never fatal.
+#[cfg(target_os = "linux")]
+fn enable_roam_sysctls(client_iface: &str) {
+    for (knob, value) in [("proxy_arp", "1"), ("rp_filter", "2")] {
+        let path = format!("/proc/sys/net/ipv4/conf/{client_iface}/{knob}");
+        match std::fs::write(&path, value) {
+            Ok(()) => info!(iface = client_iface, knob, value, "roaming: sysctl set"),
+            Err(e) => debug!(path, "roaming: could not set sysctl (non-fatal): {e}"),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enable_roam_sysctls(_client_iface: &str) {}
+
+/// Collect the association + neighbour evidence one reconcile tick needs.
+/// Shells out to `ip` and `iw`, so it runs on a blocking thread.
+#[cfg(target_os = "linux")]
+fn collect_roam_evidence(client_iface: &str) -> (Vec<mjolnir_mesh::roam::Neighbour>, HashSet<String>) {
+    use std::process::Command;
+    let run = |cmd: &str, args: &[&str]| -> String {
+        Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let neighbours =
+        mjolnir_mesh::roam::parse_ip_neigh(&run("ip", &["-4", "neigh", "show", "dev", client_iface]));
+    let associated = mjolnir_mesh::roam::parse_ap_ifaces(&run("iw", &["dev"]))
+        .iter()
+        .flat_map(|ap| {
+            mjolnir_mesh::roam::parse_associated_macs(&run("iw", &["dev", ap, "station", "dump"]))
+        })
+        .collect();
+    (neighbours, associated)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn collect_roam_evidence(_client_iface: &str) -> (Vec<mjolnir_mesh::roam::Neighbour>, HashSet<String>) {
+    (Vec::new(), HashSet::new())
+}
+
+/// Install or withdraw one mobility `/32`. Stamped with
+/// [`MOBILITY_ROUTE_PROTO`](mjolnir_mesh::roam::MOBILITY_ROUTE_PROTO) so babeld's
+/// static `redistribute proto` line picks it up and nothing else on the box is
+/// mistaken for one. Returns true on success.
+#[cfg(target_os = "linux")]
+async fn apply_mobility_route(add: bool, guest: Ipv4Addr, client_iface: &str) -> bool {
+    use tokio::process::Command;
+    let proto = mjolnir_mesh::roam::MOBILITY_ROUTE_PROTO.to_string();
+    let dst = format!("{guest}/32");
+    let verb = if add { "replace" } else { "del" };
+    let out = Command::new("ip")
+        .args(["route", verb, &dst, "dev", client_iface, "proto", &proto])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => {
+            info!(%guest, iface = client_iface, add, "roaming: mobility /32 reconciled");
+            true
+        }
+        Ok(o) => {
+            warn!(%guest, add, "roaming: ip route {verb} failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+            false
+        }
+        Err(e) => {
+            warn!(%guest, add, "roaming: could not run ip route {verb}: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn apply_mobility_route(_add: bool, _guest: Ipv4Addr, _client_iface: &str) -> bool {
+    false
+}
+
+/// Roaming loop (mjolnir-mesh-sz9): every [`ROAM_INTERVAL`], hold a `/32` for
+/// each client that is attached to *this* node while carrying an address some
+/// other node vended, so inbound traffic follows it across a roam without the
+/// client ever renumbering.
+///
+/// The installed set is tracked in memory rather than read back from the kernel:
+/// it is the set *we* are responsible for, and rebuilding it from `ip route`
+/// would also sweep up a stale `/32` left by a previous process — which the
+/// startup flush below removes deliberately instead. A route whose `ip` call
+/// fails is left out of the tracked set, so the next tick retries it.
+async fn roam_loop(store: ClaimStore, self_id: String, client_iface: String) {
+    enable_roam_sysctls(&client_iface);
+    // A /32 that outlived the process it was installed by would keep pulling a
+    // client's traffic here after it left. Start from a clean slate.
+    flush_mobility_routes(&client_iface).await;
+
+    let mesh_space = alloc::DEFAULT_MESH_SPACE;
+    let mut installed: BTreeSet<Ipv4Addr> = BTreeSet::new();
+    let mut ticker = tokio::time::interval(ROAM_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let own_subnet = {
+            let s = store.lock().expect("claim store poisoned");
+            partition_claims(&s, &self_id).0.map(|(net, _)| net)
+        };
+        let iface = client_iface.clone();
+        let evidence = tokio::task::spawn_blocking(move || collect_roam_evidence(&iface)).await;
+        let (neighbours, associated) = match evidence {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("roaming: evidence collector task failed: {e}");
+                continue;
+            }
+        };
+        let desired = mjolnir_mesh::roam::guest_routes(&mjolnir_mesh::roam::RoamInputs {
+            own_subnet,
+            mesh_space,
+            neighbours: &neighbours,
+            associated: &associated,
+        });
+        let (add, del) = mjolnir_mesh::roam::route_delta(&installed, &desired);
+        for guest in add {
+            if apply_mobility_route(true, guest, &client_iface).await {
+                installed.insert(guest);
+            }
+        }
+        for guest in del {
+            if apply_mobility_route(false, guest, &client_iface).await {
+                installed.remove(&guest);
+            }
+        }
+    }
+}
+
+/// Drop every mobility `/32` on the client interface. Run once at loop start so
+/// routes orphaned by a crash or restart cannot black-hole a client that has
+/// since moved on. Safe because the protocol number is exclusively ours.
+#[cfg(target_os = "linux")]
+async fn flush_mobility_routes(client_iface: &str) {
+    use tokio::process::Command;
+    let proto = mjolnir_mesh::roam::MOBILITY_ROUTE_PROTO.to_string();
+    let out = Command::new("ip")
+        .args(["route", "flush", "proto", &proto, "dev", client_iface])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => debug!(iface = client_iface, "roaming: flushed stale mobility routes"),
+        Ok(o) => debug!("roaming: mobility flush failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Err(e) => debug!("roaming: could not run mobility flush: {e}"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn flush_mobility_routes(_client_iface: &str) {}
 
 /// Apply an inbound service CRDT message to the directory. Returns the
 /// `(name, entry)` newly inserted or updated (so the caller can persist and
@@ -5478,6 +5669,161 @@ async fn reconcile_client_uci(subnet: Ipv4Net) {
 
 #[cfg(not(target_os = "linux"))]
 async fn reconcile_client_uci(_subnet: Ipv4Net) {}
+
+/// Domains every client OS fetches on join to decide whether the network is
+/// open. Pointing them at this node's front desk is what makes a phone OPEN
+/// its captive-portal sheet — the one surface that tells a stranger
+/// `hello.mesh` exists without them going looking for it (bead a0u).
+///
+/// This redirects DNS for these seven names ONLY; no traffic is blocked and
+/// nothing else is intercepted. `mjolnir-hello` answers them with the portal
+/// page, which carries an explicit pass-through — and once a client takes it,
+/// hello serves that client the genuine success payload instead, so the OS
+/// marks the network connected and never asks again.
+const CAPTIVE_PROBE_DOMAINS: &[&str] = &[
+    "captive.apple.com",             // iOS / macOS
+    "connectivitycheck.gstatic.com", // Android
+    "connectivitycheck.android.com", // Android (older)
+    "clients3.google.com",           // Android generate_204
+    "www.msftconnecttest.com",       // Windows
+    "www.msftncsi.com",              // Windows NCSI
+    "detectportal.firefox.com",      // Firefox
+];
+
+/// UCI flag that disables the probe interception: `mjolnir.hello.portal=0`.
+/// A venue kill switch — `uci set mjolnir.hello.portal=0` on a node, restart
+/// meshd, and that node stops answering probes without a rebuild or redeploy.
+const PORTAL_UCI_OPTION: &str = "mjolnir.hello.portal";
+
+/// The dnsmasq `address=` entries that point the probe domains at `gw`.
+fn portal_dns_entries(gw: Ipv4Addr) -> Vec<String> {
+    CAPTIVE_PROBE_DOMAINS
+        .iter()
+        .map(|domain| format!("/{domain}/{gw}"))
+        .collect()
+}
+
+/// Plan the `dhcp.@dnsmasq[0].address` edit as `(to_delete, to_add)`.
+///
+/// Pure, so it's unit-tested below. Two jobs beyond adding what's missing:
+/// (1) when `enabled` is false, every probe entry we own is removed — the kill
+/// switch has to actually un-wire a node, not just stop adding; (2) a probe
+/// entry pointing at the WRONG address is deleted, which is what makes this
+/// self-heal after a subnet re-derivation. That second case is not theoretical:
+/// bead 2dk is the same failure shape — a node lost a subnet collision, its
+/// gateway moved, and a stale address kept answering for a gateway it no longer
+/// had. Entries for domains we don't own are never touched.
+fn portal_dns_plan(current: &str, gw: Ipv4Addr, enabled: bool) -> (Vec<String>, Vec<String>) {
+    let existing: Vec<&str> = current.split_whitespace().collect();
+    let wanted = portal_dns_entries(gw);
+
+    // Ours = any entry whose domain is one we manage, whatever it points at.
+    let owned = |entry: &str| {
+        CAPTIVE_PROBE_DOMAINS
+            .iter()
+            .any(|d| entry.starts_with(&format!("/{d}/")))
+    };
+
+    let to_delete: Vec<String> = existing
+        .iter()
+        .filter(|e| owned(e) && (!enabled || !wanted.iter().any(|w| w == *e)))
+        .map(|e| e.to_string())
+        .collect();
+
+    let to_add: Vec<String> = if enabled {
+        wanted
+            .into_iter()
+            .filter(|w| !existing.contains(&w.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    (to_delete, to_add)
+}
+
+/// Point the client-OS probe domains at this node's front desk so joining the
+/// mesh surfaces `hello.mesh` on its own (bead a0u).
+///
+/// Runs on every claim publish alongside [`reconcile_client_uci`], so a node
+/// that re-derives its subnet re-points these at the new gateway rather than
+/// stranding them on the old one. Best-effort and OpenWrt-only, same contract
+/// as its siblings: silent skip when `uci`/dnsmasq is absent, generous timeout,
+/// never fatal — a node with no portal still routes.
+#[cfg(target_os = "linux")]
+async fn reconcile_portal_dns(subnet: Ipv4Net) {
+    use tokio::process::Command;
+    let gw = Ipv4Addr::from(u32::from(subnet.network()) + 1);
+
+    // No uci binary / no dnsmasq section → not OpenWrt; nothing to own.
+    match Command::new("uci")
+        .args(["-q", "get", "dhcp.@dnsmasq[0]"])
+        .output()
+        .await
+    {
+        Err(_) => return,
+        Ok(out) if !out.status.success() => return,
+        Ok(_) => {}
+    }
+
+    // Kill switch: absent/unset means enabled (the default is to greet).
+    let enabled = Command::new("uci")
+        .args(["-q", "get", PORTAL_UCI_OPTION])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .is_none_or(|v| v != "0");
+
+    let current = Command::new("uci")
+        .args(["-q", "get", "dhcp.@dnsmasq[0].address"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let (to_delete, to_add) = portal_dns_plan(&current, gw, enabled);
+    if to_delete.is_empty() && to_add.is_empty() {
+        return;
+    }
+    info!(
+        %gw, enabled, del = to_delete.len(), add = to_add.len(),
+        "reconciling captive-portal probe DNS (a0u)"
+    );
+
+    let mut script = String::new();
+    for entry in &to_delete {
+        script.push_str(&format!(
+            "uci del_list dhcp.@dnsmasq[0].address='{entry}'; "
+        ));
+    }
+    for entry in &to_add {
+        script.push_str(&format!(
+            "uci add_list dhcp.@dnsmasq[0].address='{entry}'; "
+        ));
+    }
+    script.push_str("uci commit dhcp && /etc/init.d/dnsmasq restart");
+
+    let run = Command::new("sh").args(["-c", &script]).output();
+    match tokio::time::timeout(Duration::from_secs(30), run).await {
+        Ok(Ok(out)) if out.status.success() => {
+            info!(%gw, enabled, "captive-portal probe DNS reconciled")
+        }
+        Ok(Ok(out)) => warn!(
+            %gw,
+            "captive-portal probe DNS reconcile failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Ok(Err(e)) => warn!(%gw, "captive-portal probe DNS reconcile could not run: {e}"),
+        Err(_) => warn!(%gw, "captive-portal probe DNS reconcile timed out after 30s"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn reconcile_portal_dns(_subnet: Ipv4Net) {}
 
 /// dnsmasq `server=` line that forwards the `.mesh` zone to the local
 /// responder (FR9/FR14, bc7 seam contract).
@@ -7778,7 +8124,11 @@ config meshd 'meshd'
             ""
         ));
         // Only option 114 present, DNS lines missing.
-        assert!(!dnsmasq_uci_is_current("", "114,http://hello.mesh/api/captive-portal", ""));
+        assert!(!dnsmasq_uci_is_current(
+            "",
+            "114,http://hello.mesh/api/captive-portal",
+            ""
+        ));
     }
 
     #[test]
@@ -7849,6 +8199,68 @@ config meshd 'meshd'
             "114,http://hello.mesh/api/captive-portal 114,http://hello.mesh/api/captive-portal",
             "/mesh/ /mesh/"
         ));
+    }
+
+    #[test]
+    fn portal_dns_adds_every_probe_domain_on_a_bare_node() {
+        let gw: Ipv4Addr = "10.42.12.1".parse().unwrap();
+        let (del, add) = portal_dns_plan("", gw, true);
+        assert!(del.is_empty());
+        assert_eq!(add.len(), CAPTIVE_PROBE_DOMAINS.len());
+        assert!(add.contains(&"/captive.apple.com/10.42.12.1".to_string()));
+        assert!(add.contains(&"/connectivitycheck.gstatic.com/10.42.12.1".to_string()));
+    }
+
+    #[test]
+    fn portal_dns_is_idempotent_once_wired() {
+        let gw: Ipv4Addr = "10.42.12.1".parse().unwrap();
+        let current = portal_dns_entries(gw).join(" ");
+        let (del, add) = portal_dns_plan(&current, gw, true);
+        assert!(del.is_empty(), "no churn on a converged node");
+        assert!(add.is_empty(), "no churn on a converged node");
+    }
+
+    /// The 2dk failure shape: the node's gateway moved after losing a subnet
+    /// collision. Stale entries must be retired, not left answering for an
+    /// address this node no longer holds.
+    #[test]
+    fn portal_dns_repoints_after_a_subnet_rederivation() {
+        let old_gw: Ipv4Addr = "10.42.242.1".parse().unwrap();
+        let new_gw: Ipv4Addr = "10.42.243.1".parse().unwrap();
+        let current = portal_dns_entries(old_gw).join(" ");
+
+        let (del, add) = portal_dns_plan(&current, new_gw, true);
+        assert_eq!(del.len(), CAPTIVE_PROBE_DOMAINS.len(), "old gw retired");
+        assert_eq!(add.len(), CAPTIVE_PROBE_DOMAINS.len(), "new gw wired");
+        assert!(del.iter().all(|e| e.ends_with("/10.42.242.1")));
+        assert!(add.iter().all(|e| e.ends_with("/10.42.243.1")));
+    }
+
+    /// `uci set mjolnir.hello.portal=0` must actually UN-wire a node, not just
+    /// stop adding — otherwise the venue kill switch does nothing to a node
+    /// that is already intercepting.
+    #[test]
+    fn portal_dns_kill_switch_removes_existing_entries() {
+        let gw: Ipv4Addr = "10.42.12.1".parse().unwrap();
+        let current = portal_dns_entries(gw).join(" ");
+        let (del, add) = portal_dns_plan(&current, gw, false);
+        assert_eq!(del.len(), CAPTIVE_PROBE_DOMAINS.len());
+        assert!(add.is_empty());
+    }
+
+    /// Unrelated `address=` entries an operator set by hand are not ours to
+    /// delete.
+    #[test]
+    fn portal_dns_leaves_foreign_address_entries_alone() {
+        let gw: Ipv4Addr = "10.42.12.1".parse().unwrap();
+        let current = "/printer.local/10.42.12.9 /ads.example.com/0.0.0.0";
+        let (del, add) = portal_dns_plan(current, gw, true);
+        assert!(del.is_empty(), "foreign entries must survive: {del:?}");
+        assert_eq!(add.len(), CAPTIVE_PROBE_DOMAINS.len());
+
+        // ...and the kill switch must not touch them either.
+        let (del, _) = portal_dns_plan(current, gw, false);
+        assert!(del.is_empty());
     }
 
     #[tokio::test]
@@ -8458,7 +8870,10 @@ config meshd 'meshd'
 
         let mut node_name_book = NodeNameBook::new();
         node_name_book.insert("self".to_string(), node_name_entry("self", "attic", 100));
-        node_name_book.insert("peer-a".to_string(), node_name_entry("peer-a", "garage", 100));
+        node_name_book.insert(
+            "peer-a".to_string(),
+            node_name_entry("peer-a", "garage", 100),
+        );
 
         let snapshot = build_directory_snapshot(
             &claims,
@@ -8541,7 +8956,10 @@ config meshd 'meshd'
     #[test]
     fn apply_node_name_message_lww_drops_stale() {
         let mut book = NodeNameBook::new();
-        book.insert("peer-a".to_string(), node_name_entry("peer-a", "garage", 200));
+        book.insert(
+            "peer-a".to_string(),
+            node_name_entry("peer-a", "garage", 200),
+        );
         // An older announcement for the same node loses to LWW and is ignored.
         let stale = GossipMessage::NodeNameAnnounce {
             node_id: "peer-a".to_string(),
@@ -9253,7 +9671,11 @@ config meshd 'meshd'
         assert_eq!(proto("weird"), "_tcp");
         // The owner short-pubkey still rides in txt regardless of scheme.
         assert_eq!(
-            services.iter().find(|s| s.name == "walkie-talkie").unwrap().txt["owner"],
+            services
+                .iter()
+                .find(|s| s.name == "walkie-talkie")
+                .unwrap()
+                .txt["owner"],
             short_pubkey(&"aa".repeat(32))
         );
     }
@@ -9266,7 +9688,10 @@ config meshd 'meshd'
         let mut book = LeasedNameBook::new();
         book.insert("fresh".to_string(), leased(Some("https"), now));
         let stale_ms = mjolnir_mesh::dns_responder::LEASED_NAME_RESOLVE_STALE_MS;
-        book.insert("stale".to_string(), leased(Some("https"), now - stale_ms - 1));
+        book.insert(
+            "stale".to_string(),
+            leased(Some("https"), now - stale_ms - 1),
+        );
         let names: Vec<_> = leased_directory_services(&book, now)
             .into_iter()
             .map(|s| s.name)

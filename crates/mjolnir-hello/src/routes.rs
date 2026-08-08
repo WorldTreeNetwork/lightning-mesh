@@ -18,6 +18,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{INDEX_HTML, StaticAssets};
+use crate::portal::{self, PORTAL_HTML, PortalReleases, Probe};
 
 /// How long an issued challenge remains redeemable.
 const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -281,20 +282,64 @@ fn health() -> RouteResponse {
     RouteResponse::json(200, r#"{"status":"ok"}"#)
 }
 
-/// `GET /api/captive-portal` — RFC 8908 CAPPORT API response (bead
-/// mjolnir-mesh-5eo). `captive` is always `false`: the mesh never gates
-/// traffic, so this is purely a venue-info banner to get phones to surface
-/// the hello page (never a walled garden).
+/// `GET /api/captive-portal` — RFC 8908 CAPPORT API response (beads
+/// mjolnir-mesh-5eo, a0u), advertised via DHCP option 114.
 ///
-/// Deployment wiring (follow-up, not this bead): a node must advertise this
-/// endpoint via DHCP option 114 (uci: `dhcp option '114,http://10.42.<x>.1/api/captive-portal'`)
-/// and/or IPv6 RA CAPPORT option so client OSes discover it automatically.
-fn captive_portal() -> RouteResponse {
+/// `captive` is `true` only while THIS client still has the greeting pending,
+/// and flips to `false` the moment they take the pass-through. That is an
+/// honest use of the field rather than a gate: RFC 8908 `captive:true` means
+/// "there is a portal interaction outstanding", which is exactly true — the
+/// mesh still never blocks a packet either way. Modern iOS/Android read this
+/// directly and surface a tappable "Sign in to network" banner; older clients
+/// fall back to the probe interception in [`crate::portal`].
+fn captive_portal(releases: &PortalReleases, client_ip: Option<IpAddr>) -> RouteResponse {
+    let captive = !portal::is_released(releases, client_ip);
     RouteResponse::json_typed(
         200,
         "application/captive+json",
-        r#"{"captive":false,"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}"#,
+        format!(
+            r#"{{"captive":{captive},"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}}"#
+        ),
     )
+}
+
+/// `POST /api/portal/pass` — take the pass-through (bead a0u).
+///
+/// Records this client as released so every subsequent probe gets the genuine
+/// OS success payload and the sheet stops appearing. Returns 200 even when the
+/// client address is unknown: the page's only job afterwards is to re-trigger
+/// the OS probe, and failing that call closed would strand the user in a sheet
+/// they explicitly asked to leave.
+fn portal_pass(releases: &PortalReleases, client_ip: Option<IpAddr>) -> RouteResponse {
+    if let Some(ip) = client_ip {
+        portal::release(releases, ip);
+    } else {
+        tracing::warn!("portal pass-through with no client address — cannot record release");
+    }
+    RouteResponse::json(200, r#"{"released":true}"#)
+}
+
+/// Answer a client-OS connectivity probe (bead a0u).
+///
+/// Released clients get the byte-exact payload their OS expects from an open
+/// network, so it marks the mesh connected. Everyone else gets the portal page,
+/// which is what makes the OS open its captive-portal sheet — the one surface
+/// that shows a stranger `hello.mesh` exists without them going looking.
+fn probe_response(
+    probe: Probe,
+    releases: &PortalReleases,
+    client_ip: Option<IpAddr>,
+) -> RouteResponse {
+    if portal::is_released(releases, client_ip) {
+        let (status, content_type, body) = probe.success();
+        return RouteResponse {
+            status,
+            content_type,
+            body: body.to_vec(),
+            cors: false,
+        };
+    }
+    RouteResponse::html(200, PORTAL_HTML.as_bytes().to_vec())
 }
 
 /// `GET /api/directory` — serve `directory.json` verbatim (cached, last-good
@@ -560,7 +605,8 @@ fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path)
 /// `body` is the raw request body (only consulted for `POST` handlers).
 /// `challenges` and `spool_dir` are the S4 identity-ceremony seams.
 /// `directory_cache` and `directory_file` are the S3 read-only mesh-state
-/// seams.
+/// seams. `releases` and `client_ip` are the captive-portal pass-through seam
+/// (bead a0u): which client asked, and whether it already opted out.
 #[allow(clippy::too_many_arguments)]
 pub fn route(
     method: &str,
@@ -573,12 +619,29 @@ pub fn route(
     directory_file: &Path,
     radio_cache: &RadioCache,
     radio_file: &Path,
+    releases: &PortalReleases,
+    client_ip: Option<IpAddr>,
 ) -> RouteResponse {
+    // Client-OS connectivity probes (bead a0u). Checked BEFORE the route table
+    // so a probe path can never be shadowed by the SPA static fallback, which
+    // would answer with the bundle's index.html and leave the OS guessing.
+    if method == "GET"
+        && let Some(probe) = Probe::for_path(path)
+    {
+        return probe_response(probe, releases, client_ip);
+    }
+
     let mut resp = match (method, path) {
         ("GET", "/api/health") => health(),
 
-        // RFC 8908 CAPPORT API (mjolnir-mesh-5eo): venue-info banner, never gates traffic.
-        ("GET", "/api/captive-portal") => captive_portal(),
+        // RFC 8908 CAPPORT API (mjolnir-mesh-5eo): the standards-track banner.
+        // `captive` reflects whether THIS client still has the portal pending.
+        ("GET", "/api/captive-portal") => captive_portal(releases, client_ip),
+
+        // Pass-through: the escape hatch that keeps this from being a walled
+        // garden (bead a0u). Idempotent, and deliberately unauthenticated —
+        // opting OUT of a greeting must never itself require an identity.
+        ("POST", "/api/portal/pass") => portal_pass(releases, client_ip),
 
         // --- S3 (mjolnir-mesh-11l): read-only mesh state ---------------
         ("GET", "/api/directory") => directory(directory_cache, directory_file),
@@ -613,6 +676,7 @@ pub fn route(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portal::new_portal_releases;
     use ed25519_dalek::{Signer, SigningKey};
 
     /// Empty challenge store + throwaway spool dir, for tests that don't
@@ -647,6 +711,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "application/json");
@@ -667,6 +733,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "text/html; charset=utf-8");
@@ -690,6 +758,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "text/html; charset=utf-8");
@@ -728,6 +798,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 404);
     }
@@ -748,6 +820,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         let body = String::from_utf8(resp.body).unwrap();
@@ -771,6 +845,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(challenge_resp.status, 200);
         let challenge_json: serde_json::Value =
@@ -795,6 +871,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
 
@@ -816,6 +894,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(replay.status, 400);
     }
@@ -838,6 +918,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         let challenge_json: serde_json::Value =
             serde_json::from_slice(&challenge_resp.body).unwrap();
@@ -862,6 +944,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 400);
         assert!(
@@ -887,6 +971,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         let challenge_json: serde_json::Value =
             serde_json::from_slice(&challenge_resp.body).unwrap();
@@ -910,6 +996,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(first.status, 200);
 
@@ -924,6 +1012,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(second.status, 400);
     }
@@ -953,6 +1043,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 400);
         assert!(std::fs::read_dir(spool.path()).unwrap().next().is_none());
@@ -984,6 +1076,8 @@ mod tests {
             &directory_path,
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "application/json");
@@ -1011,6 +1105,8 @@ mod tests {
             &missing_path,
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(
@@ -1037,6 +1133,8 @@ mod tests {
             &directory_path,
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
@@ -1061,6 +1159,8 @@ mod tests {
             &missing_path,
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, b"{}".to_vec());
@@ -1096,6 +1196,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             &radio_path,
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "application/json");
@@ -1123,6 +1225,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             &missing_path,
+            &new_portal_releases(),
+            None,
         );
         assert_eq!(resp.status, 200);
         // Empty-but-valid v1 radio doc.
@@ -1147,6 +1251,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         )
     }
 
@@ -1168,9 +1274,11 @@ mod tests {
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "application/captive+json");
 
-        let value: serde_json::Value = serde_json::from_slice(&resp.body)
-            .expect("captive-portal body must be valid JSON");
-        assert_eq!(value["captive"], serde_json::json!(false));
+        let value: serde_json::Value =
+            serde_json::from_slice(&resp.body).expect("captive-portal body must be valid JSON");
+        // A client that hasn't taken the pass-through still has a portal
+        // interaction outstanding, which is what RFC 8908 `captive` means.
+        assert_eq!(value["captive"], serde_json::json!(true));
         assert_eq!(
             value["user-portal-url"],
             serde_json::json!("http://hello.mesh/")
@@ -1179,6 +1287,105 @@ mod tests {
             value["venue-info-url"],
             serde_json::json!("http://hello.mesh/")
         );
+    }
+
+    /// Full pass-through round trip on ONE store (bead a0u): greeted first,
+    /// then released, and every surface has to agree afterwards.
+    #[test]
+    fn pass_through_flips_capport_and_frees_the_probe() {
+        let (challenges, spool) = no_state();
+        let releases = new_portal_releases();
+        let client: IpAddr = "10.42.12.77".parse().unwrap();
+
+        let call = |method: &str, path: &str| {
+            route(
+                method,
+                path,
+                None,
+                b"",
+                &challenges,
+                spool.path(),
+                &DirectoryCache::new(),
+                Path::new("/nonexistent"),
+                &RadioCache::new(),
+                Path::new("/nonexistent"),
+                &releases,
+                Some(client),
+            )
+        };
+
+        // Before: the probe gets the portal, and CAPPORT says a portal is due.
+        let probe = call("GET", "/hotspot-detect.html");
+        assert_eq!(probe.status, 200);
+        assert!(String::from_utf8_lossy(&probe.body).contains("Take me to the internet"));
+        let capport: serde_json::Value =
+            serde_json::from_slice(&call("GET", "/api/captive-portal").body).unwrap();
+        assert_eq!(capport["captive"], serde_json::json!(true));
+
+        assert_eq!(call("POST", "/api/portal/pass").status, 200);
+
+        // After: the OS gets its byte-exact success payload and stops asking.
+        let probe = call("GET", "/hotspot-detect.html");
+        assert_eq!(probe.status, 200);
+        assert_eq!(
+            probe.body,
+            b"<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>".to_vec()
+        );
+        assert_eq!(call("GET", "/generate_204").status, 204);
+        let capport: serde_json::Value =
+            serde_json::from_slice(&call("GET", "/api/captive-portal").body).unwrap();
+        assert_eq!(capport["captive"], serde_json::json!(false));
+    }
+
+    /// The probe paths must be matched BEFORE the SPA static fallback, or the
+    /// OS gets the SvelteKit bundle instead of the portal and the sheet is a
+    /// blank page.
+    #[test]
+    fn probe_paths_are_not_shadowed_by_the_spa_fallback() {
+        for path in [
+            "/hotspot-detect.html",
+            "/generate_204",
+            "/connecttest.txt",
+            "/ncsi.txt",
+            "/success.txt",
+        ] {
+            let body = String::from_utf8_lossy(&route_for("GET", path).body).to_string();
+            assert!(
+                body.contains("Lightning Mesh"),
+                "{path} did not serve the portal page"
+            );
+        }
+    }
+
+    /// One client's pass-through must not silence the greeting for the next
+    /// person who joins the same node.
+    #[test]
+    fn pass_through_is_scoped_to_the_client_that_took_it() {
+        let (challenges, spool) = no_state();
+        let releases = new_portal_releases();
+
+        let call = |path: &str, ip: &str| {
+            route(
+                "GET",
+                path,
+                None,
+                b"",
+                &challenges,
+                spool.path(),
+                &DirectoryCache::new(),
+                Path::new("/nonexistent"),
+                &RadioCache::new(),
+                Path::new("/nonexistent"),
+                &releases,
+                Some(ip.parse().unwrap()),
+            )
+        };
+
+        portal::release(&releases, "10.42.12.10".parse().unwrap());
+        assert_eq!(call("/generate_204", "10.42.12.10").status, 204);
+
+        let other = call("/hotspot-detect.html", "10.42.12.11");
+        assert!(String::from_utf8_lossy(&other.body).contains("Lightning Mesh"));
     }
 
     #[test]
@@ -1205,6 +1412,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         );
         let json: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         json["challenge"].as_str().unwrap().to_string()
@@ -1222,6 +1431,8 @@ mod tests {
             Path::new("/nonexistent"),
             &RadioCache::new(),
             Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
         )
     }
 
@@ -1232,24 +1443,42 @@ mod tests {
         let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
 
         let challenge_hex = fresh_challenge(&challenges, spool.path());
-        let sig = key.sign(&name_claim_signing_message(&challenge_hex, "walkie-talkie", 3000));
+        let sig = key.sign(&name_claim_signing_message(
+            &challenge_hex,
+            "walkie-talkie",
+            3000,
+        ));
         let sig_hex = HEXLOWER.encode(&sig.to_bytes());
         let body = format!(
             r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000,"ip":"10.42.5.23"}}"#
         );
 
         let resp = post_name_claim(&challenges, spool.path(), &body);
-        assert_eq!(resp.status, 200, "body: {}", String::from_utf8_lossy(&resp.body));
+        assert_eq!(
+            resp.status,
+            200,
+            "body: {}",
+            String::from_utf8_lossy(&resp.body)
+        );
 
         // Spooled under names/ (NOT the top-level dir the identity sweep globs).
-        let spooled = spool.path().join("names").join(format!("{pubkey_hex}.json"));
+        let spooled = spool
+            .path()
+            .join("names")
+            .join(format!("{pubkey_hex}.json"));
         assert!(spooled.exists(), "expected name-claim at {spooled:?}");
         let rec: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&spooled).unwrap()).unwrap();
         assert_eq!(rec["name"], "walkie-talkie");
         assert_eq!(rec["port"], 3000);
-        assert_eq!(rec["ip"], "10.42.5.23", "self-reported target IP must be carried to meshd");
-        assert_eq!(rec["sig"], sig_hex, "signature must be carried for mesh-wide verify");
+        assert_eq!(
+            rec["ip"], "10.42.5.23",
+            "self-reported target IP must be carried to meshd"
+        );
+        assert_eq!(
+            rec["sig"], sig_hex,
+            "signature must be carried for mesh-wide verify"
+        );
 
         // Single-use nonce: replaying the exact same claim now fails.
         let replay = post_name_claim(&challenges, spool.path(), &body);
@@ -1265,7 +1494,11 @@ mod tests {
         let challenge_hex = fresh_challenge(&challenges, spool.path());
         // Sign the RIGHT name but claim a DIFFERENT one — a MITM rebinding the
         // name must not verify.
-        let sig = key.sign(&name_claim_signing_message(&challenge_hex, "walkie-talkie", 3000));
+        let sig = key.sign(&name_claim_signing_message(
+            &challenge_hex,
+            "walkie-talkie",
+            3000,
+        ));
         let sig_hex = HEXLOWER.encode(&sig.to_bytes());
         let body = format!(
             r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"impostor","port":3000}}"#
@@ -1273,7 +1506,13 @@ mod tests {
 
         let resp = post_name_claim(&challenges, spool.path(), &body);
         assert_eq!(resp.status, 400);
-        assert!(!spool.path().join("names").join(format!("{pubkey_hex}.json")).exists());
+        assert!(
+            !spool
+                .path()
+                .join("names")
+                .join(format!("{pubkey_hex}.json"))
+                .exists()
+        );
     }
 
     #[test]
@@ -1293,7 +1532,10 @@ mod tests {
         );
 
         let resp = post_name_claim(&challenges, spool.path(), &body);
-        assert_eq!(resp.status, 400, "identity signature must not satisfy a name claim");
+        assert_eq!(
+            resp.status, 400,
+            "identity signature must not satisfy a name claim"
+        );
     }
 
     #[test]
@@ -1307,7 +1549,10 @@ mod tests {
         let body = format!(
             r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"hello"}}"#
         );
-        assert_eq!(post_name_claim(&challenges, spool.path(), &body).status, 400);
+        assert_eq!(
+            post_name_claim(&challenges, spool.path(), &body).status,
+            400
+        );
     }
 
     #[test]

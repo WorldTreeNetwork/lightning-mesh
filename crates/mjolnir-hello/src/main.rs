@@ -16,6 +16,7 @@
 
 mod assets;
 mod config;
+mod portal;
 mod routes;
 
 use clap::Parser;
@@ -23,6 +24,7 @@ use tiny_http::{Header, Response, Server};
 use tracing::info;
 
 use config::Config;
+use portal::new_portal_releases;
 use routes::{DirectoryCache, RadioCache, new_challenge_store, route};
 
 fn main() {
@@ -32,6 +34,7 @@ fn main() {
     let challenges = new_challenge_store();
     let directory_cache = DirectoryCache::new();
     let radio_cache = RadioCache::new();
+    let releases = new_portal_releases();
 
     let server = Server::http(&config.bind).unwrap_or_else(|err| {
         panic!("failed to bind {}: {err}", config.bind);
@@ -41,6 +44,10 @@ fn main() {
     for mut request in server.incoming_requests() {
         let method = request.method().as_str().to_string();
         let url = request.url().to_string();
+        // Which client is asking — the key the captive-portal pass-through is
+        // recorded against (bead a0u). Clients are on this node's own /24, so
+        // the peer address is the client; there is no proxy in front of us.
+        let client_ip = request.remote_addr().map(|addr| addr.ip());
 
         let mut body = Vec::new();
         if let Err(err) = request.as_reader().read_to_end(&mut body) {
@@ -58,6 +65,8 @@ fn main() {
             &config.directory_file,
             &radio_cache,
             &config.radio_file,
+            &releases,
+            client_ip,
         );
 
         let content_type = Header::from_bytes(&b"Content-Type"[..], resp.content_type.as_bytes())
