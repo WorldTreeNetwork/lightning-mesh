@@ -15,7 +15,7 @@
 //! **This is not a walled garden.** The mesh never blocks traffic; meshd only
 //! points the probe DOMAINS at this node's front desk (dnsmasq `address=`), and
 //! this module answers them. The portal page carries an explicit pass-through
-//! ("take me to the internet" / "no thanks"), and once a client takes it, this
+//! ("just the internet, please"), and once a client takes it, this
 //! module serves that client the genuine success payload forever after, so the
 //! OS marks the network connected and stops asking. The portal's actual purpose
 //! is to offer the IdentiKey ceremony — an opt-in with a deliberately high bar
@@ -183,8 +183,7 @@ pub const PORTAL_HTML: &str = r##"<!doctype html>
       <p>Make an <strong>IdentiKey</strong>: a cryptographic identity you hold,
          that works here even with the internet unplugged.</p>
       <a class="btn primary" href="http://hello.mesh/">Create your IdentiKey</a>
-      <button id="pass" type="button">Take me to the internet</button>
-      <button id="nope" type="button">No thanks</button>
+      <button id="pass" type="button">Just the internet, please</button>
       <p class="sub">Nothing is blocked either way. You can come back any time
          at <strong>hello.mesh</strong>.</p>
     </div>
@@ -211,7 +210,6 @@ pub const PORTAL_HTML: &str = r##"<!doctype html>
     xhr.send('');
   }
   document.getElementById('pass').onclick = passThrough;
-  document.getElementById('nope').onclick = passThrough;
 })();
 </script>
 </body>
@@ -284,14 +282,14 @@ mod tests {
     }
 
     /// The page has to stand alone inside the OS mini-browser: no external
-    /// origins to fetch from, and both escape hatches present.
+    /// origins to fetch from, and the pass-through escape hatch present.
     #[test]
     fn portal_page_is_self_contained_and_offers_the_pass_through() {
         assert!(!PORTAL_HTML.contains("//cdn"));
         assert!(!PORTAL_HTML.contains("https://"));
         assert!(PORTAL_HTML.contains("/api/portal/pass"));
-        assert!(PORTAL_HTML.contains("Take me to the internet"));
-        assert!(PORTAL_HTML.contains("No thanks"));
+        assert!(PORTAL_HTML.contains("Just the internet, please"));
+        assert!(!PORTAL_HTML.contains("No thanks"));
         assert!(PORTAL_HTML.contains("http://hello.mesh/"));
     }
 }
