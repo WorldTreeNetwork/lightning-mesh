@@ -174,6 +174,26 @@ separate through the service-mesh pass (`e21`):
    answers with is reachable from the asker** — overlay-routed client subnets,
    site-scoped answers, or an iroh-native service proxy.
 
+### Appliances that are not routers (2026-08-24)
+
+An Edgebox, a Recrypt node, or a Mjolnir guest can use Iroh **without** running
+`mjolnir-meshd`, babeld, or 802.11s. Routers give you a radio fabric and a
+`.mesh` name. They are not what makes a NodeId findable.
+
+| Need | Without a Lightning router | What the mesh adds |
+|---|---|---|
+| Dial this peer | Iroh ticket, mDNS (LAN), PKARR / n0 discovery (WAN) | Same NodeId, plus a reachable overlay IP |
+| “There is a Recrypt here” | Publish ALPN + NodeId on an iroh-gossip topic; join via n0 relays | `ServiceEntry` v2 in the CRDT → `recrypt.mesh` |
+| Bind identity | `identikey-auth` `NodeAttestation` over that NodeId | Same attestation; mesh does not re-issue identity |
+
+Do not wait on `e21` to put a Recrypt endpoint on a box. Give the box an Iroh
+endpoint, attest it, put the ticket in the dashboard. When a mesh is present,
+the same NodeId is what `meshd publish` would announce. `.mesh` names are the
+upgrade, not the prerequisite.
+
+`add-iroh-blobs` (Mjolnir ADR 0003, not opened) is the *blob* working-set /
+transmit path — finding bytes by hash, not finding services. Different layer.
+
 ## Hardware options for open WiFi 6 mesh nodes (2026-06-23 survey)
 
 For *additional* open, mesh-capable nodes (the MikroTiks stay AP/STA-only). The
