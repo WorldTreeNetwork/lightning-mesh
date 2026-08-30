@@ -1,0 +1,51 @@
+:root {
+	--ink: #07110e;
+	--panel: #0d1814;
+	--panel-2: #12201b;
+	--line: #1c332b;
+	--line-strong: #2a4a3e;
+	--text: #d6ece3;
+	--muted: #7f9a8e;
+	--mint: #3ee0b0;
+	--mint-dim: #1b6f58;
+	--amber: #e6b84c;
+	--ok: #7dff9a;
+	--warn: #e0b35a;
+	--bad: #ef6f6c;
+	--row-hover: #163028;
+	--local-bg: #1a2410;
+	font-family: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+		monospace;
+	font-size: 13px;
+	line-height: 1.35;
+	color: var(--text);
+	background: var(--ink);
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	background: var(--ink);
+	color: var(--text);
+}
+
+button {
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+button:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
