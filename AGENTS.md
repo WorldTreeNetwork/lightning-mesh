@@ -90,6 +90,21 @@ Hardware bring-up / radio matching lives in
   babel `0.0.0.0/0` export — that node is the house gateway (`gateway=auto`).
 - Do not “fix” remaining diffs in the notes file unless asked.
 
+## Lightning Admin Windows build (morphist-win11)
+
+Recipe: [`admin/scripts/windows-build/README.md`](admin/scripts/windows-build/README.md).
+
+- Domain is libvirt `morphist-win11` (`sudo virsh start`), SSH alias `win11`
+  → `192.168.122.214` user `A`. Guest is often shut off. Wait for
+  `sudo virsh net-dhcp-leases default` before ssh.
+- Do **not** run Papyrus `provision-vm.sh` (quickemu / `localhost:22220`).
+- `admin/scripts/windows-build/release.sh` — `survey` / `smoke` / `bundle`
+  (MSI+NSIS → gitignored `admin/dist-windows/`). `bootstrap` is idempotent.
+- No scp. Fetch must strip the PowerShell SSH banner (marker in `release.sh`);
+  a raw `ssh | tar` is not a tar archive.
+- `git push` against the HTTPS origin prompts; push with
+  `git push git@github.com:WorldTreeNetwork/lightning-mesh.git HEAD:main`.
+
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally

@@ -58,7 +58,15 @@ cargo build --workspace          # Cargo workspace (crates/*)
 cargo test --workspace
 cargo clippy
 deploy/openwrt/build.sh          # cross-build static aarch64 mjolnir-meshd for routers
+# Windows MSI/NSIS for Lightning Admin: boot morphist-win11, then
+#   admin/scripts/windows-build/release.sh
+# (see AGENTS.md + admin/scripts/windows-build/README.md)
 ```
+
+On this host `target/` is often **root-owned** — `cargo test --workspace`
+fails with permission denied. Use `CARGO_TARGET_DIR=/tmp/lm-target` rather
+than `sudo cargo`. `admin/` is not a workspace member; its crate uses
+`admin/src-tauri/target`.
 
 ## Deploy (hello.mesh / fleet)
 
@@ -109,3 +117,6 @@ overlay (iroh + babeld + CRDT) is the product, the radio is plumbing**.
 - Disruptive node changes go through `mjolnir-apply` (snapshot → apply →
   health gate → rollback), never through a live SSH session doing the
   mutation inline.
+- Guest-client roam (`sz9`): `crates/mjolnir-mesh/src/roam.rs` + meshd
+  `roam_loop` — host `/32`s (proto 158) for phones that kept another node's
+  IP. Do not drop `pub mod roam`. Field validation is `0pv`.
