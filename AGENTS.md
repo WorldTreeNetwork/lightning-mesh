@@ -78,6 +78,18 @@ bd close <id>         # Complete work
 6. **Verify** - All changes committed AND pushed
 7. **Hand off** - Provide context for next session
 
+## Live two-node event pair (AP3000 + DWeb m3000)
+
+Hardware bring-up / radio matching lives in
+[`deploy/openwrt/NOTES-dweb-ap3000.md`](deploy/openwrt/NOTES-dweb-ap3000.md).
+
+- Client SSID `Lightning Mesh` is **OPEN** on both APs (`encryption=none`,
+  no password). `setup-wireless.sh` defaults to that (plus `COUNTRY=US`).
+  `mjolnir-mesh` is the 802.11s **backhaul** id (beaconed, not the phone SSID).
+- Do not add `192.168.1.1/24` onto AP3000 `br-lan`. Do not strip AP3000's
+  babel `0.0.0.0/0` export — that node is the house gateway (`gateway=auto`).
+- Do not “fix” remaining diffs in the notes file unless asked.
+
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally

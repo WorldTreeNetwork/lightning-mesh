@@ -21,10 +21,10 @@
 # Decisions: 5 GHz backhaul is the default (mjolnir-mesh-wai — throughput, field-validated
 # 2026-07-06). BACKHAUL_BAND=2g is the range/foliage alternative (the original w1l forest
 # choice) for sparse/NLOS deployments where penetration beats throughput.
-# Override any value via env, e.g.:  MESH_KEY='<mesh-passphrase>' CLIENT_KEY='<client-passphrase>' sh setup-wireless.sh
+# Override any value via env, e.g.:  MESH_KEY='<mesh-passphrase>' CLIENT_SSID='Lightning Mesh' sh setup-wireless.sh
 set -e
 
-MESH_ID="${MESH_ID:-mjolnir-mesh}"
+MESH_ID="${MESH_ID:-mjolnir-mesh}"       # 802.11s backhaul id (beacons; not the client SSID)
 MESH_KEY="${MESH_KEY:-}"                 # empty => OPEN mesh (recommended for first bring-up); set => SAE
 # Which BAND plays the 802.11s backhaul role. FLEET-WIDE CONSTANT — every node must share
 # this value AND the resulting backhaul channel, or they won't form one island. Default 5g
@@ -36,10 +36,9 @@ case "$BACKHAUL_BAND" in 2g|5g) ;; *) echo "FATAL: BACKHAUL_BAND must be 2g or 5
 BACKHAUL_CHANNEL_2G="${BACKHAUL_CHANNEL_2G:-${MESH_CHANNEL_2G:-6}}"   # one shared 2.4 GHz backhaul channel mesh-wide
 BACKHAUL_CHANNEL_5G="${BACKHAUL_CHANNEL_5G:-36}"                      # NON-DFS (36-48) for a 5 GHz backhaul; shared mesh-wide
 CLIENT_CHANNEL_2G="${CLIENT_CHANNEL_2G:-6}"                           # 2.4 GHz client AP channel (used when BACKHAUL_BAND=5g)
-CLIENT_SSID="${CLIENT_SSID:-lightning-mesh}"
-CLIENT_KEY="${CLIENT_KEY:-lightning}"    # public/posted PSK — not a secret (overridable via fleet-secrets/wireless.env)
-CLIENT_ENC="${CLIENT_ENC:-sae-mixed}"    # primary client AP encryption. 'sae-mixed'=WPA2/3 (prod default);
-                                         # 'none'=OPEN (no key) for a test network. Set in fleet-secrets/wireless.env.
+CLIENT_SSID="${CLIENT_SSID:-Lightning Mesh}"  # client-facing AP (the thing phones join)
+CLIENT_KEY="${CLIENT_KEY:-}"                  # unused when CLIENT_ENC=none. Set for psk2 / sae-mixed.
+CLIENT_ENC="${CLIENT_ENC:-none}"              # OPEN client AP (no password). 'psk2' or 'sae-mixed' for a PSK network.
 CLIENT_CHANNEL_5G="${CLIENT_CHANNEL_5G:-36}"                          # 5 GHz client AP channel (used when BACKHAUL_BAND=2g)
 CLIENT_AP_2G="${CLIENT_AP_2G:-0}"            # ENABLE flag for the 2.4 GHz client AP (concurrent with the mesh-point, for 2.4-only
                                              # IoT/ESP32). The section is ALWAYS rendered so the SSID/key/FT config is staged; the
@@ -49,8 +48,8 @@ CLIENT_AP_2G="${CLIENT_AP_2G:-0}"            # ENABLE flag for the 2.4 GHz clien
                                              # backhaul clean; enable per-node deliberately (leaf nodes, IoT-only — it shares the
                                              # backhaul channel's airtime) once oaq is solved (mjolnir-mesh-ab4):
                                              #   uci set wireless.clientap2g.disabled=0; uci commit wireless; wifi reload
-CLIENT_AP_2G_ENC="${CLIENT_AP_2G_ENC:-psk2}" # WPA2-PSK by default: most ESP32/cheap IoT lack WPA3-SAE. Set to 'sae-mixed' to match 5 GHz, or 'none' for open.
-COUNTRY="${COUNTRY:-DE}"                  # regulatory domain — REQUIRED, or the radios won't initiate (vifs never appear)
+CLIENT_AP_2G_ENC="${CLIENT_AP_2G_ENC:-none}" # co-located AP is disabled (oaq); keep open so a re-apply does not stamp a PSK on it
+COUNTRY="${COUNTRY:-US}"                  # regulatory domain — REQUIRED, or the radios won't initiate (vifs never appear)
 DISTANCE="${DISTANCE:-}"                  # metres to the farthest mesh peer; sets ACK timeout for long/foliage links. empty = driver default
 # 802.11r fast transition (mjolnir-mesh-bnd): empty FT_KEY (default) => FT left off,
 # same "off means untouched" convention as MESH_KEY above. Set FT_KEY to turn it on for
@@ -109,6 +108,8 @@ uci -q delete wireless.meshbh || true
 uci set wireless.meshbh='wifi-iface'
 uci set wireless.meshbh.device="$radio_bh"
 uci set wireless.meshbh.mode='mesh'
+# mesh_id is in 802.11s beacons (nmcli will list it). It is NOT the client SSID
+# and phones do not join it as Wi-Fi. SAE (MESH_KEY) is how you stop strangers.
 uci set wireless.meshbh.mesh_id="$MESH_ID"
 uci set wireless.meshbh.network='mesh'
 # mesh_fwding=1: 802.11s HWMP gives a flat L2 island (mDNS floods, babel sees one

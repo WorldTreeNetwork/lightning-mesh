@@ -193,6 +193,14 @@ Reaching `10.254.x` depends on where the workstation sits:
 New box? Provision it over ethernet first (`install-node.sh root@192.168.1.1`,
 then `--wireless`), get its id (`mjolnir-meshd id`), and add its line to
 `fleet-nodes.conf`. Design rationale: `docs/deploy/node-operations.md`.
+
+AP3000 Outdoor brought up next to the DWeb `m3000` field box: **both client
+APs are OPEN** (no SSID password). `setup-wireless.sh` now defaults to that
+(`CLIENT_ENC=none`, `CLIENT_SSID='Lightning Mesh'`, `COUNTRY=US`).
+`mjolnir-mesh` is the 802.11s backhaul mesh id (beaconed; phones do not join
+it). Full matched-knobs table, remaining diffs, and the next-node recipe:
+[`NOTES-dweb-ap3000.md`](NOTES-dweb-ap3000.md).
+
 ### Secrets
 
 Fleet-wide wireless secrets (`MESH_KEY`, `CLIENT_KEY`, `FT_KEY`, …) live in
