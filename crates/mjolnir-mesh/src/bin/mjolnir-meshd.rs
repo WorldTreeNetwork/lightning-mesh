@@ -1394,6 +1394,7 @@ async fn run_mesh(
                     let neigh_rx = neigh_rx.clone();
                     let claims_path = claims_file.clone();
                     let gateway = gateway_handle.clone();
+                    let client_iface = client_iface.clone();
                     tokio::spawn(async move {
                         claim_manager(
                             sync,
@@ -3313,7 +3314,7 @@ async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
 }
 
 // --- roaming: mobility /32s for clients that kept another node's address ----
-// (mjolnir-mesh-sz9; the mechanism and the flap guard live in `roam.rs`)
+// (mjolnir-mesh-sz9; parsers and guest-route selection live in `roam.rs`)
 
 /// Reconcile cadence for roamed-client host routes. Faster than
 /// [`RADIO_INTERVAL`] because this is the roam-latency path: it bounds how long
