@@ -40,8 +40,38 @@ log() { printf '\033[1;36m[release.sh]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m[release.sh ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # Strip the PowerShell/sshd banner noise that prefixes every session.
+# Text-only — do not use on a binary tar stream (it would eat payload bytes).
 ssh_clean() {
     grep -vE 'post-quantum|store now|may need to be upgraded|mise.*PowerShell|warning\.$|^is 5\.1' || true
+}
+
+# Marker emitted before binary tar so we can discard the SSH/PowerShell banner
+# that contaminates stdout (same trick as ~/bin/scpower). grep is unsafe here.
+TAR_MARKER='__LM_TAR_BEGIN_7f3a9c2e__'
+
+ssh_tar_pull() {
+    local tar_cmd="$1"
+    local full_cmd="Write-Host -NoNewline '${TAR_MARKER}'; ${tar_cmd}"
+    ssh "$WIN_HOST" "powershell -NoProfile -ExecutionPolicy Bypass -Command \"${full_cmd}\"" 2>/dev/null | \
+        python3 -c "
+import sys
+marker = b'${TAR_MARKER}'
+buf = b''
+while True:
+    chunk = sys.stdin.buffer.read(4096)
+    if not chunk:
+        break
+    buf += chunk
+    idx = buf.find(marker)
+    if idx >= 0:
+        sys.stdout.buffer.write(buf[idx + len(marker):])
+        break
+while True:
+    chunk = sys.stdin.buffer.read(65536)
+    if not chunk:
+        break
+    sys.stdout.buffer.write(chunk)
+"
 }
 
 # Run a .ps1 file on the VM. We base64 the script, ship it on the command
@@ -103,24 +133,23 @@ cmd_bundle() {
 }
 
 # Pull artifacts by streaming a tar of the bundle dir back over ssh.
+# Banner-stripped (see ssh_tar_pull) — a raw ssh|tar is not a tar archive.
 cmd_fetch() {
     log "fetching artifacts to $ARTIFACTS"
     mkdir -p "$ARTIFACTS"
     rm -rf "$ARTIFACTS/bundle"
     local remote="${WIN_ROOT}\\${REMOTE_NAME}\\src-tauri\\target\\release\\bundle"
-    local tarcmd="if (Test-Path '${remote}') { Set-Location '${remote}\\..'; tar -cf - bundle } else { Write-Error 'no bundle dir' }"
-    if ssh "$WIN_HOST" "powershell -NoProfile -ExecutionPolicy Bypass -Command \"${tarcmd}\"" 2>/dev/null | \
-            tar -xf - -C "$ARTIFACTS"; then
+    local tarcmd="if (Test-Path '${remote}') { Set-Location '${remote}\\..'; tar -cf - bundle } else { Write-Error 'no bundle dir'; exit 1 }"
+    if ssh_tar_pull "$tarcmd" | tar -xf - -C "$ARTIFACTS"; then
         log "bundle pulled:"
         find "$ARTIFACTS/bundle" -type f -printf '  %p  (%s bytes)\n'
     else
-        log "WARNING: no bundle found on VM (build may have failed)"
+        die "no bundle found on VM (build may have failed, or fetch banner-strip missed the marker)"
     fi
     local release="${WIN_ROOT}\\${REMOTE_NAME}\\src-tauri\\target\\release"
     local exe="${release}\\lightning-admin.exe"
-    local exetar="if (Test-Path '${exe}') { Set-Location '${release}'; tar -cf - lightning-admin.exe }"
-    ssh "$WIN_HOST" "powershell -NoProfile -ExecutionPolicy Bypass -Command \"${exetar}\"" 2>/dev/null | \
-        tar -xf - -C "$ARTIFACTS" 2>/dev/null || true
+    local exetar="if (Test-Path '${exe}') { Set-Location '${release}'; tar -cf - lightning-admin.exe } else { exit 1 }"
+    ssh_tar_pull "$exetar" | tar -xf - -C "$ARTIFACTS" 2>/dev/null || true
 }
 
 # --- dispatch --------------------------------------------------------------
