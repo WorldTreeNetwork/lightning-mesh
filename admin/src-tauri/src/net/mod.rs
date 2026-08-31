@@ -4,11 +4,36 @@
 //! IPv6 link-local discovery: local `fe80::` addresses on every interface,
 //! kernel neighbor-table dump, and an ICMPv6 all-nodes (`ff02::1`) probe.
 
-mod icmp;
 mod interfaces;
 mod merge;
-mod neigh;
 mod types;
+
+#[cfg(target_os = "linux")]
+mod icmp;
+#[cfg(not(target_os = "linux"))]
+mod icmp {
+    use super::types::{LinkLocalInterface, RawNeighbor};
+    pub fn probe_all_nodes(
+        _: &[LinkLocalInterface],
+    ) -> (Vec<RawNeighbor>, Option<String>) {
+        (
+            Vec::new(),
+            Some("ICMPv6 all-nodes probe is Linux-only in v1".into()),
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod neigh;
+#[cfg(not(target_os = "linux"))]
+mod neigh {
+    use super::types::{LinkLocalInterface, RawNeighbor};
+    pub async fn dump_link_local(
+        _: &[LinkLocalInterface],
+    ) -> Result<Vec<RawNeighbor>, String> {
+        Ok(Vec::new())
+    }
+}
 
 pub use merge::merge_scan;
 pub use types::{LinkLocalInterface, LinkLocalNeighbor, RawNeighbor, ScanResult};

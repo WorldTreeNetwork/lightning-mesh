@@ -126,6 +126,7 @@ fn parse_if_inet6_line(line: &str) -> Option<IfInet6> {
     })
 }
 
+#[cfg(unix)]
 pub fn if_index(name: &str) -> u32 {
     let Ok(c) = std::ffi::CString::new(name) else {
         return 0;
@@ -133,6 +134,12 @@ pub fn if_index(name: &str) -> u32 {
     unsafe { libc::if_nametoindex(c.as_ptr()) }
 }
 
+#[cfg(not(unix))]
+pub fn if_index(_name: &str) -> u32 {
+    0
+}
+
+#[cfg(unix)]
 pub fn if_name(index: u32) -> Option<String> {
     if index == 0 {
         return None;
@@ -144,6 +151,11 @@ pub fn if_name(index: u32) -> Option<String> {
     }
     let cstr = unsafe { std::ffi::CStr::from_ptr(ptr) };
     Some(cstr.to_string_lossy().into_owned())
+}
+
+#[cfg(not(unix))]
+pub fn if_name(_index: u32) -> Option<String> {
+    None
 }
 
 fn read_sys(name: &str, file: &str) -> Option<String> {
