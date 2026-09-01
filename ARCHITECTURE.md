@@ -16,8 +16,13 @@ No mDNS for mesh-wide discovery — gossip/CRDT is the address book.
 Disruptive node changes go through `mjolnir-apply` (snapshot → apply →
 health gate → rollback), never a live SSH mutation.
 
+The client AP SSID is a public **network name** (`client-network-name`),
+not a guild. Factory default is ⚡ open. Radio apply does not mint
+keyspace membership. Guild key material lives in identikey-core.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
 - Front desk / hello.mesh: `crates/mjolnir-hello/`, `docs/products/hello.mesh/`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
+- Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
