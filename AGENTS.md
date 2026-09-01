@@ -82,6 +82,9 @@ bd close <id>         # Complete work
 
 Hardware bring-up / radio matching lives in
 [`deploy/openwrt/NOTES-dweb-ap3000.md`](deploy/openwrt/NOTES-dweb-ap3000.md).
+Live RF/LAN snapshot (BSSIDs, WAN leases, what is actually on the air):
+[`deploy/openwrt/fleet.yml`](deploy/openwrt/fleet.yml). `update-fleet.sh` still
+walks `fleet-nodes.conf` only.
 
 - Client SSID `Lightning Mesh` is **OPEN** on both APs (`encryption=none`,
   no password). `setup-wireless.sh` defaults to that (plus `COUNTRY=US`).
