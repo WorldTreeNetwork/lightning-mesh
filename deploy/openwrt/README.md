@@ -138,7 +138,7 @@ procedure**. Supported today:
 | Ralink RT5370 2.4 GHz | `148f:5370` | `ap2g` — dedicated 2.4 GHz client AP |
 
 The `ap2g` role brings the dongle up as a 2.4 GHz client AP bridged into
-`br-lan`, mirroring the staged `clientap2g` SSID/key (Lightning Mesh, WPA2 for
+`br-lan`, mirroring the staged `clientap2g` network name and key (WPA2 for
 IoT), on the far end of the band from the mesh backhaul channel. This is the
 practical answer to the `oaq` quirk: the internal radio can't safely run
 mesh-point + AP concurrently, so the dongle carries the 2.4 GHz clients.
@@ -195,10 +195,14 @@ then `--wireless`), get its id (`mjolnir-meshd id`), and add its line to
 `fleet-nodes.conf`. Design rationale: `docs/deploy/node-operations.md`.
 
 AP3000 Outdoor brought up next to the DWeb `m3000` field box: **both client
-APs are OPEN** (no SSID password). `setup-wireless.sh` now defaults to that
-(`CLIENT_ENC=none`, `CLIENT_SSID='Lightning Mesh'`, `COUNTRY=US`).
-`mjolnir-mesh` is the 802.11s backhaul mesh id (beaconed; phones do not join
-it). Full matched-knobs table, remaining diffs, and the next-node recipe:
+APs are OPEN** (no SSID password). Factory default in `setup-wireless.sh` is
+`CLIENT_ENC=none`, `CLIENT_SSID=⚡` (U+26A1 network name), `COUNTRY=US`.
+The live pair still beacons `Lightning Mesh` until an operator
+`mjolnir-apply` with `RUN_WIRELESS=1` changes it — radio apply is explicit
+and does not write identikey-log or mint guild membership. Associating to
+the client SSID is not membership. `mjolnir-mesh` is the 802.11s backhaul
+mesh id (beaconed; phones do not join it). Full matched-knobs table,
+remaining diffs, and the next-node recipe:
 [`NOTES-dweb-ap3000.md`](NOTES-dweb-ap3000.md).
 
 ### Secrets

@@ -22,6 +22,9 @@
 # 2026-07-06). BACKHAUL_BAND=2g is the range/foliage alternative (the original w1l forest
 # choice) for sparse/NLOS deployments where penetration beats throughput.
 # Override any value via env, e.g.:  MESH_KEY='<mesh-passphrase>' CLIENT_SSID='Lightning Mesh' sh setup-wireless.sh
+# CLIENT_SSID is the public network name phones join (not a guild). Factory
+# default is ⚡ (U+26A1). A live-fleet override (e.g. Lightning Mesh) is an
+# explicit apply, not membership.
 set -e
 
 MESH_ID="${MESH_ID:-mjolnir-mesh}"       # 802.11s backhaul id (beacons; not the client SSID)
@@ -36,7 +39,7 @@ case "$BACKHAUL_BAND" in 2g|5g) ;; *) echo "FATAL: BACKHAUL_BAND must be 2g or 5
 BACKHAUL_CHANNEL_2G="${BACKHAUL_CHANNEL_2G:-${MESH_CHANNEL_2G:-6}}"   # one shared 2.4 GHz backhaul channel mesh-wide
 BACKHAUL_CHANNEL_5G="${BACKHAUL_CHANNEL_5G:-36}"                      # NON-DFS (36-48) for a 5 GHz backhaul; shared mesh-wide
 CLIENT_CHANNEL_2G="${CLIENT_CHANNEL_2G:-6}"                           # 2.4 GHz client AP channel (used when BACKHAUL_BAND=5g)
-CLIENT_SSID="${CLIENT_SSID:-Lightning Mesh}"  # client-facing AP (the thing phones join)
+CLIENT_SSID="${CLIENT_SSID:-⚡}"  # client-facing AP network name (phones join this; not a guild)
 CLIENT_KEY="${CLIENT_KEY:-}"                  # unused when CLIENT_ENC=none. Set for psk2 / sae-mixed.
 CLIENT_ENC="${CLIENT_ENC:-none}"              # OPEN client AP (no password). 'psk2' or 'sae-mixed' for a PSK network.
 CLIENT_CHANNEL_5G="${CLIENT_CHANNEL_5G:-36}"                          # 5 GHz client AP channel (used when BACKHAUL_BAND=2g)

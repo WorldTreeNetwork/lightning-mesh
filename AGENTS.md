@@ -89,9 +89,12 @@ Live RF/LAN snapshot (BSSIDs, WAN leases, what is actually on the air):
 [`deploy/openwrt/fleet.yml`](deploy/openwrt/fleet.yml). `update-fleet.sh` still
 walks `fleet-nodes.conf` only.
 
-- Client SSID `Lightning Mesh` is **OPEN** on both APs (`encryption=none`,
-  no password). `setup-wireless.sh` defaults to that (plus `COUNTRY=US`).
-  `mjolnir-mesh` is the 802.11s **backhaul** id (beaconed, not the phone SSID).
+- Live pair client SSID `Lightning Mesh` is **OPEN** on both APs
+  (`encryption=none`, no password). Factory default in `setup-wireless.sh`
+  is `⚡` (U+26A1), still open. That string is a **network name**, not a
+  guild; association is not membership; `mjolnir-apply` radio writes do
+  not touch identikey-log. `mjolnir-mesh` is the 802.11s **backhaul** id
+  (beaconed, not the phone SSID).
 - Do not add `192.168.1.1/24` onto AP3000 `br-lan`. Do not strip AP3000's
   babel `0.0.0.0/0` export — that node is the house gateway (`gateway=auto`).
 - Do not “fix” remaining diffs in the notes file unless asked.
