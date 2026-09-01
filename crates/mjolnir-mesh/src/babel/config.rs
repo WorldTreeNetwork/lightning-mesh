@@ -62,6 +62,33 @@ impl<'a> BabelConfigInputs<'a> {
     }
 }
 
+/// The one static line that exports roamed-client mobility `/32`s
+/// (mjolnir-mesh-sz9).
+///
+/// Without it the `/32`s that `roam_loop` installs sit in the kernel and babel
+/// never advertises them: `redistribute deny` swallows them. Roaming then works
+/// outbound (proxy-ARP) while inbound black-holes at the client's *home* node,
+/// which still owns the covering `/24` and can no longer ARP the client.
+///
+/// Static on purpose: babeld 1.13 exits on SIGHUP, so this crate restarts the
+/// `mjolnir-babeld` service whenever the rendered config changes (m8t). A phone
+/// walking between rooms must not restart babeld — so the *routes* churn in the
+/// kernel and the *config* never does. babeld tracks the kernel FIB live.
+///
+/// Matched by protocol number alone, with no `ip`/`le`/`ge` qualifier: those are
+/// what silently exported nothing in kf7. The number is deliberately not `proto
+/// static` (4) either — netifd stamps 4 on the WAN default route, so
+/// redistributing it would forge a gateway announcement past the deliberate
+/// `gateway` flag (a8o).
+///
+/// [`roam::MOBILITY_ROUTE_PROTO`]: crate::roam::MOBILITY_ROUTE_PROTO
+fn mobility_redistribute_line() -> String {
+    format!(
+        "redistribute proto {} allow\n",
+        crate::roam::MOBILITY_ROUTE_PROTO
+    )
+}
+
 /// Render the full babeld.conf body. Pure — no I/O.
 ///
 /// Output (golden, matches babel-routing.md §5):
@@ -123,6 +150,7 @@ pub fn render_babeld_conf(inputs: &BabelConfigInputs<'_>) -> String {
     if inputs.gateway {
         out.push_str("redistribute ip 0.0.0.0/0 le 0 metric 128\n");
     }
+    out.push_str(&mobility_redistribute_line());
     // Deny local interface addresses explicitly (nrr): a bare `redistribute
     // deny` does NOT cover babeld's implicit local-address export (same lesson
     // as the overlay render, buw.1) — without this every node exported junk
@@ -226,6 +254,7 @@ pub fn render_overlay_babeld_conf(
     if gateway {
         out.push_str("redistribute ip 0.0.0.0/0 le 0 metric 128\n");
     }
+    out.push_str(&mobility_redistribute_line());
     // Advertise ONLY the claimed client /24: deny local interface addresses and
     // everything else not explicitly allowed above.
     out.push_str("redistribute local deny\n");
@@ -281,6 +310,7 @@ mod tests {
 interface mjolnir0 type tunnel enable-timestamps true rtt-min 10 rtt-max 200 max-rtt-penalty 96 rtt-decay 42
 
 redistribute ip 10.42.1.0/24 allow
+redistribute proto 158 allow
 redistribute local deny
 redistribute deny
 
@@ -350,6 +380,7 @@ out ip 10.255.0.0/16 deny
 interface veth-mesh type wireless enable-timestamps true rtt-min 10 rtt-max 120 max-rtt-penalty 150 rtt-decay 42
 
 redistribute ip 10.42.1.0/24 allow
+redistribute proto 158 allow
 redistribute local deny
 redistribute deny
 
@@ -374,6 +405,7 @@ interface mj-peer-aabbccdd type tunnel
 interface mj-peer-eeff0011 type tunnel
 
 redistribute ip 10.42.1.0/24 allow
+redistribute proto 158 allow
 redistribute local deny
 redistribute deny
 
@@ -440,6 +472,36 @@ default rxcost 96
         assert!(
             !render_overlay_babeld_conf("mjolnir0", None, OverlayRtt::default(), false)
                 .contains("0.0.0.0/0")
+        );
+    }
+
+    #[test]
+    fn mobility_routes_are_exported_by_protocol_not_by_prefix() {
+        // sz9: without this line the /32s roam_loop installs never reach babel
+        // (`redistribute deny` swallows them) and inbound traffic black-holes at
+        // the roamed client's home node. Exported by protocol number ALONE: a
+        // prefix/le/ge qualifier here is the kf7 failure mode (silently exports
+        // nothing), and `proto static` would drag in netifd's WAN default route.
+        let want = format!(
+            "redistribute proto {} allow",
+            crate::roam::MOBILITY_ROUTE_PROTO
+        );
+        let lan = render_babeld_conf(&BabelConfigInputs::new(None, &[]));
+        let overlay = render_overlay_babeld_conf("mjolnir0", None, OverlayRtt::default(), false);
+        for got in [&lan, &overlay] {
+            assert!(got.contains(&want), "missing mobility line:\n{got}");
+            let line = got
+                .lines()
+                .find(|l| l.starts_with("redistribute proto"))
+                .unwrap();
+            assert_eq!(line, want, "mobility line must carry no ip/le/ge qualifier");
+            // Must precede the catch-all deny or it never matches.
+            assert!(got.find(&want) < got.find("redistribute deny"));
+        }
+        assert_ne!(
+            crate::roam::MOBILITY_ROUTE_PROTO,
+            4,
+            "proto 4 is netifd's WAN default route — would forge a gateway announcement"
         );
     }
 

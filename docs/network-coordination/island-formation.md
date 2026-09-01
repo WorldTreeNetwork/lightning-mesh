@@ -150,6 +150,13 @@ per-identity authorization. Same roaming benefit, strictly more capability.
 
 ## Near-term path (single trusted fleet)
 
+> **Superseded in part.** Item 2 below (shared-L2 island) is *not* what shipped
+> for the household case, and item 1 overstates 802.11r's value on an open SSID.
+> See "Shipped near-term path: mobility `/32` + proxy-ARP" below — it delivers IP
+> continuity without sharing an L2 at all. This section is kept because it stays
+> the right sketch for when a *broadcast* domain, not just address continuity, is
+> the requirement.
+
 Most of this document is the *permissionless* design. For a **single-owner, trusted fleet**
 (the current reality), the hard machinery is unnecessary — every node is trusted, so there
 is nothing to scope out. The cheap wins, in effort order:
@@ -174,6 +181,105 @@ is nothing to scope out. The cheap wins, in effort order:
 identity-gated membership authz, capability beacon, reputation layer, `/8` migration (a
 single fleet fits in `10.42.0.0/16` = 256 `/24`s), cross-fleet merge + collision guard,
 channel graph-coloring automation.
+
+## Shipped near-term path: mobility `/32` + proxy-ARP (bead `sz9`)
+
+**Status:** implemented in `crates/mjolnir-mesh/src/roam.rs` + meshd `roam_loop`.
+Field validation is bead `0pv`; the babeld parse gate is `1wy`.
+
+The near-term list above assumed roaming needs a shared client L2 — one subnet
+spanning the co-located nodes. It does not. A cheaper path delivers IP
+continuity while leaving the one-routed-`/24`-per-node model **completely
+untouched**: the client keeps the address its home node vended, even though the
+node it roamed to cannot vend from that space.
+
+1. **`proxy_arp` on the client bridge.** The roamed client ARPs for its *home*
+   gateway `10.42.<home>.1`; the new node answers with its own MAC, because the
+   route to that address egresses the mesh rather than the bridge the request
+   arrived on. (Linux suppresses proxy ARP when the route points back out the
+   ingress interface, so ARP between a node's *own* clients is untouched.)
+   Outbound traffic works the instant the client associates, and egresses the
+   **new** node — no hairpin back to the home node.
+2. **A mobility host route.** The new node installs `<guest>/32 dev br-lan`,
+   stamped with a private route protocol, and babeld redistributes it via one
+   static `redistribute proto <n> allow` line. Longest-prefix beats the home
+   node's `/24` mesh-wide, so inbound traffic follows the client.
+3. **DHCP is untouched.** The client's unicast RENEW to `10.42.<home>.1` routes
+   to the home node, which still holds the lease and ACKs it. This is why the
+   path needs **no lease-sharing CRDT** — the piece the shared-L2 plan required.
+
+Both halves are load-bearing, and they fail differently. Without (1) the client
+cannot reach its gateway at all. Without (2) the `/32` sits in the kernel and
+babel never learns it — `redistribute deny` swallows it — so outbound works and
+**inbound black-holes at the home node**, which still owns the covering `/24`
+and can no longer ARP the client. That asymmetry makes the missing-redistribute
+failure look like a flaky roam rather than a missing feature; the golden test
+`mobility_routes_are_exported_by_protocol_not_by_prefix` exists to keep the line
+present.
+
+### Why this reverses the `/32` rejection above — and where it still stands
+
+"Data plane" above rejects per-client `/32` mobility routes: they flood babel and
+add a convergence gap to every roam. That objection is **scale-conditional and
+still correct at camp/permissionless scale**. At household scale the route count
+is O(devices in the house), and the trade is strongly favourable: no bridging of
+client L2 across nodes, no VLAN or MTU surgery on the 802.11s backhaul, no
+renumbering of already-connected clients, and every architectural invariant
+survives verbatim — each node still owns a routed `/24`, client L2 is still never
+bridged across nodes.
+
+The real hazard is **flapping**, not flooding: if the node a client just *left*
+keeps announcing the `/32` from a stale ARP entry, two nodes announce the same
+host route and babel may pick the dead one — a black hole strictly worse than not
+roaming. `roam::guest_routes` closes this by requiring live evidence the client is
+*here now*: its MAC currently associated to one of our APs, or a `REACHABLE`
+neighbour entry. A merely `STALE` entry — exactly what the abandoned node is left
+holding — is not enough.
+
+### babeld filter constraints (why the line looks like that)
+
+`redistribute proto <n> allow` carries **no** `ip`/`le`/`ge` qualifier: that is
+the construct that silently exported nothing in `kf7`. The protocol number is
+private to this feature and deliberately **not** `proto static` (4) — netifd
+stamps 4 on the WAN default route, so redistributing 4 would forge a gateway
+announcement past the deliberate `gateway` flag (`a8o`). And the line is
+*static*: babeld 1.13 exits on SIGHUP, so meshd restarts it whenever the rendered
+config changes (`m8t`) — a phone walking between rooms must never restart babeld,
+so the routes churn in the kernel and the config does not.
+
+### Accepted limits
+
+- ~1–3 s inbound convergence blip per roam; **outbound never breaks**.
+- mDNS/broadcast still does not span nodes (unchanged from today).
+- Same-subnet peer reachability while roamed relies on `proxy_arp`.
+
+### 802.11r finding
+
+The fleet's client AP is OPEN (`CLIENT_ENC=none`, `FT_KEY=''`). **On an open
+network there is no 4-way handshake, so 802.11r buys nothing** — reassociation is
+already as fast as FT can make it. FT starts to matter only once the SSID is
+encrypted, at which point FT-PSK with `ft_psk_generate_local=1` is the low-risk
+option (no `r0kh`/`r1kh` key-holder push to get wrong, unlike FT-SAE). Roaming
+here is an L3 problem, not a radio one — which is why item 1 of the near-term
+list above ("verify the shipped 802.11r path") is *not* the lowest-effort roaming
+win it was billed as.
+
+### Islands, after this
+
+With roaming solved at L3, an island stops being "the set of nodes sharing a
+subnet" and becomes **the scope broadcast and ARP propagate across** (Duke,
+2026-08). Roaming works mesh-wide via mobility routes regardless of island
+boundaries; the boundary then only decides where mDNS/discovery floods and how
+far proxy-ARP is willing to answer. That is a strictly smaller and safer thing to
+get wrong than subnet membership — a mis-drawn broadcast boundary degrades
+discovery, where a mis-drawn subnet boundary renumbers someone's phone.
+
+`roam::islands` implements the partition (connected components over backhaul
+links at or above `weak_link_dbm`, forced to a single island below
+`min_split_nodes` — default 8 nodes / −75 dBm) as a **pure, deterministic,
+read-only** function. Nothing acts on it: acting needs the per-link signal view
+gossiped into the CRDT so all members agree on the partition, plus a split/merge
+protocol. Bead `77f`.
 
 ## Open questions
 
@@ -201,4 +307,7 @@ channel graph-coloring automation.
   islands surfaced
 - [network-architecture](network-architecture.md) "Mode 1" — the flat-island precursor
 - [prior-art](prior-art.md) §5–6 — foreign-mesh interop / the L3-NAT degradation path
-- Beads: `e21` (epic), `2km` (FT keys across islands), `0pv` (roaming validation)
+- Beads: `e21` (epic), `sz9` (shipped mobility-`/32` roaming), `1wy` (babeld parse
+  gate), `77f` (islands as broadcast scope), `2km` (FT keys across islands),
+  `0pv` (roaming validation), `190`/`3kd` (shared-L2 and VXLAN island data planes,
+  now scoped to the broadcast-domain requirement rather than to roaming)
