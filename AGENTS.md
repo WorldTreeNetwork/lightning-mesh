@@ -99,6 +99,26 @@ walks `fleet-nodes.conf` only.
   babel `0.0.0.0/0` export — that node is the house gateway (`gateway=auto`).
 - Do not “fix” remaining diffs in the notes file unless asked.
 
+## Probe a no-internet client SSID without killing the chat
+
+The agent laptop has **one** Wi-Fi radio. Joining `Lightning Mesh` (or any
+SSID under test) drops Pirate Radio / Origami and the session cannot
+report. Never leave the radio on the test SSID. Never
+`ip route replace default via 10.42.x.1` while the chat uplink is the
+working one.
+
+```bash
+deploy/openwrt/probe-client-ssid.sh
+# SSID='Lightning Mesh' HOME_CON='IdentiKey Pirate Radio' WAIT=30 \
+#   deploy/openwrt/probe-client-ssid.sh
+```
+
+Joins, prints lease + ping-to-gateway, **always** switches back (`trap` on
+EXIT/INT/TERM). `DHCP_FAILED` = no lease. `GATEWAY_BLACKHOLE` = lease but
+`.1` does not answer (dual `192.168.1.1/24` on `br-lan` is the known
+shape). Phone “Connecting…” spinner is often the blackhole, not missing
+DHCP.
+
 ## Lightning Admin Windows build (morphist-win11)
 
 Recipe: [`admin/scripts/windows-build/README.md`](admin/scripts/windows-build/README.md).

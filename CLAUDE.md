@@ -86,6 +86,9 @@ Facts that have bitten before:
 - The web TopologyPanel fetches neighbors' `/api/radio` at their subnet-derived
   LAN gateway (CORS is enabled on GET `/api/*` for this).
 - Don't deploy from a dirty tree in `hello-mesh-web/` or `crates/`.
+- Probing the client SSID from the agent laptop (it has no internet):
+  `deploy/openwrt/probe-client-ssid.sh` — join, print DHCP/gateway, always
+  restore the working Wi-Fi. Do not leave the radio on Lightning Mesh.
 
 ## Architecture Overview
 
