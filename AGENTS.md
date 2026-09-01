@@ -101,6 +101,8 @@ walks `fleet-nodes.conf` only.
 
 ## Probe a no-internet client SSID without killing the chat
 
+Skill: `.grok/skills/probe-client-ssid` (`/probe-client-ssid`).
+
 The agent laptop has **one** Wi-Fi radio. Joining `Lightning Mesh` (or any
 SSID under test) drops Pirate Radio / Origami and the session cannot
 report. Never leave the radio on the test SSID. Never
