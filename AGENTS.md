@@ -2,6 +2,9 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
+Living specs and in-flight changes live in `openspec/`. Hard-won facts
+go in `docs/LEARNINGS.md`. Shape notes go in `ARCHITECTURE.md`.
+
 ## Quick Reference
 
 ```bash
