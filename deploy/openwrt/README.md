@@ -190,9 +190,14 @@ Reaching `10.254.x` depends on where the workstation sits:
   gateway's WAN): the mesh correctly refuses SSH on WAN, so you need one wired
   node as jump host — add `ProxyJump root@192.168.1.1` to the stanza above.
 
-New box? Provision it over ethernet first (`install-node.sh root@192.168.1.1`,
-then `--wireless`), get its id (`mjolnir-meshd id`), and add its line to
-`fleet-nodes.conf`. Design rationale: `docs/deploy/node-operations.md`.
+New box? Stock Cudy only takes a signed image. Cudy-signed intermediates live
+in [`vendor-firmware/`](vendor-firmware/) (Git LFS — `git lfs pull` after
+clone). Flash the matching board bin from the stock web UI, then official
+OpenWrt sysupgrade, then provision over ethernet (`install-node.sh
+root@192.168.1.1`, then `--wireless`), get its id (`mjolnir-meshd id`), and
+add its line to `fleet-nodes.conf`. Design rationale:
+`docs/deploy/node-operations.md`. Wrong intermediate (indoor vs Outdoor vs
+Wall) bricks the box.
 
 AP3000 Outdoor brought up next to the DWeb `m3000` field box: **both client
 APs are OPEN** (no SSID password). Factory default in `setup-wireless.sh` is

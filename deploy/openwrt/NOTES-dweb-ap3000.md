@@ -184,9 +184,11 @@ works from a client associated to `Lightning Mesh`).
 
 ## Installing the next node to **match this pair**
 
-1. Flash OpenWrt (AP3000 Outdoor v1: stock Cudy web → intermediate
-   `23.05-SNAPSHOT-CUDY` → official sysupgrade). This box was brought up on
-   24.10.8, then **sysupgrade (keep config)** to **25.12.5** on 2026-08-30.
+1. Flash OpenWrt (AP3000 Outdoor v1: stock Cudy web → Cudy-signed
+   intermediate in `vendor-firmware/ap3000-outdoor-v1/` → official
+   sysupgrade). Indoor AP3000 V1/V1.1 uses `vendor-firmware/ap3000-v1/`,
+   not the Outdoor bin. This outdoor box was brought up on 24.10.8, then
+   **sysupgrade (keep config)** to **25.12.5** on 2026-08-30.
    Add `/etc/mjolnir/` to `/etc/sysupgrade.conf` first or the node id is
    regenerated. 25.12 first boot re-added `192.168.1.1/24` on `br-lan` —
    strip it. Stock Cudy management IP was `192.168.10.254`, not `.1`.

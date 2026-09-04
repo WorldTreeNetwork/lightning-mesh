@@ -1,0 +1,7 @@
+Please follow the steps:
+1. Please update to the latest firmware 2.4.7 which will support firmware recovery function. You can download the firmware on the website below.
+https://www.cudy.com/en-us/pages/download-center/ap3000-1-0
+
+2.  Please update the intermediate firmware version attached.
+
+3.  Then update the OpenWrt firmware.
