@@ -12,8 +12,9 @@ bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --claim  # Claim work atomically
 bd close <id>         # Complete work
-# Beads sync via the git-committed .beads/issues.jsonl (dolt is embedded, no
-# remote) — do NOT run `bd dolt push`; a plain `git push` carries beads too.
+bd dolt pull          # Get beads from the other computer (refs/dolt/data)
+bd dolt push          # Publish beads; Dolt is the source of truth
+# JSONL (.beads/issues.jsonl) is an export; git push does not replace dolt push.
 ```
 
 ## Non-Interactive Shell Commands
@@ -74,9 +75,10 @@ bd close <id>         # Complete work
    git pull --rebase
    git push
    git status  # MUST show "up to date with origin"
+   bd dolt pull && bd dolt push   # Dolt is the beads source of truth (refs/dolt/data)
    ```
-   (Beads sync via the git-committed `.beads/issues.jsonl`; dolt is embedded with no
-   remote, so do NOT run `bd dolt push`.)
+   (JSONL `.beads/issues.jsonl` is an export for viewers. Cross-machine beads
+   sync is `bd dolt pull` / `bd dolt push` against git+ssh origin.)
 5. **Clean up** - Clear stashes, prune remote branches
 6. **Verify** - All changes committed AND pushed
 7. **Hand off** - Provide context for next session
