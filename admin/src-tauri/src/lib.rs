@@ -5,6 +5,7 @@ mod commands;
 pub mod net;
 
 use commands::discovery::scan_link_local;
+use commands::network_name::apply_network_name;
 
 fn init_logging() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -24,7 +25,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![scan_link_local])
+        .invoke_handler(tauri::generate_handler![
+            scan_link_local,
+            apply_network_name
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

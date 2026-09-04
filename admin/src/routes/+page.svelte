@@ -3,6 +3,7 @@
 	import { copyText } from '$lib/clipboard';
 	import AddrCell from '$lib/discovery/AddrCell.svelte';
 	import { discovery } from '$lib/discovery/store.svelte';
+	import { NETWORK_NAME_LABEL, networkName } from '$lib/network-name/store.svelte';
 
 	onMount(() => {
 		void discovery.scan();
@@ -88,6 +89,53 @@
 			</button>
 		</div>
 	</header>
+
+	<div class="nn-bar">
+		<label for="network-name">{NETWORK_NAME_LABEL}</label>
+		<input
+			id="network-name"
+			type="text"
+			autocomplete="off"
+			spellcheck="false"
+			bind:value={networkName.name}
+			disabled={networkName.applying}
+			onkeydown={(e) => {
+				if (e.key === 'Enter' && networkName.canApply) void networkName.apply();
+			}}
+		/>
+		<button
+			type="button"
+			class="scan"
+			disabled={!networkName.canApply}
+			onclick={() => networkName.apply()}
+		>
+			{networkName.applying ? 'Applying…' : 'Apply'}
+		</button>
+		{#if networkName.applying}
+			<span class="nn-status">Applying across the fleet…</span>
+		{:else if networkName.error}
+			<span class="nn-status bad">{networkName.error}</span>
+		{:else if networkName.report}
+			<span class="nn-status" class:bad={Boolean(networkName.report.halted)}>
+				{#if networkName.report.halted}
+					Halted at {networkName.report.halted}
+				{:else}
+					Updated {networkName.report.updated.length
+						? networkName.report.updated.join(', ')
+						: 'none'}
+				{/if}
+				{#if networkName.report.skipped.length}
+					· skipped {networkName.report.skipped.join(', ')}
+				{/if}
+			</span>
+		{/if}
+		{#if networkName.report?.log}
+			<details class="nn-log">
+				<summary>apply log</summary>
+				<pre>{networkName.report.log}</pre>
+			</details>
+		{/if}
+	</div>
 
 	<div class="body">
 		<aside class="rail">
@@ -482,5 +530,74 @@
 
 	.sep {
 		opacity: 0.5;
+	}
+
+	.nn-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.65rem;
+		padding: 0.45rem 1rem;
+		border-bottom: 1px solid var(--line);
+		background: var(--panel);
+		flex-wrap: wrap;
+	}
+
+	.nn-bar label {
+		font-size: 10px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--muted);
+		white-space: nowrap;
+	}
+
+	.nn-bar input {
+		flex: 1;
+		min-width: 12rem;
+		background: #0e2a22;
+		border: 1px solid var(--mint-dim);
+		color: var(--text);
+		padding: 0.35rem 0.6rem;
+		font: inherit;
+	}
+
+	.nn-bar input:focus {
+		outline: none;
+		border-color: var(--mint);
+	}
+
+	.nn-status {
+		color: var(--muted);
+		font-size: 11px;
+		min-width: 0;
+	}
+
+	.nn-status.bad {
+		color: var(--bad);
+	}
+
+	.nn-log {
+		flex-basis: 100%;
+		color: var(--muted);
+		font-size: 11px;
+	}
+
+	.nn-log summary {
+		cursor: pointer;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		font-size: 10px;
+	}
+
+	.nn-log pre {
+		margin: 0.35rem 0 0;
+		max-height: 8rem;
+		overflow: auto;
+		padding: 0.45rem 0.55rem;
+		border: 1px solid var(--line);
+		background: var(--panel-2);
+		color: var(--text);
+		font: inherit;
+		font-size: 11px;
+		white-space: pre-wrap;
 	}
 </style>

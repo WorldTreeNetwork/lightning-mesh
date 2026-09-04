@@ -5,9 +5,16 @@ Winbox / UniFi Network: sit on a LAN, discover the boxes, then administer
 them. Built like [Papyrus](https://github.com/): Tauri 2 wrapping a SvelteKit
 static SPA (`adapter-static` + `ssr = false`).
 
-v1 of the window is discovery only — Unique Local (`fc00::/7`) and link-local
-(`fe80::`) IPv6 on every local interface, plus neighbors from the kernel table
-and an ICMPv6 echo to `ff02::1` (all-nodes) scoped per interface.
+v1 of the window is discovery plus the fleet **network name**. Unique Local
+(`fc00::/7`) and link-local (`fe80::`) IPv6 on every local interface, plus
+neighbors from the kernel table and an ICMPv6 echo to `ff02::1` (all-nodes)
+scoped per interface. The **Network name** control sets the client AP SSID
+(the name phones join) on every reachable node: Apply stages `CLIENT_SSID`
+and runs `deploy/openwrt/update-fleet.sh --wireless` (install-node →
+`mjolnir-apply` `RUN_WIRELESS=1`). That needs overlay SSH and
+`fleet-nodes.conf` on this workstation (`LIGHTNING_MESH_ROOT` if the
+checkout is not an ancestor of cwd / the binary). Empty name does not apply.
+The CLI path still works without Admin.
 
 The list shows each address as **base58 of the 16 IPv6 octets** (one hex
 couplet = one byte). It defaults to Unique Local (`fc00::/7`); switch to
@@ -34,5 +41,6 @@ bun run check
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-The frontend talks to Rust only through `invoke('scan_link_local')` — same
-method as Papyrus `list_vms` / `list_boxes`.
+The frontend talks to Rust through `invoke('scan_link_local')` and
+`invoke('apply_network_name')` — same method as Papyrus `list_vms` /
+`list_boxes`.
