@@ -10,11 +10,12 @@ v1 of the window is discovery plus the fleet **network name**. Unique Local
 neighbors from the kernel table and an ICMPv6 echo to `ff02::1` (all-nodes)
 scoped per interface. The **Network name** control sets the client AP SSID
 (the name phones join) on every reachable node: Apply stages `CLIENT_SSID`
-and runs `deploy/openwrt/update-fleet.sh --wireless` (install-node →
-`mjolnir-apply` `RUN_WIRELESS=1`). That needs overlay SSH and
-`fleet-nodes.conf` on this workstation (`LIGHTNING_MESH_ROOT` if the
-checkout is not an ancestor of cwd / the binary). Empty name does not apply.
-The CLI path still works without Admin.
+and runs `deploy/openwrt/apply-network-name.sh` (`mjolnir-apply`
+`RUN_WIRELESS=1`, **no** `mjolnir-meshd` binary). From the overlay, that
+uses `fleet-nodes.conf`. From the house WAN LAN after WPS:
+`LIGHTNING_FLEET_SSH='root@192.168.0.15 root@192.168.0.22'`. Empty name
+does not apply. All-skipped is a failure. `update-fleet.sh --wireless`
+still exists for full node rollouts (binary + radio), not this knob.
 
 The list shows each address as **base58 of the 16 IPv6 octets** (one hex
 couplet = one byte). It defaults to Unique Local (`fc00::/7`); switch to

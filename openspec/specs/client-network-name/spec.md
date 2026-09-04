@@ -66,20 +66,23 @@ honored until an operator apply changes it.
 
 Lightning Admin SHALL expose a control labeled network name (not guild)
 that sets the fleet client AP SSID. Confirming Apply SHALL stage
-`CLIENT_SSID` and invoke the existing fleet radio apply
-(`update-fleet.sh --wireless` → `mjolnir-apply` with `RUN_WIRELESS=1`).
-It SHALL NOT write UCI over a live SSH session, SHALL NOT append
-`identikey-log`, and SHALL NOT mint keyspace membership. Open
-(`encryption=none`) SHALL remain representable. An empty name SHALL NOT
-apply.
+`CLIENT_SSID` and invoke the wireless-only fleet apply
+(`apply-network-name.sh` → `mjolnir-apply` with `RUN_WIRELESS=1`).
+It SHALL NOT stage `mjolnir-meshd`. It SHALL NOT write UCI over a live
+SSH session, SHALL NOT append `identikey-log`, and SHALL NOT mint
+keyspace membership. Open (`encryption=none`) SHALL remain
+representable. An empty name SHALL NOT apply. An apply that updates
+zero nodes SHALL NOT be reported as success.
 
 #### Scenario: Operator sets the name from Admin
 
-- GIVEN Lightning Admin on a workstation that can SSH the overlay inventory
+- GIVEN Lightning Admin on a workstation that can SSH the nodes
+  (overlay `fleet-nodes.conf`, or `LIGHTNING_FLEET_SSH` WAN `root@ip`
+  after WPS)
 - AND a non-empty network name within the 32-octet SSID limit
 - WHEN the operator confirms Apply
-- THEN each reachable node in `fleet-nodes.conf` is applied through
-  `mjolnir-apply` with that `CLIENT_SSID`
+- THEN each reachable listed node is applied through `mjolnir-apply`
+  with that `CLIENT_SSID` and without replacing `mjolnir-meshd`
 - AND `wireless.clientap.ssid` on a successful node equals that value
 
 #### Scenario: Empty name does not apply

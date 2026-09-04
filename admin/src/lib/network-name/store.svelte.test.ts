@@ -67,11 +67,11 @@ describe('NetworkNameStore', () => {
 	});
 
 	it('surfaces invoke failures without throwing', async () => {
-		vi.mocked(invoke).mockRejectedValue(new Error('update-fleet.sh missing'));
+		vi.mocked(invoke).mockRejectedValue(new Error('apply-network-name.sh missing'));
 		const store = new NetworkNameStore();
 		store.name = 'Lightning Mesh';
 		await store.apply();
-		expect(store.error).toBe('update-fleet.sh missing');
+		expect(store.error).toBe('apply-network-name.sh missing');
 		expect(store.applying).toBe(false);
 		expect(store.report).toBeNull();
 	});

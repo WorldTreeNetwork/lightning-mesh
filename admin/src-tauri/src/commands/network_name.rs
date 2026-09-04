@@ -2,8 +2,8 @@
 // Copyright (C) 2026 World Tree Network Foundation and the Lightning Mesh contributors
 
 //! Fleet network name (client AP SSID). Stages a wireless env and runs
-//! `deploy/openwrt/update-fleet.sh --wireless` — the same mjolnir-apply path
-//! as the CLI. This is a radio network name, not a guild.
+//! `deploy/openwrt/apply-network-name.sh` (mjolnir-apply `RUN_WIRELESS=1`,
+//! no meshd binary). This is a radio network name, not a guild.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -155,7 +155,7 @@ fn parse_fleet_report(stdout: &str) -> ApplyReport {
     }
 
     ApplyReport {
-        ok: halted.is_none(),
+        ok: halted.is_none() && !updated.is_empty(),
         updated,
         skipped,
         halted,
@@ -163,22 +163,22 @@ fn parse_fleet_report(stdout: &str) -> ApplyReport {
     }
 }
 
-fn update_fleet_under(root: &Path) -> PathBuf {
-    root.join("deploy/openwrt/update-fleet.sh")
+fn apply_script_under(root: &Path) -> PathBuf {
+    root.join("deploy/openwrt/apply-network-name.sh")
 }
 
 fn missing_script_error() -> String {
-    "could not find deploy/openwrt/update-fleet.sh (set LIGHTNING_MESH_ROOT to the lightning-mesh checkout; Apply needs overlay SSH and fleet-nodes.conf)".into()
+    "could not find deploy/openwrt/apply-network-name.sh (set LIGHTNING_MESH_ROOT to the lightning-mesh checkout; Apply needs SSH to the nodes — overlay inventory or LIGHTNING_FLEET_SSH=root@wan-ip after WPS)".into()
 }
 
-fn find_update_fleet() -> Result<PathBuf, String> {
+fn find_apply_script() -> Result<PathBuf, String> {
     if let Ok(root) = std::env::var("LIGHTNING_MESH_ROOT") {
-        let p = update_fleet_under(Path::new(&root));
+        let p = apply_script_under(Path::new(&root));
         if p.is_file() {
             return Ok(p);
         }
         return Err(format!(
-            "LIGHTNING_MESH_ROOT={root} has no deploy/openwrt/update-fleet.sh"
+            "LIGHTNING_MESH_ROOT={root} has no deploy/openwrt/apply-network-name.sh"
         ));
     }
 
@@ -193,7 +193,7 @@ fn find_update_fleet() -> Result<PathBuf, String> {
     }
     for start in starts {
         for dir in start.ancestors() {
-            let p = update_fleet_under(dir);
+            let p = apply_script_under(dir);
             if p.is_file() {
                 return Ok(p);
             }
@@ -228,22 +228,24 @@ fn spawn_error(err: std::io::Error) -> String {
     #[cfg(windows)]
     {
         format!(
-            "failed to run update-fleet.sh ({err}). Apply needs bash and deploy/openwrt/update-fleet.sh (set LIGHTNING_MESH_ROOT)."
+            "failed to run apply-network-name.sh ({err}). Apply needs bash and deploy/openwrt/apply-network-name.sh (set LIGHTNING_MESH_ROOT)."
         )
     }
     #[cfg(not(windows))]
     {
-        format!("failed to run update-fleet.sh: {err}")
+        format!("failed to run apply-network-name.sh: {err}")
     }
 }
 
-/// Stage `CLIENT_SSID` and run the existing sequential health-gated fleet apply.
-/// No live UCI SSH mutation. Takes as long as the script; no 30s kill.
+/// Stage `CLIENT_SSID` and run the wireless-only fleet apply
+/// (`apply-network-name.sh` → `mjolnir-apply` `RUN_WIRELESS=1`).
+/// Does not stage `mjolnir-meshd`. No live UCI SSH mutation.
+/// Hosts: overlay `fleet-nodes.conf`, or `LIGHTNING_FLEET_SSH` (WAN `root@ip` after WPS).
 #[tauri::command]
 pub async fn apply_network_name(name: String) -> Result<ApplyReport, String> {
     ssid_ok(&name)?;
     let ssid = name.trim();
-    let script = find_update_fleet()?;
+    let script = find_apply_script()?;
     if !script.is_file() {
         return Err(missing_script_error());
     }
@@ -252,7 +254,7 @@ pub async fn apply_network_name(name: String) -> Result<ApplyReport, String> {
 
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg(&script)
-        .arg("--wireless")
+        .arg("--env")
         .arg(&tmp.0)
         .kill_on_drop(true);
 
@@ -270,7 +272,9 @@ pub async fn apply_network_name(name: String) -> Result<ApplyReport, String> {
 
     let mut report = parse_fleet_report(&log);
     report.log = log;
-    report.ok = output.status.success() && report.halted.is_none();
+    report.ok = output.status.success()
+        && report.halted.is_none()
+        && !report.updated.is_empty();
     Ok(report)
 }
 
@@ -372,5 +376,21 @@ unreachable: none
         assert!(report.skipped.is_empty());
         assert!(report.halted.is_none());
         assert!(report.ok);
+    }
+
+    #[test]
+    fn parse_all_skipped_is_not_ok() {
+        let stdout = "\
+===== 10.254.242.84 — root@10.254.242.84 =====
+>> UNREACHABLE — skipping
+
+===== fleet rollout summary =====
+updated:     none
+unreachable: 10.254.242.84
+";
+        let report = parse_fleet_report(stdout);
+        assert!(report.updated.is_empty());
+        assert_eq!(report.skipped, vec!["10.254.242.84"]);
+        assert!(!report.ok);
     }
 }

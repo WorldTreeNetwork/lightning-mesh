@@ -20,9 +20,11 @@ The client AP SSID is a public **network name** (`client-network-name`),
 not a guild. Factory default is ⚡ open. Radio apply does not mint
 keyspace membership. Guild key material lives in identikey-core.
 
-Lightning Admin is a writer of that radio apply (`update-fleet.sh
---wireless` → `mjolnir-apply`). Discovery stays a link-local scan and
-does not SSH-mutate UCI.
+Lightning Admin is a writer of that radio apply (`apply-network-name.sh`
+→ `mjolnir-apply` `RUN_WIRELESS=1`, no meshd binary). From a house WAN
+LAN the overlay is unreachable; `LIGHTNING_FLEET_SSH` names WPS-armed
+WAN `root@` addrs. Discovery stays a link-local scan and does not
+SSH-mutate UCI. `update-fleet.sh` remains the full binary+radio rollout.
 
 ## Pointers
 
