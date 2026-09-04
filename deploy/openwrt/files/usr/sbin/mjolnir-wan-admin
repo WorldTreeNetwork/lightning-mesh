@@ -1,0 +1,159 @@
+#!/bin/sh
+# mjolnir-wan-admin — physical-presence WAN-LAN SSH window (mjolnir-mesh-m0d).
+#
+# WPS press (via /etc/rc.wps/00-mjolnir-wan-admin) toggles a 15-minute nft
+# accept of TCP/22 from prefixes currently on the WAN iface. No UCI. Reboot
+# or fw4 reload drops the window. Busybox ash.
+#
+#   mjolnir-wan-admin arm|disarm|toggle|status
+
+TIMEOUT_SEC=900
+COMMENT=mjolnir-wps-admin
+PIDFILE=/var/run/mjolnir-wan-admin.pid
+
+log() {
+	logger -t mjolnir-wan-admin "$*" 2>/dev/null
+	echo "[mjolnir-wan-admin] $*" >&2
+}
+
+led_set() {
+	local d
+	for d in /sys/class/leds/*wps*; do
+		[ -d "$d" ] || continue
+		if [ "$1" = arm ]; then
+			echo timer >"$d/trigger" 2>/dev/null || continue
+			echo 150 >"$d/delay_on" 2>/dev/null
+			echo 150 >"$d/delay_off" 2>/dev/null
+		else
+			echo none >"$d/trigger" 2>/dev/null
+			echo 0 >"$d/brightness" 2>/dev/null
+		fi
+	done
+}
+
+armed() {
+	nft -a list chain inet fw4 input_wan 2>/dev/null | grep -q "$COMMENT"
+}
+
+delete_rules() {
+	local handles h
+	handles=$(nft -a list chain inet fw4 input_wan 2>/dev/null \
+		| awk -v c="$COMMENT" '$0 ~ c { print $NF }')
+	for h in $handles; do
+		nft delete rule inet fw4 input_wan handle "$h" 2>/dev/null || true
+	done
+}
+
+kill_sleeper() {
+	local pid
+	[ -f "$PIDFILE" ] || return 0
+	pid=$(cat "$PIDFILE" 2>/dev/null) || true
+	rm -f "$PIDFILE"
+	[ -n "$pid" ] || return 0
+	kill "$pid" 2>/dev/null || true
+}
+
+wan_if() {
+	local ifc
+	if [ -r /lib/functions/network.sh ]; then
+		. /lib/functions/network.sh
+		network_flush_cache
+		network_find_wan ifc
+	fi
+	[ -n "$ifc" ] || ifc=wan
+	echo "$ifc"
+}
+
+# Print one nft prefix per line (192.168.0.0/24 or 2601:.../64).
+wan_prefixes() {
+	local ifc sub
+	ifc=$(wan_if)
+	if [ -r /lib/functions/network.sh ]; then
+		. /lib/functions/network.sh
+		network_flush_cache
+		network_get_subnet sub "$ifc" 2>/dev/null || sub=
+		if [ -n "$sub" ] && [ -x /bin/ipcalc.sh ]; then
+			NETWORK=
+			PREFIX=
+			eval "$(/bin/ipcalc.sh "$sub")"
+			[ -n "$NETWORK" ] && [ -n "$PREFIX" ] && echo "$NETWORK/$PREFIX"
+		fi
+	fi
+	ip -6 -o addr show dev "$ifc" scope global 2>/dev/null \
+		| awk '{
+			split($4, a, "/")
+			if (a[2] != "" && a[2] < 128) print a[1] "/" a[2]
+		}'
+}
+
+insert_rules() {
+	local p family n
+	n=0
+	for p in $(wan_prefixes); do
+		case "$p" in
+			*:*) family=ip6 ;;
+			*)   family=ip ;;
+		esac
+		if nft insert rule inet fw4 input_wan $family saddr "$p" tcp dport 22 \
+			counter accept comment "$COMMENT"; then
+			n=$((n + 1))
+			log "accept tcp/22 from $p"
+		else
+			log "WARN: nft insert failed for $p"
+		fi
+	done
+	echo "$n"
+}
+
+cmd_disarm() {
+	kill_sleeper
+	delete_rules
+	led_set disarm
+	log "WAN-LAN SSH closed"
+}
+
+cmd_arm() {
+	local n
+	cmd_disarm
+	n=$(insert_rules)
+	if [ "$n" -eq 0 ]; then
+		log "no WAN prefixes — not opening 0.0.0.0/0"
+		return 1
+	fi
+	led_set arm
+	(
+		sleep "$TIMEOUT_SEC"
+		rm -f "$PIDFILE"
+		/usr/sbin/mjolnir-wan-admin disarm
+	) >/dev/null 2>&1 &
+	echo $! >"$PIDFILE"
+	log "WAN-LAN SSH armed ${TIMEOUT_SEC}s ($n prefix(es))"
+}
+
+cmd_status() {
+	if armed; then
+		echo armed
+		return 0
+	fi
+	echo disarmed
+	return 1
+}
+
+cmd_toggle() {
+	if armed; then
+		cmd_disarm
+	else
+		cmd_arm
+	fi
+}
+
+case "${1:-toggle}" in
+	arm)    cmd_arm ;;
+	disarm) cmd_disarm ;;
+	toggle) cmd_toggle ;;
+	status) cmd_status ;;
+	*)
+		echo "usage: mjolnir-wan-admin arm|disarm|toggle|status" >&2
+		exit 2
+		;;
+esac

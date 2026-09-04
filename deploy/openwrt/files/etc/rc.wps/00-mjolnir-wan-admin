@@ -1,0 +1,10 @@
+#!/bin/sh
+# Consume the WPS press for WAN-LAN SSH before stock 40-wps_ap / 50-wps_sta.
+# OpenWrt 25.12 /etc/rc.button/wps runs /etc/rc.wps/* and breaks on first
+# success — we must run first and exit 0 so hostapd wps_pbc never starts
+# on the open client AP. Reset (KEY_RESTART) is a different button.
+
+[ "$ACTION" = "released" ] || [ -z "$ACTION" ] || exit 1
+[ -x /usr/sbin/mjolnir-wan-admin ] || exit 1
+/usr/sbin/mjolnir-wan-admin toggle || true
+exit 0

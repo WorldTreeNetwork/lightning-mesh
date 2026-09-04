@@ -293,6 +293,30 @@ if [ -f "$STAGE/hotplug-usb-mjolnir-dongle" ]; then
 	mkdir -p /etc/hotplug.d/usb
 	cp "$STAGE/hotplug-usb-mjolnir-dongle" /etc/hotplug.d/usb/70-mjolnir-dongle
 fi
+if [ -f "$STAGE/mjolnir-wan-admin" ]; then
+	cp "$STAGE/mjolnir-wan-admin" /usr/sbin/mjolnir-wan-admin \
+		&& chmod +x /usr/sbin/mjolnir-wan-admin \
+		|| rollback "installing /usr/sbin/mjolnir-wan-admin failed"
+fi
+if [ -f "$STAGE/rc.wps-00-mjolnir-wan-admin" ]; then
+	mkdir -p /etc/rc.wps
+	cp "$STAGE/rc.wps-00-mjolnir-wan-admin" /etc/rc.wps/00-mjolnir-wan-admin \
+		&& chmod +x /etc/rc.wps/00-mjolnir-wan-admin \
+		|| rollback "installing /etc/rc.wps/00-mjolnir-wan-admin failed"
+fi
+if [ -f "$STAGE/authorized_keys" ]; then
+	mkdir -p /etc/dropbear
+	touch /etc/dropbear/authorized_keys
+	chmod 600 /etc/dropbear/authorized_keys
+	# Merge: never clobber keys already on the box.
+	while IFS= read -r line || [ -n "$line" ]; do
+		[ -z "$line" ] && continue
+		case "$line" in \#*) continue ;; esac
+		grep -qF "$line" /etc/dropbear/authorized_keys 2>/dev/null \
+			|| echo "$line" >>/etc/dropbear/authorized_keys
+	done <"$STAGE/authorized_keys"
+	log "merged operator pubkeys into /etc/dropbear/authorized_keys"
+fi
 
 # 6. UCI config template — only if no meshd section exists (never clobber a
 #    customized config: that would wipe peers). An anonymous meshd section gets

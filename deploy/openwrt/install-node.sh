@@ -68,6 +68,9 @@ scp -O "$DIR/files/usr/sbin/mjolnir-dongle"    "$HOST:$STAGE/mjolnir-dongle"
 scp -O "$DIR/files/etc/hotplug.d/usb/70-mjolnir-dongle" "$HOST:$STAGE/hotplug-usb-mjolnir-dongle"
 scp -O "$DIR/files/etc/init.d/mjolnir-hello"   "$HOST:$STAGE/init.d-mjolnir-hello"
 scp -O "$DIR/files/etc/init.d/iperf3-server"   "$HOST:$STAGE/init.d-iperf3-server"
+scp -O "$DIR/files/usr/sbin/mjolnir-wan-admin" "$HOST:$STAGE/mjolnir-wan-admin"
+scp -O "$DIR/files/etc/rc.wps/00-mjolnir-wan-admin" "$HOST:$STAGE/rc.wps-00-mjolnir-wan-admin"
+scp -O "$DIR/files/etc/dropbear/authorized_keys" "$HOST:$STAGE/authorized_keys"
 ssh "$HOST" "chmod +x $STAGE/mjolnir-apply"
 
 # mjolnir-hello binary is OPTIONAL (mjolnir-mesh-eei) — stage it only if a
