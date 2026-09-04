@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv6Addr};
 
 use super::types::LinkLocalInterface;
-use super::{is_unicast_link_local, scoped_addr};
+use super::{is_unicast_link_local, is_unique_local, scoped_addr};
 
 /// `if-addrs` on this host returns GUA/IPv4 but silently drops `fe80::` (and
 /// therefore IPv6-only veths). Linux sources of truth: `/sys/class/net` for
@@ -32,14 +32,17 @@ fn collect_sysfs(by_name: &mut BTreeMap<String, LinkLocalInterface>) -> Result<(
             continue;
         }
         let index = if_index(&name);
-        by_name.entry(name.clone()).or_insert_with(|| LinkLocalInterface {
-            name: name.clone(),
-            index,
-            mac: read_mac(&name),
-            is_up: oper_up(&name),
-            is_loopback: is_loopback_iface(&name),
-            link_local: Vec::new(),
-        });
+        by_name
+            .entry(name.clone())
+            .or_insert_with(|| LinkLocalInterface {
+                name: name.clone(),
+                index,
+                mac: read_mac(&name),
+                is_up: oper_up(&name),
+                is_loopback: is_loopback_iface(&name),
+                link_local: Vec::new(),
+                unique_local: Vec::new(),
+            });
     }
     Ok(())
 }
@@ -52,23 +55,33 @@ fn collect_if_inet6(by_name: &mut BTreeMap<String, LinkLocalInterface>) {
         let Some(parsed) = parse_if_inet6_line(line) else {
             continue;
         };
-        if !is_unicast_link_local(parsed.ip) {
+        if !is_unicast_link_local(parsed.ip) && !is_unique_local(parsed.ip) {
             continue;
         }
-        let entry = by_name.entry(parsed.name.clone()).or_insert_with(|| LinkLocalInterface {
-            name: parsed.name.clone(),
-            index: parsed.index,
-            mac: read_mac(&parsed.name),
-            is_up: oper_up(&parsed.name),
-            is_loopback: is_loopback_iface(&parsed.name),
-            link_local: Vec::new(),
-        });
+        let entry = by_name
+            .entry(parsed.name.clone())
+            .or_insert_with(|| LinkLocalInterface {
+                name: parsed.name.clone(),
+                index: parsed.index,
+                mac: read_mac(&parsed.name),
+                is_up: oper_up(&parsed.name),
+                is_loopback: is_loopback_iface(&parsed.name),
+                link_local: Vec::new(),
+                unique_local: Vec::new(),
+            });
         if entry.index == 0 {
             entry.index = parsed.index;
         }
-        let scoped = scoped_addr(parsed.ip, &entry.name);
-        if !entry.link_local.contains(&scoped) {
-            entry.link_local.push(scoped);
+        if is_unicast_link_local(parsed.ip) {
+            let scoped = scoped_addr(parsed.ip, &entry.name);
+            if !entry.link_local.contains(&scoped) {
+                entry.link_local.push(scoped);
+            }
+        } else if is_unique_local(parsed.ip) {
+            let addr = parsed.ip.to_string();
+            if !entry.unique_local.contains(&addr) {
+                entry.unique_local.push(addr);
+            }
         }
     }
 }
@@ -79,19 +92,27 @@ fn collect_if_addrs_fallback(by_name: &mut BTreeMap<String, LinkLocalInterface>)
     };
     for a in addrs {
         let index = a.index.unwrap_or_else(|| if_index(&a.name));
-        let entry = by_name.entry(a.name.clone()).or_insert_with(|| LinkLocalInterface {
-            name: a.name.clone(),
-            index,
-            mac: read_mac(&a.name),
-            is_up: a.is_oper_up(),
-            is_loopback: a.is_loopback() || is_loopback_iface(&a.name),
-            link_local: Vec::new(),
-        });
+        let entry = by_name
+            .entry(a.name.clone())
+            .or_insert_with(|| LinkLocalInterface {
+                name: a.name.clone(),
+                index,
+                mac: read_mac(&a.name),
+                is_up: a.is_oper_up(),
+                is_loopback: a.is_loopback() || is_loopback_iface(&a.name),
+                link_local: Vec::new(),
+                unique_local: Vec::new(),
+            });
         if let IpAddr::V6(v6) = a.ip() {
             if is_unicast_link_local(v6) {
                 let scoped = scoped_addr(v6, &a.name);
                 if !entry.link_local.contains(&scoped) {
                     entry.link_local.push(scoped);
+                }
+            } else if is_unique_local(v6) {
+                let addr = v6.to_string();
+                if !entry.unique_local.contains(&addr) {
+                    entry.unique_local.push(addr);
                 }
             }
         }

@@ -6,7 +6,6 @@ use std::net::Ipv6Addr;
 
 use super::interfaces::if_name;
 use super::types::{LinkLocalInterface, LinkLocalNeighbor, RawNeighbor, ScanResult};
-use super::scoped_addr;
 
 pub fn merge_scan(
     interfaces: Vec<LinkLocalInterface>,
@@ -26,26 +25,39 @@ pub fn merge_scan(
         if iface.is_loopback {
             continue;
         }
+        let state = if iface.is_up { "local" } else { "down" };
         for scoped in &iface.link_local {
-            let Some(addr) = parse_scoped(scoped) else {
+            let Some(addr) = parse_addr(scoped) else {
                 continue;
             };
             rows.insert(
                 (iface.index, addr),
-                LinkLocalNeighbor {
-                    iface: iface.name.clone(),
-                    ifindex: iface.index,
-                    address: addr.to_string(),
-                    scoped: scoped.clone(),
-                    mac: iface.mac.clone(),
-                    state: if iface.is_up {
-                        "local".into()
-                    } else {
-                        "down".into()
-                    },
-                    kind: "local".into(),
-                    source: "addr".into(),
-                },
+                LinkLocalNeighbor::from_addr(
+                    iface.name.clone(),
+                    iface.index,
+                    addr,
+                    iface.mac.clone(),
+                    state,
+                    "local",
+                    "addr",
+                ),
+            );
+        }
+        for ula in &iface.unique_local {
+            let Some(addr) = parse_addr(ula) else {
+                continue;
+            };
+            rows.insert(
+                (iface.index, addr),
+                LinkLocalNeighbor::from_addr(
+                    iface.name.clone(),
+                    iface.index,
+                    addr,
+                    iface.mac.clone(),
+                    state,
+                    "local",
+                    "addr",
+                ),
             );
         }
     }
@@ -59,20 +71,22 @@ pub fn merge_scan(
         let is_local = by_index.get(&raw.ifindex).is_some_and(|i| {
             i.link_local
                 .iter()
-                .any(|s| parse_scoped(s) == Some(raw.address))
+                .any(|s| parse_addr(s) == Some(raw.address))
+                || i.unique_local
+                    .iter()
+                    .any(|s| parse_addr(s) == Some(raw.address))
         });
-        let entry = rows
-            .entry((raw.ifindex, raw.address))
-            .or_insert_with(|| LinkLocalNeighbor {
-                iface: iface_name.clone(),
-                ifindex: raw.ifindex,
-                address: raw.address.to_string(),
-                scoped: scoped_addr(raw.address, &iface_name),
-                mac: None,
-                state: String::new(),
-                kind: if is_local { "local" } else { "neighbor" }.into(),
-                source: raw.source.into(),
-            });
+        let entry = rows.entry((raw.ifindex, raw.address)).or_insert_with(|| {
+            LinkLocalNeighbor::from_addr(
+                iface_name.clone(),
+                raw.ifindex,
+                raw.address,
+                None,
+                "",
+                if is_local { "local" } else { "neighbor" },
+                raw.source,
+            )
+        });
         if entry.mac.is_none() {
             entry.mac = raw.mac.clone();
         }
@@ -93,6 +107,7 @@ pub fn merge_scan(
     neighbors.sort_by(|a, b| {
         a.iface
             .cmp(&b.iface)
+            .then(scope_rank(&a.scope).cmp(&scope_rank(&b.scope)))
             .then(a.kind.cmp(&b.kind))
             .then(a.address.cmp(&b.address))
     });
@@ -105,9 +120,17 @@ pub fn merge_scan(
     }
 }
 
-fn parse_scoped(scoped: &str) -> Option<Ipv6Addr> {
-    let host = scoped.split('%').next()?;
+fn parse_addr(addr: &str) -> Option<Ipv6Addr> {
+    let host = addr.split('%').next()?;
     host.parse().ok()
+}
+
+fn scope_rank(scope: &str) -> u8 {
+    match scope {
+        "unique-local" => 0,
+        "link-local" => 1,
+        _ => 2,
+    }
 }
 
 fn source_rank(source: &str) -> u8 {
@@ -125,18 +148,41 @@ mod tests {
     use std::net::Ipv6Addr;
 
     fn iface(name: &str, index: u32, ip: &str, loopback: bool) -> LinkLocalInterface {
-        let addr: Ipv6Addr = ip.parse().unwrap();
+        iface_with(name, index, Some(ip), None, loopback)
+    }
+
+    fn iface_with(
+        name: &str,
+        index: u32,
+        link_local: Option<&str>,
+        unique_local: Option<&str>,
+        loopback: bool,
+    ) -> LinkLocalInterface {
         LinkLocalInterface {
             name: name.into(),
             index,
             mac: Some("aa:bb:cc:dd:ee:ff".into()),
             is_up: true,
             is_loopback: loopback,
-            link_local: vec![scoped_addr(addr, name)],
+            link_local: link_local
+                .map(|ip| {
+                    let addr: Ipv6Addr = ip.parse().unwrap();
+                    vec![crate::net::scoped_addr(addr, name)]
+                })
+                .unwrap_or_default(),
+            unique_local: unique_local
+                .map(|ip| vec![ip.to_string()])
+                .unwrap_or_default(),
         }
     }
 
-    fn raw(ifindex: u32, ip: &str, mac: Option<&str>, source: &'static str, state: &str) -> RawNeighbor {
+    fn raw(
+        ifindex: u32,
+        ip: &str,
+        mac: Option<&str>,
+        source: &'static str,
+        state: &str,
+    ) -> RawNeighbor {
         RawNeighbor {
             ifindex,
             address: ip.parse().unwrap(),
@@ -162,14 +208,49 @@ mod tests {
         assert_eq!(scan.neighbors[0].kind, "local");
         assert_eq!(scan.neighbors[0].iface, "eth0");
         assert_eq!(scan.neighbors[0].scoped, "fe80::1%eth0");
+        assert_eq!(scan.neighbors[0].base58, "YRka4zYGRkixTpb4LjCkzL");
+        assert_eq!(scan.neighbors[0].scope, "link-local");
         assert_eq!(scan.interfaces.len(), 2);
+    }
+
+    #[test]
+    fn unique_local_becomes_a_row_with_base58() {
+        let scan = merge_scan(
+            vec![iface_with(
+                "br-lan",
+                4,
+                Some("fe80::1"),
+                Some("fd01:d28c:7e4a::1"),
+                false,
+            )],
+            vec![],
+            vec![],
+            None,
+            false,
+        );
+        assert_eq!(scan.neighbors.len(), 2);
+        let ula = scan
+            .neighbors
+            .iter()
+            .find(|n| n.scope == "unique-local")
+            .expect("ula");
+        assert_eq!(ula.address, "fd01:d28c:7e4a::1");
+        assert_eq!(ula.scoped, "fd01:d28c:7e4a::1");
+        assert_eq!(ula.base58, "YF4RhMGBc3LA1xkSVuXzpg");
+        assert_eq!(ula.kind, "local");
     }
 
     #[test]
     fn neighbor_mac_is_kept_and_probe_does_not_unlocal_self() {
         let scan = merge_scan(
             vec![iface("eth0", 2, "fe80::1", false)],
-            vec![raw(2, "fe80::2", Some("00:11:22:33:44:55"), "neigh", "stale")],
+            vec![raw(
+                2,
+                "fe80::2",
+                Some("00:11:22:33:44:55"),
+                "neigh",
+                "stale",
+            )],
             vec![
                 raw(2, "fe80::1", None, "probe", "reachable"),
                 raw(2, "fe80::2", None, "probe", "reachable"),
@@ -177,11 +258,19 @@ mod tests {
             None,
             true,
         );
-        let self_row = scan.neighbors.iter().find(|n| n.address == "fe80::1").unwrap();
+        let self_row = scan
+            .neighbors
+            .iter()
+            .find(|n| n.address == "fe80::1")
+            .unwrap();
         assert_eq!(self_row.kind, "local");
         assert_eq!(self_row.source, "probe");
 
-        let peer = scan.neighbors.iter().find(|n| n.address == "fe80::2").unwrap();
+        let peer = scan
+            .neighbors
+            .iter()
+            .find(|n| n.address == "fe80::2")
+            .unwrap();
         assert_eq!(peer.kind, "neighbor");
         assert_eq!(peer.mac.as_deref(), Some("00:11:22:33:44:55"));
         assert_eq!(peer.state, "reachable");
@@ -191,7 +280,16 @@ mod tests {
     #[test]
     fn gua_never_enters_via_raw_without_being_link_local_local_only_from_ifaces() {
         // merge_scan trusts callers to filter; dump/probe already drop GUA.
-        let scan = merge_scan(vec![iface("eth0", 2, "fe80::1", false)], vec![], vec![], None, false);
-        assert!(scan.neighbors.iter().all(|n| n.address.starts_with("fe80:")));
+        let scan = merge_scan(
+            vec![iface("eth0", 2, "fe80::1", false)],
+            vec![],
+            vec![],
+            None,
+            false,
+        );
+        assert!(scan
+            .neighbors
+            .iter()
+            .all(|n| n.address.starts_with("fe80:")));
     }
 }

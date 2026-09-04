@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { copyText } from '$lib/clipboard';
+	import AddrCell from '$lib/discovery/AddrCell.svelte';
 	import { discovery } from '$lib/discovery/store.svelte';
 
 	onMount(() => {
@@ -17,6 +19,24 @@
 	const neighborRows = $derived(discovery.visibleNeighbors);
 	const ifaceList = $derived(discovery.networkInterfaces);
 	const scanned = $derived(ago(discovery.lastScan));
+
+	let listCopied = $state(false);
+
+	async function copyList() {
+		const text = discovery.visibleListText();
+		if (!text) return;
+		const ok = await copyText(text);
+		listCopied = ok;
+		setTimeout(() => {
+			listCopied = false;
+		}, 1400);
+	}
+
+	function scopeLabel(scope: string): string {
+		if (scope === 'unique-local') return 'ULA';
+		if (scope === 'link-local') return 'LL';
+		return scope;
+	}
 </script>
 
 <div class="shell">
@@ -25,10 +45,44 @@
 			<span class="mark" aria-hidden="true"></span>
 			<div>
 				<div class="title">Lightning Admin</div>
-				<div class="sub">IPv6 link-local neighbors · every interface</div>
+				<div class="sub">Unique Local IPv6 as base58 · hover for the address</div>
 			</div>
 		</div>
 		<div class="actions">
+			<div class="scopes" role="tablist" aria-label="Address scope">
+				<button
+					type="button"
+					class="scan ghost"
+					class:on={discovery.selectedScope === 'unique-local'}
+					onclick={() => discovery.selectScope('unique-local')}
+				>
+					ULA {discovery.uniqueLocalCount}
+				</button>
+				<button
+					type="button"
+					class="scan ghost"
+					class:on={discovery.selectedScope === 'link-local'}
+					onclick={() => discovery.selectScope('link-local')}
+				>
+					LL {discovery.linkLocalCount}
+				</button>
+				<button
+					type="button"
+					class="scan ghost"
+					class:on={discovery.selectedScope === 'all'}
+					onclick={() => discovery.selectScope('all')}
+				>
+					All {discovery.neighbors.length}
+				</button>
+			</div>
+			<button
+				type="button"
+				class="scan ghost"
+				disabled={neighborRows.length === 0}
+				onclick={() => copyList()}
+			>
+				{listCopied ? 'Copied list' : 'Copy list'}
+			</button>
 			<button type="button" class="scan" disabled={discovery.loading} onclick={() => discovery.scan()}>
 				{discovery.loading ? 'Scanning…' : 'Scan'}
 			</button>
@@ -45,7 +99,7 @@
 				onclick={() => discovery.selectIface('all')}
 			>
 				<span class="iname">all</span>
-				<span class="icount">{discovery.neighbors.length}</span>
+				<span class="icount">{discovery.scopedNeighbors.length}</span>
 			</button>
 			{#each ifaceList as iface (iface.name)}
 				<button
@@ -79,13 +133,18 @@
 
 			{#if neighborRows.length === 0 && !discovery.loading && !discovery.error}
 				<div class="empty-main">
-					No IPv6 link-local neighbors yet. Plug into a LAN (or a mesh node) and Scan.
+					{#if discovery.selectedScope === 'unique-local' && discovery.linkLocalCount > 0}
+						No Unique Local IPv6 on this view. Switch to LL or All, or join a mesh that hands out ULA.
+					{:else}
+						No Unique Local or link-local IPv6 yet. Plug into a LAN (or a mesh node) and Scan.
+					{/if}
 				</div>
 			{:else}
 				<table>
 					<thead>
 						<tr>
-							<th>Address</th>
+							<th>Base58</th>
+							<th>Scope</th>
 							<th>MAC</th>
 							<th>Interface</th>
 							<th>Kind</th>
@@ -95,8 +154,13 @@
 					</thead>
 					<tbody>
 						{#each neighborRows as n (`${n.ifindex}:${n.address}`)}
-							<tr class:local={n.kind === 'local'}>
-								<td class="addr" title={n.scoped}>{n.scoped}</td>
+							<tr class:local={n.kind === 'local'} class:ula={n.scope === 'unique-local'}>
+								<td class="addr">
+									<AddrCell neighbor={n} />
+								</td>
+								<td>
+									<span class="scope {n.scope}">{scopeLabel(n.scope)}</span>
+								</td>
 								<td class="mac">{n.mac ?? '—'}</td>
 								<td>{n.iface}</td>
 								<td>
@@ -115,7 +179,9 @@
 	<footer class="status">
 		<span>{ifaceList.length} iface{ifaceList.length === 1 ? '' : 's'}</span>
 		<span class="sep">·</span>
-		<span>{discovery.neighbors.length} link-local</span>
+		<span>{discovery.uniqueLocalCount} ULA</span>
+		<span class="sep">·</span>
+		<span>{discovery.linkLocalCount} link-local</span>
 		<span class="sep">·</span>
 		<span>{discovery.probed ? 'probed ff02::1' : 'no probe'}</span>
 		<span class="sep">·</span>
@@ -181,6 +247,30 @@
 
 	.scan:hover:not(:disabled) {
 		border-color: var(--mint);
+		background: #12362c;
+	}
+
+	.scan.ghost {
+		border-color: var(--line-strong);
+		background: transparent;
+		color: var(--text);
+	}
+
+	.actions {
+		display: flex;
+		gap: 0.45rem;
+		align-items: center;
+	}
+
+	.scopes {
+		display: flex;
+		gap: 2px;
+		margin-right: 0.35rem;
+	}
+
+	.scan.ghost.on {
+		border-color: var(--mint);
+		color: var(--mint);
 		background: #12362c;
 	}
 
@@ -300,6 +390,25 @@
 	.addr {
 		color: var(--mint);
 		font-size: 12.5px;
+		overflow: visible;
+	}
+
+	.scope {
+		display: inline-block;
+		padding: 0.08rem 0.4rem;
+		border: 1px solid var(--line-strong);
+		font-size: 10px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.scope.unique-local {
+		color: var(--mint);
+		border-color: var(--mint-dim);
+	}
+
+	.scope.link-local {
+		color: var(--muted);
 	}
 
 	.mac,

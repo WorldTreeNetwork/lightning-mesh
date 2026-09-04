@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
-use super::types::{LinkLocalInterface, RawNeighbor};
 use super::is_unicast_link_local;
+use super::types::{LinkLocalInterface, RawNeighbor};
 
 const ALL_NODES: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
 const COLLECT: Duration = Duration::from_millis(600);
@@ -39,10 +39,7 @@ pub fn probe_all_nodes(interfaces: &[LinkLocalInterface]) -> (Vec<RawNeighbor>, 
     if sockets.is_empty() {
         return (
             Vec::new(),
-            Some(format!(
-                "ICMPv6 probe unavailable ({})",
-                errors.join("; ")
-            )),
+            Some(format!("ICMPv6 probe unavailable ({})", errors.join("; "))),
         );
     }
 

@@ -6,9 +6,11 @@ use netlink_packet_route::neighbour::{NeighbourAddress, NeighbourAttribute, Neig
 use netlink_packet_route::AddressFamily;
 
 use super::types::{LinkLocalInterface, RawNeighbor};
-use super::{format_mac, is_unicast_link_local};
+use super::{format_mac, is_ula_or_link_local};
 
-pub async fn dump_link_local(interfaces: &[LinkLocalInterface]) -> Result<Vec<RawNeighbor>, String> {
+pub async fn dump_link_local(
+    interfaces: &[LinkLocalInterface],
+) -> Result<Vec<RawNeighbor>, String> {
     let (connection, handle, _) = rtnetlink::new_connection().map_err(|e| e.to_string())?;
     tokio::spawn(connection);
 
@@ -27,7 +29,10 @@ pub async fn dump_link_local(interfaces: &[LinkLocalInterface]) -> Result<Vec<Ra
             continue;
         }
         let ifindex = msg.header.ifindex;
-        if interfaces.iter().any(|i| i.index == ifindex && i.is_loopback) {
+        if interfaces
+            .iter()
+            .any(|i| i.index == ifindex && i.is_loopback)
+        {
             continue;
         }
 
@@ -43,7 +48,7 @@ pub async fn dump_link_local(interfaces: &[LinkLocalInterface]) -> Result<Vec<Ra
         let Some(address) = dest else {
             continue;
         };
-        if !is_unicast_link_local(address) {
+        if !is_ula_or_link_local(address) {
             continue;
         }
         out.push(RawNeighbor {

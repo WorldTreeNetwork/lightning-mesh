@@ -9,10 +9,16 @@ export class DiscoveryStore {
 	probed = $state(false);
 	lastScan = $state<number | null>(null);
 	selectedIface = $state<string | 'all'>('all');
+	selectedScope = $state<'all' | 'unique-local' | 'link-local'>('unique-local');
+
+	get scopedNeighbors(): LinkLocalNeighbor[] {
+		if (this.selectedScope === 'all') return this.neighbors;
+		return this.neighbors.filter((n) => n.scope === this.selectedScope);
+	}
 
 	get visibleNeighbors(): LinkLocalNeighbor[] {
-		if (this.selectedIface === 'all') return this.neighbors;
-		return this.neighbors.filter((n) => n.iface === this.selectedIface);
+		if (this.selectedIface === 'all') return this.scopedNeighbors;
+		return this.scopedNeighbors.filter((n) => n.iface === this.selectedIface);
 	}
 
 	get networkInterfaces(): LinkLocalInterface[] {
@@ -20,7 +26,29 @@ export class DiscoveryStore {
 	}
 
 	neighborCount(name: string): number {
-		return this.neighbors.filter((n) => n.iface === name).length;
+		return this.neighbors.filter((n) => {
+			if (n.iface !== name) return false;
+			if (this.selectedScope !== 'all' && n.scope !== this.selectedScope) return false;
+			return true;
+		}).length;
+	}
+
+	selectScope(scope: 'all' | 'unique-local' | 'link-local') {
+		this.selectedScope = scope;
+	}
+
+	get uniqueLocalCount(): number {
+		return this.neighbors.filter((n) => n.scope === 'unique-local').length;
+	}
+
+	get linkLocalCount(): number {
+		return this.neighbors.filter((n) => n.scope === 'link-local').length;
+	}
+
+	visibleListText(): string {
+		return this.visibleNeighbors
+			.map((n) => `${n.base58}\t${n.address}\t${n.iface}`)
+			.join('\n');
 	}
 
 	selectIface(name: string | 'all') {

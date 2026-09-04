@@ -7,6 +7,7 @@ export interface LinkLocalInterface {
 	is_up: boolean;
 	is_loopback: boolean;
 	link_local: string[];
+	unique_local: string[];
 }
 
 export interface LinkLocalNeighbor {
@@ -14,6 +15,10 @@ export interface LinkLocalNeighbor {
 	ifindex: number;
 	address: string;
 	scoped: string;
+	/** Bitcoin-alphabet base58 of the 16 IPv6 octets. */
+	base58: string;
+	/** `unique-local` (`fc00::/7`) or `link-local` (`fe80::/10`). */
+	scope: 'unique-local' | 'link-local' | string;
 	mac: string | null;
 	state: string;
 	kind: 'local' | 'neighbor' | string;
@@ -27,6 +32,10 @@ export interface ScanResult {
 	probe_error: string | null;
 }
 
-export function scanLinkLocal(): Promise<ScanResult> {
+export async function scanLinkLocal(): Promise<ScanResult> {
+	if (import.meta.env.DEV && typeof location !== 'undefined' && /\bdemo=1\b/.test(location.search)) {
+		const { demoScan } = await import('./fixture');
+		return demoScan();
+	}
 	return invoke<ScanResult>('scan_link_local');
 }

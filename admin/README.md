@@ -5,9 +5,18 @@ Winbox / UniFi Network: sit on a LAN, discover the boxes, then administer
 them. Built like [Papyrus](https://github.com/): Tauri 2 wrapping a SvelteKit
 static SPA (`adapter-static` + `ssr = false`).
 
-v1 of the window is discovery only — every IPv6 link-local (`fe80::`) address
-on every local interface, plus neighbors from the kernel table and an ICMPv6
-echo to `ff02::1` (all-nodes) scoped per interface.
+v1 of the window is discovery only — Unique Local (`fc00::/7`) and link-local
+(`fe80::`) IPv6 on every local interface, plus neighbors from the kernel table
+and an ICMPv6 echo to `ff02::1` (all-nodes) scoped per interface.
+
+The list shows each address as **base58 of the 16 IPv6 octets** (one hex
+couplet = one byte). It defaults to Unique Local (`fc00::/7`); switch to
+LL or All in the header. Hover a base58 to read the canonical IPv6; click
+copies base58, the hover panel copies IPv6, and **Copy list** dumps the
+visible rows as `base58<TAB>ipv6<TAB>iface` for pasting.
+
+`bun run dev` then open `http://localhost:1420/?demo=1` to preview the
+list without the Tauri shell.
 
 ## Run
 
