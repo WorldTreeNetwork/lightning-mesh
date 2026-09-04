@@ -17,13 +17,19 @@ log() {
 }
 
 led_set() {
+	# Timer snapshots the current brightness as the ON value. Setting
+	# trigger=timer while brightness is 0 blinks darkness. Status is the
+	# lamp people see; WPS is a small icon LED on these Cudys.
 	local d
-	for d in /sys/class/leds/*wps*; do
+	for d in /sys/class/leds/*wps* /sys/class/leds/*status*; do
 		[ -d "$d" ] || continue
 		if [ "$1" = arm ]; then
+			echo none >"$d/trigger" 2>/dev/null || continue
+			echo 1 >"$d/brightness" 2>/dev/null
 			echo timer >"$d/trigger" 2>/dev/null || continue
-			echo 150 >"$d/delay_on" 2>/dev/null
-			echo 150 >"$d/delay_off" 2>/dev/null
+			echo 300 >"$d/delay_on" 2>/dev/null
+			echo 300 >"$d/delay_off" 2>/dev/null
+			echo 1 >"$d/brightness" 2>/dev/null
 		else
 			echo none >"$d/trigger" 2>/dev/null
 			echo 0 >"$d/brightness" 2>/dev/null
