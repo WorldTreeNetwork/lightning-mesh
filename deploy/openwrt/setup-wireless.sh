@@ -39,6 +39,7 @@ case "$BACKHAUL_BAND" in 2g|5g) ;; *) echo "FATAL: BACKHAUL_BAND must be 2g or 5
 BACKHAUL_CHANNEL_2G="${BACKHAUL_CHANNEL_2G:-${MESH_CHANNEL_2G:-6}}"   # one shared 2.4 GHz backhaul channel mesh-wide
 BACKHAUL_CHANNEL_5G="${BACKHAUL_CHANNEL_5G:-36}"                      # NON-DFS (36-48) for a 5 GHz backhaul; shared mesh-wide
 CLIENT_CHANNEL_2G="${CLIENT_CHANNEL_2G:-6}"                           # 2.4 GHz client AP channel (used when BACKHAUL_BAND=5g)
+# Apply exports these from mjolnir.radio (the live store) when RUN_WIRELESS=1.
 CLIENT_SSID="${CLIENT_SSID:-⚡}"  # client-facing AP network name (phones join this; not a guild)
 CLIENT_KEY="${CLIENT_KEY:-}"                  # unused when CLIENT_ENC=none. Set for psk2 / sae-mixed.
 CLIENT_ENC="${CLIENT_ENC:-none}"              # OPEN client AP (no password). 'psk2' or 'sae-mixed' for a PSK network.

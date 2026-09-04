@@ -81,3 +81,15 @@ config hello 'hello'
 	# Keep these identical to meshd's own paths.
 	option directory_file '/var/run/mjolnir/directory.json'
 	option spool_dir '/var/run/mjolnir/pending'
+
+# Operator knobs (mjolnir-mesh-849). Canonical store; mjolnir-apply projects
+# radio.* onto UCI wireless. Do not treat LuCI-edited wireless as source.
+config radio 'radio'
+	# Client AP network name (phones join this; not a guild). Factory ⚡ open.
+	option ssid '⚡'
+	option encryption 'none'
+	option key ''
+
+config wan_admin 'wan_admin'
+	# WPS WAN-LAN SSH window length, seconds (mjolnir-wan-admin).
+	option timeout '900'

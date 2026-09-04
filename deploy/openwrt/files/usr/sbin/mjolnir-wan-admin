@@ -1,13 +1,26 @@
 #!/bin/sh
 # mjolnir-wan-admin — physical-presence WAN-LAN SSH window (mjolnir-mesh-m0d).
 #
-# WPS press (via /etc/rc.wps/00-mjolnir-wan-admin) toggles a 15-minute nft
-# accept of TCP/22 from prefixes currently on the WAN iface. No UCI. Reboot
-# or fw4 reload drops the window. Busybox ash.
+# WPS press (via /etc/rc.wps/00-mjolnir-wan-admin) toggles an nft accept of
+# TCP/22 from prefixes currently on the WAN iface. Duration is
+# mjolnir.wan_admin.timeout (default 900s). Reboot or fw4 reload drops the
+# window. Busybox ash.
 #
 #   mjolnir-wan-admin arm|disarm|toggle|status
+#
+# Timeout is mjolnir.wan_admin.timeout (seconds). Missing/invalid → 900.
 
-TIMEOUT_SEC=900
+timeout_sec() {
+	local t
+	t=$(uci -q get mjolnir.wan_admin.timeout 2>/dev/null) || t=
+	case "$t" in
+		''|*[!0-9]*) t=900 ;;
+	esac
+	[ "$t" -gt 0 ] 2>/dev/null || t=900
+	echo "$t"
+}
+
+TIMEOUT_SEC=$(timeout_sec)
 COMMENT=mjolnir-wps-admin
 PIDFILE=/var/run/mjolnir-wan-admin.pid
 

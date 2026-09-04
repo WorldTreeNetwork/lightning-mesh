@@ -366,6 +366,47 @@ if [ -x /usr/bin/mjolnir-hello ] && [ -z "$(uci -q get mjolnir.hello 2>/dev/null
 	  uci set mjolnir.hello.spool_dir=/var/run/mjolnir/pending
 	  uci commit mjolnir; } 2>/dev/null || true
 fi
+# 7.6 operator settings store (mjolnir-mesh-849): ensure radio + wan_admin
+#     without clobbering meshd/hello. Existing nodes lack these sections.
+ensure_mjolnir_settings() {
+	if [ -z "$(uci -q get mjolnir.radio 2>/dev/null)" ]; then
+		uci set mjolnir.radio=radio
+	fi
+	[ -n "$(uci -q get mjolnir.radio.ssid 2>/dev/null)" ] \
+		|| uci set mjolnir.radio.ssid='⚡'
+	[ -n "$(uci -q get mjolnir.radio.encryption 2>/dev/null)" ] \
+		|| uci set mjolnir.radio.encryption='none'
+	uci -q get mjolnir.radio.key >/dev/null 2>&1 \
+		|| uci set mjolnir.radio.key=''
+	if [ -z "$(uci -q get mjolnir.wan_admin 2>/dev/null)" ]; then
+		uci set mjolnir.wan_admin=wan_admin
+	fi
+	[ -n "$(uci -q get mjolnir.wan_admin.timeout 2>/dev/null)" ] \
+		|| uci set mjolnir.wan_admin.timeout='900'
+	uci commit mjolnir
+}
+
+settings_from_env() {
+	# Staged wireless.env is a writer of the store, not the live source.
+	[ -n "${CLIENT_SSID:-}" ] && uci set mjolnir.radio.ssid="$CLIENT_SSID"
+	[ -n "${CLIENT_ENC:-}" ] && uci set mjolnir.radio.encryption="$CLIENT_ENC"
+	if [ -n "${CLIENT_KEY+x}" ]; then
+		uci set mjolnir.radio.key="$CLIENT_KEY"
+	fi
+	[ -n "${WAN_ADMIN_TIMEOUT:-}" ] && uci set mjolnir.wan_admin.timeout="$WAN_ADMIN_TIMEOUT"
+	uci commit mjolnir
+}
+
+settings_export_radio() {
+	local v
+	v=$(uci -q get mjolnir.radio.ssid 2>/dev/null) && [ -n "$v" ] && CLIENT_SSID="$v"
+	v=$(uci -q get mjolnir.radio.encryption 2>/dev/null) && [ -n "$v" ] && CLIENT_ENC="$v"
+	CLIENT_KEY=$(uci -q get mjolnir.radio.key 2>/dev/null) || CLIENT_KEY=
+	export CLIENT_SSID CLIENT_ENC CLIENT_KEY
+}
+
+ensure_mjolnir_settings || log "WARN: could not ensure mjolnir radio/wan_admin sections"
+
 HELLO_ENABLED=0
 [ "$(uci -q get mjolnir.hello.enabled 2>/dev/null)" = "1" ] && HELLO_ENABLED=1
 if [ "$HELLO_ENABLED" = 1 ] && [ -x /usr/bin/mjolnir-hello ]; then
@@ -392,16 +433,21 @@ else
 fi
 
 # 8. optional radio (re)configuration — the other wifi-bouncing step.
+#     wireless.env (if staged) writes mjolnir.radio / wan_admin; then the
+#     store is exported and setup-wireless.sh projects onto UCI wireless.
 if [ "$RUN_WIRELESS" = 1 ]; then
 	WIFI_TOUCHED=1
 	log "running setup-wireless.sh"
 	if [ -f "$STAGE/wireless.env" ]; then
 		set -a; . "$STAGE/wireless.env"; set +a
+		settings_from_env
 	fi
+	settings_export_radio
 	WIRELESS_RC=0
 	sh /root/setup-wireless.sh || WIRELESS_RC=$?
 	# the env file carries MESH_KEY/CLIENT_KEY/FT_KEY — once consumed, don't
-	# leave a spare plaintext copy in the staging dir (uci now holds the values)
+	# leave a spare plaintext copy in the staging dir (mjolnir UCI holds the
+	# operator knobs; wireless UCI is the projection)
 	rm -f "$STAGE/wireless.env"
 	[ "$WIRELESS_RC" = 0 ] || rollback "setup-wireless.sh failed (rc=$WIRELESS_RC)"
 fi
