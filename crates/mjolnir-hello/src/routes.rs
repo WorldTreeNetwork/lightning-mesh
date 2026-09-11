@@ -1546,7 +1546,7 @@ mod tests {
         // Before: the probe gets the portal, and CAPPORT says a portal is due.
         let probe = call("GET", "/hotspot-detect.html");
         assert_eq!(probe.status, 200);
-        assert!(String::from_utf8_lossy(&probe.body).contains("Take me to the internet"));
+        assert!(String::from_utf8_lossy(&probe.body).contains("Just the internet, please"));
         let capport: serde_json::Value =
             serde_json::from_slice(&call("GET", "/api/captive-portal").body).unwrap();
         assert_eq!(capport["captive"], serde_json::json!(true));
