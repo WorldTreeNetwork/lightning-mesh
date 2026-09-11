@@ -12,7 +12,7 @@
 //!   connect <addr>     dial a peer by address blob, measure a datagram round-trip
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -3135,6 +3135,81 @@ struct DirectoryNode {
     /// `(0,0)`, never JSON `null`. Join to `radio.json` on `backhaul_addr`.
     #[serde(flatten)]
     coordinate: mjolnir_mesh::CoordinateProjection,
+    /// Kernel unicast `fe80::/10` on `br-lan` (client AP). First-contact
+    /// management address (add-link-local-mgmt). Omitted when the iface has
+    /// none. Not scoped — the operator adds `%iface` on *their* NIC.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_local_lan: Option<String>,
+    /// Kernel unicast `fe80::/10` on `br-mesh` (802.11s backhaul). Same
+    /// rules as [`DirectoryNode::link_local_lan`]. Never the `mjolnir0`
+    /// overlay TUN link-local.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_local_mesh: Option<String>,
+}
+
+/// Client AP bridge. Link-local here is SSH from a phone/laptop on the SSID.
+const CLIENT_BRIDGE: &str = "br-lan";
+/// 802.11s backhaul bridge. Link-local here is on-link to other mesh nodes.
+const MESH_BRIDGE: &str = "br-mesh";
+
+/// Parse `/proc/net/if_inet6` for the first unicast link-local on `iface`.
+///
+/// Kernel format: 32 hex digits, ifindex, prefixlen, scope, flags, name.
+/// Scope `20` is `RT_SCOPE_LINK`. Pure over the file body so tests do not
+/// need netlink.
+fn parse_if_inet6_link_local(body: &str, iface: &str) -> Option<Ipv6Addr> {
+    for line in body.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(hex) = parts.next() else { continue };
+        let Some(_idx) = parts.next() else { continue };
+        let Some(_plen) = parts.next() else { continue };
+        let Some(scope) = parts.next() else { continue };
+        let Some(_flags) = parts.next() else { continue };
+        let Some(name) = parts.next() else { continue };
+        if name != iface {
+            continue;
+        }
+        let Ok(scope_u) = u32::from_str_radix(scope, 16) else {
+            continue;
+        };
+        if scope_u != 0x20 {
+            continue;
+        }
+        if hex.len() != 32 {
+            continue;
+        }
+        let mut bytes = [0u8; 16];
+        let mut ok = true;
+        for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+            match std::str::from_utf8(chunk).ok().and_then(|s| u8::from_str_radix(s, 16).ok()) {
+                Some(b) => bytes[i] = b,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let ip = Ipv6Addr::from(bytes);
+        if ip.is_unicast_link_local() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
+fn read_iface_link_local(iface: &str) -> Option<Ipv6Addr> {
+    let body = std::fs::read_to_string("/proc/net/if_inet6").ok()?;
+    parse_if_inet6_link_local(&body, iface)
+}
+
+/// Stamp kernel `br-lan` / `br-mesh` link-locals onto a directory node.
+/// Leaves fields `None` when the iface is missing — serde omits them.
+fn stamp_node_link_locals(node: &mut DirectoryNode) {
+    node.link_local_lan = read_iface_link_local(CLIENT_BRIDGE).map(|ip| ip.to_string());
+    node.link_local_mesh = read_iface_link_local(MESH_BRIDGE).map(|ip| ip.to_string());
 }
 
 /// One other mesh node, joining its [`AddrBook`] entry with any subnet claim
@@ -3278,6 +3353,8 @@ fn build_directory_snapshot(
         backhaul_addr: backhaul_ip.to_string(),
         name: node_name_book.get(self_id).map(|e| e.name.clone()),
         coordinate: project_coordinate(coordinate_book, self_id),
+        link_local_lan: None,
+        link_local_mesh: None,
     };
 
     let neighbors = addr_book
@@ -3351,6 +3428,8 @@ fn build_directory_snapshot_v2(
         backhaul_addr: backhaul_ip.to_string(),
         name: node_name_book.get(self_id).map(|e| e.name.clone()),
         coordinate: project_coordinate(coordinate_book, self_id),
+        link_local_lan: None,
+        link_local_mesh: None,
     };
 
     let neighbors = addr_book
@@ -3503,6 +3582,7 @@ fn write_directory_projection(
         self_id,
         backhaul_ip,
     );
+    stamp_node_link_locals(&mut snapshot.node);
     snapshot.gateways = directory_gateways(&gateways);
     // Fold currently-resolving key-owned leased names (71x) into the same
     // services list, so the front desk shows every reachable `.mesh` name in one
@@ -5581,7 +5661,7 @@ fn control_api_handle_directory(
         .lock()
         .expect("coordinate book poisoned")
         .clone();
-    let snapshot = build_directory_snapshot_v2(
+    let mut snapshot = build_directory_snapshot_v2(
         &claims_snapshot,
         &addr_snapshot,
         &user_snapshot,
@@ -5592,6 +5672,7 @@ fn control_api_handle_directory(
         self_id,
         backhaul_ip,
     );
+    stamp_node_link_locals(&mut snapshot.node);
     match serde_json::to_vec(&snapshot) {
         Ok(bytes) => (200, bytes),
         Err(e) => {
@@ -9303,6 +9384,8 @@ config meshd 'meshd'
         assert_eq!(snapshot.node.backhaul_addr, "10.254.1.1");
         // No claim recorded yet for "self" — subnet is unknown during warmup.
         assert_eq!(snapshot.node.subnet, None);
+        assert_eq!(snapshot.node.link_local_lan, None);
+        assert_eq!(snapshot.node.link_local_mesh, None);
         assert!(snapshot.neighbors.is_empty());
         assert!(snapshot.identities.is_empty());
         assert!(snapshot.services.is_empty());
@@ -9543,6 +9626,7 @@ config meshd 'meshd'
             &book,
             &LostNameMap::new(),
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
         );
@@ -10440,5 +10524,69 @@ config meshd 'meshd'
             .collect();
         assert!(names.contains(&"fresh".to_string()));
         assert!(!names.contains(&"stale".to_string()));
+    }
+
+    #[test]
+    fn parse_if_inet6_link_local_picks_br_lan_not_mjolnir0() {
+        // Kernel dump: 32 hex + idx + plen + scope 20 (link) + flags + name.
+        let body = "\
+fe8000000000000000000000000000aa 02 40 20 80    br-lan
+fe8000000000000000000000000000bb 03 40 20 80    br-mesh
+fe80000000000000000000000000a1b2 04 40 20 80    mjolnir0
+00000000000000000000000000000001 01 80 10 80    lo
+";
+        let lan = parse_if_inet6_link_local(body, "br-lan").unwrap();
+        assert_eq!(lan, "fe80::aa".parse::<Ipv6Addr>().unwrap());
+        let mesh = parse_if_inet6_link_local(body, "br-mesh").unwrap();
+        assert_eq!(mesh, "fe80::bb".parse::<Ipv6Addr>().unwrap());
+        let tun = parse_if_inet6_link_local(body, "mjolnir0").unwrap();
+        assert_eq!(tun, "fe80::a1b2".parse::<Ipv6Addr>().unwrap());
+        assert!(parse_if_inet6_link_local(body, "br-lan") != parse_if_inet6_link_local(body, "mjolnir0"));
+        assert!(parse_if_inet6_link_local(body, "missing").is_none());
+    }
+
+    #[test]
+    fn parse_if_inet6_skips_non_link_scope() {
+        let body = "fd000000000000000000000000000001 02 40 00 80    br-lan\n";
+        assert!(parse_if_inet6_link_local(body, "br-lan").is_none());
+    }
+
+    #[test]
+    fn directory_node_omits_empty_link_locals() {
+        let snapshot = build_directory_snapshot(
+            &HashMap::new(),
+            &AddrBook::new(),
+            &UserBook::new(),
+            &ServiceBook::new(),
+            &NodeNameBook::new(),
+            &CoordinateBook::new(),
+            "self",
+            "10.254.1.1".parse().unwrap(),
+            &[],
+        );
+        let json = serde_json::to_value(&snapshot.node).unwrap();
+        assert!(json.get("link_local_lan").is_none());
+        assert!(json.get("link_local_mesh").is_none());
+        assert_eq!(json["backhaul_addr"], "10.254.1.1");
+    }
+
+    #[test]
+    fn directory_node_serializes_stamped_link_locals() {
+        let mut snapshot = build_directory_snapshot(
+            &HashMap::new(),
+            &AddrBook::new(),
+            &UserBook::new(),
+            &ServiceBook::new(),
+            &NodeNameBook::new(),
+            &CoordinateBook::new(),
+            "self",
+            "10.254.1.1".parse().unwrap(),
+            &[],
+        );
+        snapshot.node.link_local_lan = Some("fe80::aa".into());
+        snapshot.node.link_local_mesh = Some("fe80::bb".into());
+        let json = serde_json::to_value(&snapshot.node).unwrap();
+        assert_eq!(json["link_local_lan"], "fe80::aa");
+        assert_eq!(json["link_local_mesh"], "fe80::bb");
     }
 }

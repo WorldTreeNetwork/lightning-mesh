@@ -1,6 +1,9 @@
 # Decision: IPv6 overlay vs IPv4 subnet claims
 
 **Bead:** `mjolnir-mesh-bsa` · **Status:** DECIDED 2026-07-02 — **stay IPv4; IPv6 rejected as not worth the risk**
+**Addendum 2026-09-11:** spine rejection **stands**. Allocation-free IPv6 as a
+*parallel plane* (identity-hashed ULA, SLAAC, LL as mgmt, app self-assign) is
+epic `mjolnir-mesh-v6` — see [`ipv6-parallel-plane.md`](ipv6-parallel-plane.md).
 **Unblocks:** `e21` (service-mesh architecture pass)
 
 ## Decision

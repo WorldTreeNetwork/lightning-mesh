@@ -10,7 +10,10 @@ The L3 overlay (iroh + babeld + CRDT) is the product. The radio is plumbing.
 Nodes are symmetric and non-authoritative. Each node owns a routed `/24`;
 client L2 is never bridged across nodes.
 
-Management is the overlay: reach nodes at derived `10.254.x` over SSH.
+Management is the overlay: reach nodes at derived `10.254.x` over SSH
+once you are on the mesh. First contact on the LAN/SSID is this node's
+link-local (`fe80` on `br-lan` / `br-mesh`), published on hello
+`/api/node` (`link_local_lan` / `link_local_mesh`).
 No mDNS for mesh-wide discovery — gossip/CRDT is the address book.
 
 Disruptive node changes go through `mjolnir-apply` (snapshot → apply →
@@ -58,6 +61,9 @@ heatmaps.
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
+- Allocation-free IPv6 parallel plane (SLAAC / identity ULA / app overlay):
+  `docs/network-coordination/ipv6-parallel-plane.md` (epic `mjolnir-mesh-v6`;
+  does not reverse the `bsa` spine rejection)
 - Front desk / hello.mesh: `crates/mjolnir-hello/`, `docs/products/hello.mesh/`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`

@@ -1372,6 +1372,50 @@ mod tests {
     }
 
     #[test]
+    fn node_endpoint_includes_link_local_when_projected() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = dir.path().join("directory.json");
+        std::fs::write(
+            &directory_path,
+            r#"{
+                "version": 1,
+                "node": {
+                    "node_id": "n1",
+                    "subnet": "10.42.1.0/24",
+                    "backhaul_addr": "10.254.1.1",
+                    "link_local_lan": "fe80::aa",
+                    "link_local_mesh": "fe80::bb"
+                },
+                "neighbors": [],
+                "identities": [],
+                "services": []
+            }"#,
+        )
+        .unwrap();
+
+        let resp = route(
+            "GET",
+            "/api/node",
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &cache,
+            &directory_path,
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
+        );
+        assert_eq!(resp.status, 200);
+        let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(value["link_local_lan"], "fe80::aa");
+        assert_eq!(value["link_local_mesh"], "fe80::bb");
+        assert_eq!(value["backhaul_addr"], "10.254.1.1");
+    }
+
+    #[test]
     fn node_endpoint_returns_empty_object_when_node_missing() {
         let (challenges, spool) = no_state();
         let (cache, dir) = no_directory();
