@@ -23,6 +23,14 @@ pub const LINK_BLOCK: (Ipv4Addr, u8) = (Ipv4Addr::new(10, 255, 0, 0), 16);
 /// `iroh-lan-backhaul-findings` memory for the empirical detail.
 pub const BACKHAUL_PREFIX_LEN: u8 = 16;
 
+/// Return whether the wanted backhaul address needs to be restored.
+///
+/// Kept independent of netlink so address-reconciliation decisions can be
+/// tested on every supported development platform.
+pub fn backhaul_addr_missing(present: &[Ipv4Addr], want: Ipv4Addr) -> bool {
+    !present.contains(&want)
+}
+
 /// First two octets of the backhaul block `10.254.0.0/16`. Chosen to avoid the
 /// TUN-link block (`10.255.0.0/16`, [`LINK_BLOCK`]) and the client mesh space
 /// (`10.42.0.0/16`).
@@ -124,6 +132,29 @@ pub fn pick_link_31(self_id: &str, peer_id: &str) -> (Ipv4Addr, Ipv4Addr) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backhaul_addr_missing_when_absent() {
+        let want = Ipv4Addr::new(10, 254, 1, 2);
+        let present = [Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(10, 254, 3, 4)];
+        assert!(backhaul_addr_missing(&present, want));
+    }
+
+    #[test]
+    fn backhaul_addr_missing_is_false_when_present_among_several() {
+        let want = Ipv4Addr::new(10, 254, 1, 2);
+        let present = [
+            Ipv4Addr::new(192, 168, 1, 1),
+            want,
+            Ipv4Addr::new(10, 254, 3, 4),
+        ];
+        assert!(!backhaul_addr_missing(&present, want));
+    }
+
+    #[test]
+    fn backhaul_addr_missing_from_empty_list() {
+        assert!(backhaul_addr_missing(&[], Ipv4Addr::new(10, 254, 1, 2)));
+    }
 
     #[test]
     fn deterministic_same_pair() {

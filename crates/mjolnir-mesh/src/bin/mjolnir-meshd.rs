@@ -400,6 +400,11 @@ async fn main() -> Result<()> {
         }
         _ => None,
     };
+    if !overlay_mode {
+        if let Some(iface) = l2_backhaul.clone() {
+            tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip));
+        }
+    }
     // Pin the iroh socket to the derived backhaul address in LAN/mesh mode so
     // peers can dial us at a fully-derived address with no discovery lookup
     // (mjolnir-mesh-0yb.1). NOTE: the `MultipathNotNegotiated` tunnel death this
@@ -6490,6 +6495,95 @@ async fn assign_backhaul_addr(iface: &str, addr: Ipv4Addr) -> Option<String> {
 async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
     None
 }
+
+/// Keep the derived backhaul address present when netifd recreates or flushes
+/// the L2 device during a wifi reload. The interface name is stable across that
+/// operation, but its ifindex is not, so every pass resolves the index afresh.
+#[cfg(target_os = "linux")]
+async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr) {
+    use futures_util::stream::TryStreamExt;
+    use rtnetlink::new_connection;
+    use rtnetlink::packet_route::address::AddressAttribute;
+
+    let (connection, handle, _) = match new_connection() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(%addr, %iface, "netlink connect for backhaul reconciliation failed: {e}");
+            return;
+        }
+    };
+    tokio::spawn(connection);
+
+    let mut interval = tokio::time::interval(Duration::from_secs(3));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+
+        let index = match std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        {
+            Some(index) => index,
+            None => {
+                debug!(%addr, %iface, "backhaul interface unavailable during address reconciliation");
+                continue;
+            }
+        };
+
+        let mut present = Vec::new();
+        let mut addresses = handle.address().get().execute();
+        let mut dump_failed = false;
+        loop {
+            match addresses.try_next().await {
+                Ok(Some(msg)) => {
+                    if msg.header.index != index {
+                        continue;
+                    }
+                    present.extend(
+                        msg.attributes
+                            .iter()
+                            .filter_map(|attribute| match attribute {
+                                AddressAttribute::Local(IpAddr::V4(ip))
+                                | AddressAttribute::Address(IpAddr::V4(ip)) => Some(*ip),
+                                _ => None,
+                            }),
+                    );
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    warn!(%addr, %iface, "could not dump addresses for backhaul reconciliation: {e}");
+                    dump_failed = true;
+                    break;
+                }
+            }
+        }
+        if dump_failed || !mjolnir_mesh::tun::backhaul_addr_missing(&present, addr) {
+            continue;
+        }
+
+        match handle
+            .address()
+            .add(
+                index,
+                IpAddr::V4(addr),
+                mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
+            )
+            .execute()
+            .await
+        {
+            Ok(()) => info!(
+                %addr,
+                %iface,
+                prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
+                "re-added missing IPv4 backhaul address after interface reload"
+            ),
+            Err(e) => warn!(%addr, %iface, "could not re-add missing backhaul address: {e}"),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn reconcile_backhaul_addr(_iface: String, _addr: Ipv4Addr) {}
 
 /// Enable IPv4 forwarding in this (container) network namespace so the kernel
 /// routes client traffic between the TUN tunnels and the veth/bridge. Required
