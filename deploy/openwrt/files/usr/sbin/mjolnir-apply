@@ -164,6 +164,12 @@ any_target_pings() {
 # --- pre-apply state (the health baseline + what rollback must restore) -------
 MESHD_WAS_RUNNING=0
 /etc/init.d/mjolnir-meshd running 2>/dev/null && MESHD_WAS_RUNNING=1
+BACKHAUL_IFACE=$(uci -q get mjolnir.meshd.backhaul_iface 2>/dev/null)
+BACKHAUL_IFACE="${BACKHAUL_IFACE:-br-mesh}"
+OWN_OVERLAY=""
+if [ "$MESHD_WAS_RUNNING" = 1 ]; then
+	OWN_OVERLAY=$(ip -4 -o addr show dev "$BACKHAUL_IFACE" 2>/dev/null | sed -n 's/.* inet \(10\.254\.[0-9.]*\)\/.*/\1/p' | head -1)
+fi
 PEERS_BEFORE=$(mesh_station_count)
 HEALTH_TARGETS=""
 for c in $(health_candidates); do
@@ -173,7 +179,7 @@ done
 WPAD_PREV=none
 pm_installed wpad-basic-mbedtls && WPAD_PREV=wpad-basic-mbedtls
 pm_installed wpad-mesh-mbedtls  && WPAD_PREV=wpad-mesh-mbedtls
-log "pre-apply: meshd_running=$MESHD_WAS_RUNNING mesh_peers=$PEERS_BEFORE health_targets='${HEALTH_TARGETS# }' wpad=$WPAD_PREV"
+log "pre-apply: meshd_running=$MESHD_WAS_RUNNING backhaul=$BACKHAUL_IFACE own_overlay=${OWN_OVERLAY:-none} mesh_peers=$PEERS_BEFORE health_targets='${HEALTH_TARGETS# }' wpad=$WPAD_PREV"
 
 mkdir -p "$BACKUP"
 for c in $UCI_CONFIGS; do
@@ -503,13 +509,24 @@ NEED_GATE=0
 HAVE_BASELINE=0
 [ "$PEERS_BEFORE" -gt 0 ] && HAVE_BASELINE=1
 [ -n "${HEALTH_TARGETS# }" ] && HAVE_BASELINE=1
+[ -n "$OWN_OVERLAY" ] && HAVE_BASELINE=1
 
 if [ "$NEED_GATE" = 1 ] && [ "$HAVE_BASELINE" = 1 ]; then
-	log "health gate: up to ${HEALTH_TIMEOUT}s for a mesh peer or a ping to:${HEALTH_TARGETS:- (none)}"
+	log "health gate: up to ${HEALTH_TIMEOUT}s for overlay=${OWN_OVERLAY:-none}, a mesh peer, or a ping to:${HEALTH_TARGETS:- (none)}"
 	DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
 	HEALTHY=0
 	while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-		if [ -n "${HEALTH_TARGETS# }" ]; then
+		if [ -n "$OWN_OVERLAY" ]; then
+			# A running mesh daemon must restore its pre-apply overlay address.
+			# L2 peering alone can succeed while br-mesh has no usable overlay.
+			if ip -4 -o addr show dev "$BACKHAUL_IFACE" 2>/dev/null | grep -q "inet $OWN_OVERLAY/"; then
+				if [ -n "${HEALTH_TARGETS# }" ]; then
+					any_target_pings && { HEALTHY=1; break; }
+				else
+					HEALTHY=1; break
+				fi
+			fi
+		elif [ -n "${HEALTH_TARGETS# }" ]; then
 			# L3 proof: a pre-apply neighbour answers again over the new config
 			any_target_pings && { HEALTHY=1; break; }
 		elif [ "$(mesh_station_count)" -gt 0 ]; then
