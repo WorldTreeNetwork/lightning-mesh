@@ -26,9 +26,15 @@ LAN the overlay is unreachable; `LIGHTNING_FLEET_SSH` names WPS-armed
 WAN `root@` addrs. Discovery stays a link-local scan and does not
 SSH-mutate UCI. `update-fleet.sh` remains the full binary+radio rollout.
 
+`/etc/config/mjolnir` (`radio`, `wan_admin`) is the live operator store.
+`mjolnir-apply` is the only projector of those knobs onto UCI `wireless`.
+A staged `wireless.env` writes the store and is then wiped. LuCI-edited
+`wireless` is not canonical.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
 - Front desk / hello.mesh: `crates/mjolnir-hello/`, `docs/products/hello.mesh/`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
+- Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
