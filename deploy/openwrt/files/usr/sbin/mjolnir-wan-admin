@@ -85,8 +85,9 @@ wan_if() {
 
 # Print one nft prefix per line (192.168.0.0/24 or 2601:.../64).
 wan_prefixes() {
-	local ifc sub
+	local ifc sub dev
 	ifc=$(wan_if)
+	dev=
 	if [ -r /lib/functions/network.sh ]; then
 		. /lib/functions/network.sh
 		network_flush_cache
@@ -97,8 +98,11 @@ wan_prefixes() {
 			eval "$(/bin/ipcalc.sh "$sub")"
 			[ -n "$NETWORK" ] && [ -n "$PREFIX" ] && echo "$NETWORK/$PREFIX"
 		fi
+		network_get_device dev "$ifc" 2>/dev/null || dev=
 	fi
-	ip -6 -o addr show dev "$ifc" scope global 2>/dev/null \
+	# kernel device may differ from the logical iface (e.g. eth1 vs "wan")
+	[ -n "$dev" ] || dev="$ifc"
+	ip -6 -o addr show dev "$dev" scope global 2>/dev/null \
 		| awk '{
 			split($4, a, "/")
 			if (a[2] != "" && a[2] < 128) print a[1] "/" a[2]
