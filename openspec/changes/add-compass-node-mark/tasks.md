@@ -1,14 +1,15 @@
 # Tasks
 
-- [ ] Mesh ingest of a stamp into the directory coordinate store
-- [ ] Reject stamp with missing node_id, missing fix, or unknown node (write nothing)
-- [ ] Northstar GPS HAL
-- [ ] Northstar tap-range BLE or ESP-NOW gesture that emits the stamp
-- [ ] Fixture test: in-range writes; miss writes nothing; no-fix writes nothing
+- [ ] hello.mesh stamp UI: nearby-narrowed node list, default = associated node, pick + GPS (geolocation or typed)
+- [ ] POST signed stamp to hello on the LAN gateway; verify; spool; meshd ingest
+- [ ] Reject missing node_id, unknown node, missing GPS-and-empty-typed, bad signature (write nothing)
+- [ ] Fixture test: pick+GPS writes; cancel writes nothing; no-GPS writes nothing
+- [ ] Rank list by associated-first, then nearby radio strength when known
 
 Not owed here:
 
+- Compass GPS HAL
 - Coverage walk / heatmap
 - DreamBall snapshot
 - `/mesh` paint
-- NFC
+- NFC / BLE / ESP-NOW on routers

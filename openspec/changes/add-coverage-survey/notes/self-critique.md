@@ -2,15 +2,13 @@
 
 Author tab (Grok). Not advise. No ADVISE banner.
 
-- Pinned directory.json as live store because it already grows additively
-  and hello already reads it. Risk: CRDT stamp-write path is not designed
-  here; `add-node-coordinates` has to find the actual book, not invent a
-  second store.
-- Refused radio.json v1 extension so the existing topology clients do not
-  break. Join-by-id is extra work for `/mesh`.
-- Compass vs AI Camera split is the load-bearing hardware call. If Duke
-  later fuses form factors, `add-survey-world-model` revisits; this ADR
-  should not grow lidar on T-RGB.
-- DreamBall as snapshot (not live) keeps protocol blast in Dreamball
-  attributes instead of a fourth axis. Field names deferred to
-  `add-dreamball-coverage`.
+- First pass pinned BLE/ESP-NOW tap. Fable send-back: compass BLE is
+  disabled; routers have no ESP-NOW peer. Human: routers are Wi-Fi;
+  compass has no GPS; phone picks nearby + enters GPS. Call 3 rewritten.
+- Stamp ingress now matches identity/name-claim: hello verifying spool,
+  meshd CRDT authority, control API stays loopback.
+- Join key pinned to `backhaul_addr` (only overlap of radio.json and
+  directory.json). `mesh_mac` on directory is optional later.
+- v1 surveyor is the phone, not the compass. Compass GPS is later.
+- Privacy: full WGS84 on directory; ball export explicit. Staleness:
+  LWW + viewer ages. Both [AUTO] after send-back notes.

@@ -1,28 +1,31 @@
 ## ADDED Requirements
 
-### Requirement: A proximity stamp writes last-known coordinates
+### Requirement: A phone stamp writes last-known coordinates
 
-The mesh SHALL accept a stamp `{node_id, lat, lon, optional alt, stamped_at, stamper}`
-from a tap-range compass gesture (BLE or ESP-NOW). A valid stamp SHALL
-update that node's last-known coordinate on the directory projection. A
-miss, a missing GPS fix, or an unknown `node_id` SHALL write nothing.
+hello.mesh on a node's LAN gateway SHALL let an associated phone pick a
+node from a nearby-narrowed list (associated node default; others ranked
+by radio strength when known) and enter GPS (geolocation or typed). A
+confirmed stamp SHALL POST a signed claim that hello verifies and spools
+for meshd. An empty list, a cancel, a missing GPS with nothing typed, or
+a bad signature SHALL write nothing.
 
-#### Scenario: In-range
+#### Scenario: Nearby pick
 
-- GIVEN a compass with a GPS fix and a mesh node in tap range whose
-  `node_id` is known
-- WHEN the operator performs one proximity gesture
-- THEN that node's directory coordinate equals the compass fix and names
-  the compass as stamper
+- GIVEN a phone associated to node A's client AP with GPS available
+- WHEN the operator confirms node A (the default) and the GPS
+- THEN node A's directory coordinate equals that GPS and names the
+  phone key as stamper
+
+#### Scenario: Pick a neighbor
+
+- GIVEN nearby radio strength shows node B stronger or the operator
+  is standing at B
+- WHEN the operator selects B from the narrowed list and confirms GPS
+- THEN node B's directory coordinate is written, not A's
 
 #### Scenario: Miss
 
-- GIVEN no mesh node in tap range
-- WHEN the operator performs the same gesture
-- THEN directory coordinates are unchanged
-
-#### Scenario: No fix
-
-- GIVEN a mesh node in range and no GPS fix on the compass
-- WHEN the operator performs the gesture
+- GIVEN the operator cancels, or the list is empty, or GPS is missing
+  and the typed fields are empty
+- WHEN no stamp is confirmed
 - THEN directory coordinates are unchanged

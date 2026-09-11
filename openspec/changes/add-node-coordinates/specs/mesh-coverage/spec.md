@@ -25,5 +25,5 @@ SHALL remain schema-safe.
 
 - GIVEN a directory neighbor with `backhaul_addr` `10.254.242.84` and a stamp
 - WHEN a consumer also has that node's `GET /api/radio`
-- THEN the coordinate joins on `backhaul_addr` (or `node_id` / `mesh_mac`)
-  without reading lat/lon from the radio document
+- THEN the coordinate joins on `backhaul_addr` without reading lat/lon
+  from the radio document

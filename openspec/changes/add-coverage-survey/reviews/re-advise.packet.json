@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-coverage-survey-re-advise-fable",
+  "node_id": "add-coverage-survey-re-advise-fable",
+  "capability": "mesh-coverage",
+  "change_id": "add-coverage-survey",
+  "goal": "Re-advise add-coverage-survey after send-back. You are Fable 5.1, other-family reader. Author is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-coverage-survey/reviews/2026-09-10-re-advise.md (that exact name — do not overwrite 2026-09-10-advise.md).\n\nBLIND PASS first. From Why, living specs, and cited code only, write a 10-line independent take. Do not open design.md, tasks.md, steer.md, or the prior review until that take is written. Then open those files and the spec delta, compare, steelman against your take. The prior send-back asked: (1) rewrite call 3 so router proximity is Wi-Fi not BLE/ESP-NOW, (2) pin stamp ingress as hello verifying spool. Human then said: routers are just Wi-Fi; compass has no GPS; phone sees associated AP and nearby radio strength, narrows the list, operator picks and enters GPS.\n\nWhy (from proposal.md, not the design):\nLightning Mesh knows RF (radio.json v1) and overlay identity (directory.json) but not Earth. Coverage-survey needs last-known node coordinates, a signed DreamBall snapshot, a handheld mark, and a visualizer. This change names mesh-coverage and records the architecture calls. It does not implement directory fields, DreamBall payload, /mesh heatmap, the hello stamp UI, or the sweep game.\nBanner ACTIVE BUILD.\n\nCited code (read before design.md):\n- crates/mjolnir-mesh/src/radio.rs:27-49 — radio.json v1 RF-only; backhaul_addr + mesh_mac; no node_id, no lat/lon\n- crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs:2816-2889 — directory.json; DirectoryNode has node_id, subnet, backhaul_addr, optional name; no mesh_mac, no lat/lon\n- crates/mjolnir-hello/src/routes.rs:428-501 — POST /api/identity: hello verifies signature, spools, holds no key\n- crates/mjolnir-hello/src/routes.rs:504-513 — POST /api/name-claim: same verifying-spool shape\n- crates/mjolnir-hello/src/config.rs:25-29 — hello reads directory.json, does not re-derive CRDT\n- ARCHITECTURE.md:7-14 — L3 overlay is the product; gossip/CRDT is the address book; radio is plumbing\n- openspec/specs/ has no living mesh-coverage spec yet. Proposed SHALLs are in openspec/changes/add-coverage-survey/specs/mesh-coverage/spec.md — AFTER the take.\n\nOut-of-tree (do not implement):\n- /Users/dukejones/work/VirtueInnova/northstar/hardware/firmware/src/features/network/ble_beacon.cpp — BLE STATUS DISABLED\n- /Users/dukejones/work/VirtueInnova/northstar/hardware/firmware/src/hal/magnetometer.h — mag exists; no GPS HAL\n- /Users/dukejones/work/Family/web3d-space/src/lib/mesh/simulate.ts:1-10 — /mesh fixture metres\n- /Users/dukejones/work/WorldTree/Dreamball/docs/PROTOCOL.md:13-19 — look/feel/act only\n\nLEARNINGS.md: none for this id. Do not confuse with mjolnir-mesh-e21 north-star roaming.\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** fable-5.1-arch-review\n> **SPAWN:** <this spawn dir>\n",
+  "non_goals": [
+    "Implement sibling changes",
+    "Fold",
+    "Flip the change banner",
+    "Overwrite 2026-09-10-advise.md"
+  ],
+  "anchors": [
+    {
+      "symbol": "crates/mjolnir-mesh/src/radio.rs",
+      "invariant": "radio.json v1 is RF-only; join key with directory is backhaul_addr."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/routes.rs",
+      "invariant": "hello verifies signed client claims and spools; it holds no key."
+    },
+    {
+      "symbol": "ARCHITECTURE.md",
+      "invariant": "The L3 overlay is the product; gossip/CRDT is the address book."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "v1 surveyor is a phone that picks a nearby Wi-Fi node and enters GPS; stamp ingress is hello spool; directory is live store; radio.json stays RF-only; BLE/ESP-NOW is not the router tap; compass GPS is not a v1 dependency.",
+    "if_false": "Call 3 still requires BLE/ESP-NOW or NFC on the router, compass GPS is required for v1, or stamp ingress is still unpinned."
+  },
+  "out_of_scope": [
+    {"item": "Directory lat/lon fields", "tracked_as": "add-node-coordinates"},
+    {"item": "Hello stamp UI", "tracked_as": "add-compass-node-mark"},
+    {"item": "DreamBall coverage attribute", "tracked_as": "add-dreamball-coverage"},
+    {"item": "/mesh coverage paint", "tracked_as": "add-coverage-world-viz"},
+    {"item": "Sweep game", "tracked_as": "add-coverage-sweep"},
+    {"item": "World-model overlay", "tracked_as": "add-survey-world-model"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-coverage-survey/reviews/",
+      "openspec/changes/add-coverage-survey/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-fable-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-fable-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
