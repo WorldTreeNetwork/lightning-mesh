@@ -44,9 +44,10 @@ meshd; hello verifies only; the CRDT is the authority. Routers are Wi-Fi
 and gain no NFC, BLE, or ESP-NOW. BLE/ESP-NOW is handheld-to-handheld
 only. Compass magnetometer exists; compass GPS is later. World-model
 capture is the AI Camera (cameras + Ethernet 3D lidar), not the LilyGo
-T-RGB. Visualizer home is web3d-space `/mesh`; the stamp UI is hello.mesh
-on the LAN gateway. Last-known is LWW by `stamped_at` + stamper; the
-viewer ages stale stamps. Last-known is now projected from a
+T-RGB. Visualizer home is web3d-space `/mesh`; the stamp UI is the
+hello.mesh Routers panel on the LAN gateway (pick nearby + GPS) posting
+to `/api/coordinate-stamp`. Last-known is LWW by `stamped_at` + stamper;
+the viewer ages stale stamps. Last-known is now projected from a
 CoordinateBook (i32 e7, LWW unix, gossip CoordinateAnnounce). Do not
 confuse this with `e21` “north-star” roaming.
 
