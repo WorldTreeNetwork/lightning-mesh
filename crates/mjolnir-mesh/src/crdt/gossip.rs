@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::crdt::{
+    coordinate::CoordinateStamp,
     dns::DnsEntry,
     egress::EgressAd,
     hlc::HLC,
@@ -123,6 +124,24 @@ pub enum GossipMessage {
     LeasedNamePublish {
         name: String,
         entry: LeasedName,
+    },
+    /// Last-known WGS84 stamp for a mesh node (bead mjolnir-mesh-6hn.2).
+    ///
+    /// The subject (`node_id` / `entry.node_id`) **may differ from**
+    /// `entry.stamper` — a phone stamps a router. Merge is LWW on
+    /// `stamped_at_unix` with a stamper-string tie-break (see
+    /// [`merge_coordinate`](crate::crdt::merge::merge_coordinate)). Gossip
+    /// verifies **no signatures**; this is untrusted-but-attributed. The
+    /// subject node re-announces its last-known stamp (original stamper and
+    /// time unchanged) on the anti-entropy cadence so late joiners converge.
+    ///
+    /// Appended last so existing discriminants are undisturbed; same mixed-fleet
+    /// caveat as `ServicePublishV2` — a node that predates this variant
+    /// decode-errors on it and the `GossipSync` recv loop log-and-skips (a
+    /// dropped coordinate just means that peer has no pin on the map).
+    CoordinateAnnounce {
+        node_id: String,
+        entry: CoordinateStamp,
     },
 }
 
@@ -380,6 +399,25 @@ mod tests {
         let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
     }
+
+    #[test]
+    fn postcard_roundtrip_coordinate_announce() {
+        let node_id = "abcd1234".repeat(8);
+        let msg = GossipMessage::CoordinateAnnounce {
+            node_id: node_id.clone(),
+            entry: crate::crdt::coordinate::CoordinateStamp {
+                node_id,
+                lat_e7: 370_000_000,
+                lon_e7: -1_220_000_000,
+                alt_mm: Some(12_000),
+                stamped_at_unix: 1_700_000_040,
+                stamper: "phone-ada".to_string(),
+            },
+        };
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+    }
 }
 
 /// Mixed-fleet wire-compatibility tests (bead e21.2.2, FLAGGED thorough).
@@ -508,6 +546,22 @@ mod mixed_fleet {
         postcard::to_allocvec(&msg).unwrap()
     }
 
+    fn coordinate_announce_bytes() -> Vec<u8> {
+        let node_id = "abcd1234".repeat(8);
+        let msg = GossipMessage::CoordinateAnnounce {
+            node_id: node_id.clone(),
+            entry: crate::crdt::coordinate::CoordinateStamp {
+                node_id,
+                lat_e7: 370_000_000,
+                lon_e7: -1_220_000_000,
+                alt_mm: None,
+                stamped_at_unix: 1_700_000_041,
+                stamper: "phone-ada".to_string(),
+            },
+        };
+        postcard::to_allocvec(&msg).unwrap()
+    }
+
     #[test]
     fn old_enum_decode_of_service_publish_v2_bytes_errors() {
         let bytes = service_publish_v2_bytes();
@@ -543,6 +597,20 @@ mod mixed_fleet {
         assert!(
             result.is_err(),
             "expected the old enum to hard-error on the new NodeNameAnnounce \
+             discriminant, not silently skip it"
+        );
+    }
+
+    #[test]
+    fn old_enum_decode_of_coordinate_announce_bytes_errors() {
+        // CoordinateAnnounce is appended LAST (after LeasedNamePublish).
+        // Postcard has no forward-compat skip; the recv-loop log-and-skip is
+        // what keeps an un-upgraded node alive.
+        let bytes = coordinate_announce_bytes();
+        let result: Result<OldGossipMessage, _> = postcard::from_bytes(&bytes);
+        assert!(
+            result.is_err(),
+            "expected the old enum to hard-error on the new CoordinateAnnounce \
              discriminant, not silently skip it"
         );
     }
@@ -639,6 +707,7 @@ mod mixed_fleet {
         a.inject_raw(Bytes::from(service_unpublish_v2_bytes()))
             .await;
         a.inject_raw(Bytes::from(node_name_announce_bytes())).await;
+        a.inject_raw(Bytes::from(coordinate_announce_bytes())).await;
         let old_good_2 = OldGossipMessage::UserUpdate {
             username: "ada".to_string(),
             entry: UserEntry {

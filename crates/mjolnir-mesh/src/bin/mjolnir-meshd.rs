@@ -40,14 +40,15 @@ use mjolnir_mesh::tun::{
     classify, spawn_overlay_tun, spawn_tunnel,
 };
 use mjolnir_mesh::{
-    AddrBook, GossipError, GossipSync, GossipTransport, HLC, LeasedName, LeasedNameBook,
-    LivenessTracker, LostNameMap, MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry,
-    PeerEntry, PeerRoster, PublishOutcome, ServiceBook, ServiceBookV2, ServiceEntry,
-    ServiceEntryV2, ServicePublishError, ServiceTombstone, ServiceTombstoneBook, SubnetClaim,
-    UnpublishOutcome, UserBook, UserEntry, alloc, apply_leased_name,
-    apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
-    merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, name_owned_by,
-    parse_host_mac, publish_service_v2,
+    AddrBook, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport, HLC,
+    LeasedName, LeasedNameBook, LivenessTracker, LostNameMap, MergeResult, NodeNameBook,
+    NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome, ServiceBook,
+    ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError, ServiceTombstone,
+    ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
+    apply_coordinate, apply_leased_name, apply_service_publish_v2_tracking_loss,
+    apply_service_unpublish_v2, device_service_key, merge_node_name, merge_peer_addr,
+    merge_service, merge_subnet_claim, merge_user, name_owned_by, parse_host_mac,
+    project_coordinate, publish_service_v2,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -1014,6 +1015,18 @@ async fn run_mesh(
     }
     let node_name_book: Arc<Mutex<NodeNameBook>> = Arc::new(Mutex::new(restored_node_names));
 
+    // Coordinate book (mjolnir-mesh-6hn.2): subject node_id → last-known WGS84
+    // stamp. Same persistence pattern as the node-name book — a sibling
+    // `coordinates.state`, restored on boot so a pin shows immediately without
+    // waiting to relearn it over gossip. Untrusted-but-attributed: gossip does
+    // not verify signatures. Hello-spool ingest is a later change.
+    let coordinate_book_file = coordinate_book_path(&claims_file);
+    let restored_coordinates = load_coordinate_book(&coordinate_book_file);
+    if !restored_coordinates.is_empty() {
+        info!(count = restored_coordinates.len(), path = %coordinate_book_file.display(), "restored coordinate book from disk");
+    }
+    let coordinate_book: Arc<Mutex<CoordinateBook>> = Arc::new(Mutex::new(restored_coordinates));
+
     // Human hostname (t7i): when a name is configured, set the system hostname to
     // match at startup so `logread`, SSH prompts, and `uname -n` agree with the
     // mesh-wide name. Log-and-continue on failure — dev/test hosts and any
@@ -1170,6 +1183,8 @@ async fn run_mesh(
                     let user_book_path = user_book_file.clone();
                     let node_name_book = node_name_book.clone();
                     let node_name_book_path = node_name_book_file.clone();
+                    let coordinate_book = coordinate_book.clone();
+                    let coordinate_book_path = coordinate_book_file.clone();
                     let service_book = service_book.clone();
                     let service_book_path = service_book_file.clone();
                     let service_book_v2 = service_book_v2.clone();
@@ -1259,6 +1274,29 @@ async fn run_mesh(
                                     persist_node_name_book(&snapshot, &node_name_book_path);
                                     info!(node = %entry.node_id, name = %entry.name,
                                         "gossip: received node name");
+                                }
+                                return;
+                            }
+                            // Coordinate book (6hn.2): learn a last-known WGS84
+                            // stamp. Early return so it never takes the
+                            // claim-store lock below. Subject MAY differ from
+                            // stamper (a phone stamps a router) — do NOT copy
+                            // node_name's integrity arm. Stale (LWW) updates
+                            // are dropped by apply_coordinate_message.
+                            // Untrusted-but-attributed: gossip verifies no
+                            // signatures.
+                            if matches!(msg, GossipMessage::CoordinateAnnounce { .. }) {
+                                let learned = {
+                                    let mut c = coordinate_book.lock().expect("coordinate book poisoned");
+                                    apply_coordinate_message(&mut c, &msg)
+                                };
+                                if let Some(entry) = learned {
+                                    let snapshot =
+                                        coordinate_book.lock().expect("coordinate book poisoned").clone();
+                                    persist_coordinate_book(&snapshot, &coordinate_book_path);
+                                    info!(node = %entry.node_id, stamper = %entry.stamper,
+                                        lat_e7 = entry.lat_e7, lon_e7 = entry.lon_e7,
+                                        "gossip: received coordinate stamp");
                                 }
                                 return;
                             }
@@ -1432,6 +1470,8 @@ async fn run_mesh(
                     let services_v2_path = service_book_v2_file.clone();
                     let node_names = node_name_book.clone();
                     let node_names_path = node_name_book_file.clone();
+                    let coordinates = coordinate_book.clone();
+                    let coordinates_path = coordinate_book_file.clone();
                     let leased = leased_names.clone();
                     let directory_path = directory_file.clone();
                     let spool_path = spool_dir.clone();
@@ -1461,6 +1501,8 @@ async fn run_mesh(
                             services_v2_path,
                             node_names,
                             node_names_path,
+                            coordinates,
+                            coordinates_path,
                             leased,
                             directory_path,
                             spool_path,
@@ -1535,6 +1577,7 @@ async fn run_mesh(
                     let addr_book = addr_book.clone();
                     let user_book = user_book.clone();
                     let node_name_book = node_name_book.clone();
+                    let coordinate_book = coordinate_book.clone();
                     match control_api_start(
                         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), CONTROL_API_PORT),
                         sync,
@@ -1548,6 +1591,7 @@ async fn run_mesh(
                         addr_book,
                         user_book,
                         node_name_book,
+                        coordinate_book,
                         backhaul_ip,
                     )
                     .await
@@ -2451,6 +2495,60 @@ fn persist_node_name_book(snapshot: &NodeNameBook, path: &Path) {
     }
 }
 
+/// The coordinate state file path (6hn.2): a sibling of the claims file
+/// (default `/etc/mjolnir/coordinates.state`). Derived, not a new CLI flag.
+/// Mirrors [`node_name_book_path`].
+fn coordinate_book_path(claims_file: &Path) -> PathBuf {
+    claims_file.with_file_name("coordinates.state")
+}
+
+/// Load the persisted coordinate book from `path`. Empty (not an error) if the
+/// file is absent (first boot) or fails to decode — the book is best-effort and
+/// relearns over gossip. Mirrors [`load_node_name_book`].
+fn load_coordinate_book(path: &Path) -> CoordinateBook {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CoordinateBook::new(),
+        Err(e) => {
+            warn!(path = %path.display(), "failed to read persisted coordinate book: {e}");
+            return CoordinateBook::new();
+        }
+    };
+    match postcard::from_bytes(&bytes) {
+        Ok(book) => book,
+        Err(e) => {
+            warn!(path = %path.display(), "failed to decode persisted coordinate book: {e}");
+            CoordinateBook::new()
+        }
+    }
+}
+
+/// Persist a coordinate book snapshot via tmp+rename (crash-safe). Best effort:
+/// failures are logged, not fatal. Mirrors [`persist_node_name_book`].
+fn persist_coordinate_book(snapshot: &CoordinateBook, path: &Path) {
+    let bytes = match postcard::to_allocvec(snapshot) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("failed to encode coordinate book for persistence: {e}");
+            return;
+        }
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), "failed to create coordinate book dir: {e}");
+        return;
+    }
+    let tmp_path = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        warn!(path = %tmp_path.display(), "failed to write coordinate book tmp file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        warn!(path = %path.display(), "failed to rename coordinate book tmp file into place: {e}");
+    }
+}
+
 /// The service-directory state file path (7jb): a sibling of the claims file
 /// (default `/etc/mjolnir/services.state`). Derived, not a new CLI flag, so the
 /// fleet picks it up with no config change. Mirrors [`user_book_path`].
@@ -2872,6 +2970,11 @@ struct DirectoryNode {
     /// `skip_serializing_if` field — an older `mjolnir-hello` stays schema-safe.
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Last-known WGS84 stamp (bead mjolnir-mesh-6hn.2). Flattened degrees /
+    /// metres; omitted entirely when this node has never been stamped — never
+    /// `(0,0)`, never JSON `null`. Join to `radio.json` on `backhaul_addr`.
+    #[serde(flatten)]
+    coordinate: mjolnir_mesh::CoordinateProjection,
 }
 
 /// One other mesh node, joining its [`AddrBook`] entry with any subnet claim
@@ -2886,6 +2989,11 @@ struct DirectoryNeighbor {
     /// `skip_serializing_if` field — an older `mjolnir-hello` stays schema-safe.
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Last-known WGS84 stamp (bead mjolnir-mesh-6hn.2). Flattened; omitted
+    /// when unmarked. Join to `radio.json` on `backhaul_addr` (the consumer's
+    /// join — this struct carries `addrs`, not a single backhaul field).
+    #[serde(flatten)]
+    coordinate: mjolnir_mesh::CoordinateProjection,
 }
 
 /// One live internet gateway, projected for the front desk (mjolnir-mesh-5lw
@@ -2972,6 +3080,7 @@ fn build_directory_snapshot(
     user_book: &UserBook,
     service_book: &ServiceBook,
     node_name_book: &NodeNameBook,
+    coordinate_book: &CoordinateBook,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
     // Live internet gateways (mjolnir-mesh-5lw Lever 2), already filtered to the
@@ -2983,6 +3092,7 @@ fn build_directory_snapshot(
         subnet: owned_client_subnet(claims, self_id),
         backhaul_addr: backhaul_ip.to_string(),
         name: node_name_book.get(self_id).map(|e| e.name.clone()),
+        coordinate: project_coordinate(coordinate_book, self_id),
     };
 
     let neighbors = addr_book
@@ -2993,6 +3103,7 @@ fn build_directory_snapshot(
             addrs: entry.direct_addrs.iter().map(ToString::to_string).collect(),
             subnet: owned_client_subnet(claims, &entry.node_id),
             name: node_name_book.get(&entry.node_id).map(|e| e.name.clone()),
+            coordinate: project_coordinate(coordinate_book, &entry.node_id),
         })
         .collect();
 
@@ -3051,6 +3162,7 @@ fn build_directory_snapshot_v2(
     service_book_v2: &ServiceBookV2,
     lost_names: &LostNameMap,
     node_name_book: &NodeNameBook,
+    coordinate_book: &CoordinateBook,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
 ) -> DirectorySnapshot {
@@ -3059,6 +3171,7 @@ fn build_directory_snapshot_v2(
         subnet: owned_client_subnet(claims, self_id),
         backhaul_addr: backhaul_ip.to_string(),
         name: node_name_book.get(self_id).map(|e| e.name.clone()),
+        coordinate: project_coordinate(coordinate_book, self_id),
     };
 
     let neighbors = addr_book
@@ -3069,6 +3182,7 @@ fn build_directory_snapshot_v2(
             addrs: entry.direct_addrs.iter().map(ToString::to_string).collect(),
             subnet: owned_client_subnet(claims, &entry.node_id),
             name: node_name_book.get(&entry.node_id).map(|e| e.name.clone()),
+            coordinate: project_coordinate(coordinate_book, &entry.node_id),
         })
         .collect();
 
@@ -3160,6 +3274,7 @@ fn write_directory_projection(
     user_book: &Arc<Mutex<UserBook>>,
     service_book: &Arc<Mutex<ServiceBook>>,
     node_name_book: &Arc<Mutex<NodeNameBook>>,
+    coordinate_book: &Arc<Mutex<CoordinateBook>>,
     leased_names: &Arc<Mutex<LeasedNameBook>>,
     liveness: &Arc<Mutex<LivenessTracker>>,
     self_id: &str,
@@ -3176,6 +3291,10 @@ fn write_directory_projection(
     let node_name_snapshot = node_name_book
         .lock()
         .expect("node-name book poisoned")
+        .clone();
+    let coordinate_snapshot = coordinate_book
+        .lock()
+        .expect("coordinate book poisoned")
         .clone();
     // Live-gateway set (5lw Lever 2): read under the liveness lock, released
     // before persist. Held separately from the book locks (same discipline as
@@ -3195,6 +3314,7 @@ fn write_directory_projection(
         &user_snapshot,
         &service_snapshot,
         &node_name_snapshot,
+        &coordinate_snapshot,
         self_id,
         backhaul_ip,
         &gateways,
@@ -3353,7 +3473,9 @@ fn enable_roam_sysctls(_client_iface: &str) {}
 /// Collect the association + neighbour evidence one reconcile tick needs.
 /// Shells out to `ip` and `iw`, so it runs on a blocking thread.
 #[cfg(target_os = "linux")]
-fn collect_roam_evidence(client_iface: &str) -> (Vec<mjolnir_mesh::roam::Neighbour>, HashSet<String>) {
+fn collect_roam_evidence(
+    client_iface: &str,
+) -> (Vec<mjolnir_mesh::roam::Neighbour>, HashSet<String>) {
     use std::process::Command;
     let run = |cmd: &str, args: &[&str]| -> String {
         Command::new(cmd)
@@ -3364,8 +3486,10 @@ fn collect_roam_evidence(client_iface: &str) -> (Vec<mjolnir_mesh::roam::Neighbo
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
     };
-    let neighbours =
-        mjolnir_mesh::roam::parse_ip_neigh(&run("ip", &["-4", "neigh", "show", "dev", client_iface]));
+    let neighbours = mjolnir_mesh::roam::parse_ip_neigh(&run(
+        "ip",
+        &["-4", "neigh", "show", "dev", client_iface],
+    ));
     let associated = mjolnir_mesh::roam::parse_ap_ifaces(&run("iw", &["dev"]))
         .iter()
         .flat_map(|ap| {
@@ -3376,7 +3500,9 @@ fn collect_roam_evidence(client_iface: &str) -> (Vec<mjolnir_mesh::roam::Neighbo
 }
 
 #[cfg(not(target_os = "linux"))]
-fn collect_roam_evidence(_client_iface: &str) -> (Vec<mjolnir_mesh::roam::Neighbour>, HashSet<String>) {
+fn collect_roam_evidence(
+    _client_iface: &str,
+) -> (Vec<mjolnir_mesh::roam::Neighbour>, HashSet<String>) {
     (Vec::new(), HashSet::new())
 }
 
@@ -3481,8 +3607,14 @@ async fn flush_mobility_routes(client_iface: &str) {
         .output()
         .await;
     match out {
-        Ok(o) if o.status.success() => debug!(iface = client_iface, "roaming: flushed stale mobility routes"),
-        Ok(o) => debug!("roaming: mobility flush failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Ok(o) if o.status.success() => debug!(
+            iface = client_iface,
+            "roaming: flushed stale mobility routes"
+        ),
+        Ok(o) => debug!(
+            "roaming: mobility flush failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
         Err(e) => debug!("roaming: could not run mobility flush: {e}"),
     }
 }
@@ -3727,6 +3859,33 @@ fn apply_node_name_message(
     }
 }
 
+/// Apply an inbound coordinate CRDT message to the coordinate book (6hn.2).
+/// Returns the stamp newly inserted or updated (so the caller can persist and
+/// log), or `None` for another CRDT type or an LWW-stale/duplicate update.
+///
+/// **Do not drop when `entry.node_id != entry.stamper`.** A phone stamps a
+/// router; subject != stamper is the design. Copying node_name's integrity
+/// arm (`entry.node_id != *node_id` → drop) would silently kill every
+/// third-party stamp. Also do **not** drop a stamp about ourselves — we are
+/// not the authority of our own pin (a phone is), so we must learn it from
+/// the mesh and then re-announce it.
+///
+/// Gossip verifies no signatures. Untrusted-but-attributed.
+///
+/// Pure over the map (no I/O). Keyed by the stamp's subject (`entry.node_id`).
+fn apply_coordinate_message(
+    book: &mut CoordinateBook,
+    msg: &GossipMessage,
+) -> Option<CoordinateStamp> {
+    let GossipMessage::CoordinateAnnounce { entry, .. } = msg else {
+        return None;
+    };
+    match apply_coordinate(book, entry) {
+        MergeResult::Inserted | MergeResult::Updated => Some(entry.clone()),
+        MergeResult::Unchanged | MergeResult::Conflict { .. } => None,
+    }
+}
+
 /// Apply an inbound peer-address CRDT message to the address book. Returns the
 /// entry that was newly inserted or updated (so the caller can feed iroh,
 /// persist, and log), or `None` if the message was for another CRDT type, was
@@ -3810,6 +3969,8 @@ async fn anti_entropy_loop<T: GossipTransport>(
     service_book_v2_file: PathBuf,
     node_name_book: Arc<Mutex<NodeNameBook>>,
     node_name_book_file: PathBuf,
+    coordinate_book: Arc<Mutex<CoordinateBook>>,
+    coordinate_book_file: PathBuf,
     leased_names: Arc<Mutex<LeasedNameBook>>,
     directory_file: PathBuf,
     spool_dir: PathBuf,
@@ -3851,6 +4012,15 @@ async fn anti_entropy_loop<T: GossipTransport>(
     // Likewise announce this node's own human name up front (t7i), if one is
     // configured — a nameless node stays silent.
     announce_node_name(&sync, &node_name_book, &node_name_book_file, &self_announce).await;
+    // Re-announce this node's last-known stamp (and the rest of the book) so
+    // late joiners learn coordinates whose original stamper (a phone) has left.
+    announce_coordinate(
+        &sync,
+        &coordinate_book,
+        &coordinate_book_file,
+        &self_announce.self_id,
+    )
+    .await;
     // Write the initial directory.json projection up front too (avs), so
     // mjolnir-hello has a snapshot to read before the first anti-entropy tick.
     write_directory_projection(
@@ -3859,6 +4029,7 @@ async fn anti_entropy_loop<T: GossipTransport>(
         &user_book,
         &service_book,
         &node_name_book,
+        &coordinate_book,
         &leased_names,
         &liveness,
         &self_announce.self_id,
@@ -3958,6 +4129,16 @@ async fn anti_entropy_loop<T: GossipTransport>(
         // late joiner learns it without waiting for a config change; nameless
         // nodes stay silent.
         announce_node_name(&sync, &node_name_book, &node_name_book_file, &self_announce).await;
+        // Re-announce last-known stamps on the same cadence (6hn.2). The
+        // subject re-broadcasts its own stamp with original stamper/time so a
+        // late joiner learns it after the phone that authored it has left.
+        announce_coordinate(
+            &sync,
+            &coordinate_book,
+            &coordinate_book_file,
+            &self_announce.self_id,
+        )
+        .await;
         // Re-project the read-only directory.json snapshot on the same cadence
         // (avs), after the books above have been refreshed for this tick.
         write_directory_projection(
@@ -3966,6 +4147,7 @@ async fn anti_entropy_loop<T: GossipTransport>(
             &user_book,
             &service_book,
             &node_name_book,
+            &coordinate_book,
             &leased_names,
             &liveness,
             &self_announce.self_id,
@@ -4435,6 +4617,56 @@ async fn announce_node_name<T: GossipTransport>(
         "node-name anti-entropy: re-broadcast full node-name book"
     );
     persist_node_name_book(&snapshot, node_name_book_file);
+}
+
+/// Re-broadcast the FULL known coordinate book — ours and every peer's — then
+/// rewrite the on-disk book (bead mjolnir-mesh-6hn.2).
+///
+/// Full-map anti-entropy mirroring [`announce_node_name`], so a late joiner
+/// still converges without a pull protocol. The subject node is the designated
+/// re-announcer of its own last-known stamp: the original `stamper` and
+/// `stamped_at_unix` are carried **unchanged** (we do not mint a new time —
+/// that would be ingest order, not observation). A node with no stamp for
+/// itself still re-broadcasts whatever peer stamps it already holds.
+///
+/// Untrusted-but-attributed: this lane does not verify signatures.
+///
+/// The lock is held only to clone the snapshot; never across an `.await`.
+async fn announce_coordinate<T: GossipTransport>(
+    sync: &GossipSync<T>,
+    coordinate_book: &Arc<Mutex<CoordinateBook>>,
+    coordinate_book_file: &Path,
+    self_id: &str,
+) {
+    let snapshot = coordinate_book
+        .lock()
+        .expect("coordinate book poisoned")
+        .clone();
+    for (node_id, entry) in &snapshot {
+        if let Err(e) = sync
+            .publish(GossipMessage::CoordinateAnnounce {
+                node_id: node_id.clone(),
+                entry: entry.clone(),
+            })
+            .await
+        {
+            warn!(%node_id, "coordinate anti-entropy: re-broadcast failed: {e}");
+        }
+    }
+    if snapshot.contains_key(self_id) {
+        info!(
+            count = snapshot.len(),
+            self_stamped = true,
+            "coordinate anti-entropy: re-broadcast full coordinate book"
+        );
+    } else if !snapshot.is_empty() {
+        info!(
+            count = snapshot.len(),
+            self_stamped = false,
+            "coordinate anti-entropy: re-broadcast full coordinate book"
+        );
+    }
+    persist_coordinate_book(&snapshot, coordinate_book_file);
 }
 
 /// Re-read the seed file, merge our originated records (fresh HLC each tick, so
@@ -5085,6 +5317,7 @@ fn control_api_handle_directory(
     service_book_v2: &Arc<Mutex<ServiceBookV2>>,
     lost_names_v2: &Arc<Mutex<LostNameMap>>,
     node_name_book: &Arc<Mutex<NodeNameBook>>,
+    coordinate_book: &Arc<Mutex<CoordinateBook>>,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
 ) -> (u16, Vec<u8>) {
@@ -5103,6 +5336,10 @@ fn control_api_handle_directory(
         .lock()
         .expect("node-name book poisoned")
         .clone();
+    let coordinate_snapshot = coordinate_book
+        .lock()
+        .expect("coordinate book poisoned")
+        .clone();
     let snapshot = build_directory_snapshot_v2(
         &claims_snapshot,
         &addr_snapshot,
@@ -5110,6 +5347,7 @@ fn control_api_handle_directory(
         &service_snapshot,
         &lost_snapshot,
         &node_name_snapshot,
+        &coordinate_snapshot,
         self_id,
         backhaul_ip,
     );
@@ -5140,6 +5378,7 @@ async fn control_api_route<T: GossipTransport>(
     addr_book: &Arc<Mutex<AddrBook>>,
     user_book: &Arc<Mutex<UserBook>>,
     node_name_book: &Arc<Mutex<NodeNameBook>>,
+    coordinate_book: &Arc<Mutex<CoordinateBook>>,
     backhaul_ip: Ipv4Addr,
 ) -> (u16, Vec<u8>) {
     match path {
@@ -5175,6 +5414,7 @@ async fn control_api_route<T: GossipTransport>(
             service_book_v2,
             lost_names_v2,
             node_name_book,
+            coordinate_book,
             self_id,
             backhaul_ip,
         ),
@@ -5203,6 +5443,7 @@ async fn control_api_handle_conn<T: GossipTransport>(
     addr_book: Arc<Mutex<AddrBook>>,
     user_book: Arc<Mutex<UserBook>>,
     node_name_book: Arc<Mutex<NodeNameBook>>,
+    coordinate_book: Arc<Mutex<CoordinateBook>>,
     backhaul_ip: Ipv4Addr,
 ) {
     let (status, resp_body) = {
@@ -5224,6 +5465,7 @@ async fn control_api_handle_conn<T: GossipTransport>(
                     &addr_book,
                     &user_book,
                     &node_name_book,
+                    &coordinate_book,
                     backhaul_ip,
                 )
                 .await
@@ -5263,6 +5505,7 @@ async fn control_api_start<T: GossipTransport + 'static>(
     addr_book: Arc<Mutex<AddrBook>>,
     user_book: Arc<Mutex<UserBook>>,
     node_name_book: Arc<Mutex<NodeNameBook>>,
+    coordinate_book: Arc<Mutex<CoordinateBook>>,
     backhaul_ip: Ipv4Addr,
 ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let listener = TcpListener::bind(addr).await?;
@@ -5290,6 +5533,7 @@ async fn control_api_start<T: GossipTransport + 'static>(
                 addr_book.clone(),
                 user_book.clone(),
                 node_name_book.clone(),
+                coordinate_book.clone(),
                 backhaul_ip,
             ));
         }
@@ -8625,6 +8869,7 @@ config meshd 'meshd'
             &user_book,
             &service_book,
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -8667,6 +8912,7 @@ config meshd 'meshd'
             &user_book,
             &service_book,
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &gateways,
@@ -8714,6 +8960,7 @@ config meshd 'meshd'
             &user_book,
             &service_book,
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -8769,6 +9016,7 @@ config meshd 'meshd'
             &UserBook::new(),
             &service_book,
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -8820,6 +9068,7 @@ config meshd 'meshd'
             &UserBook::new(),
             &ServiceBook::new(),
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -8882,6 +9131,7 @@ config meshd 'meshd'
             &user_book,
             &ServiceBook::new(),
             &node_name_book,
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -8908,6 +9158,7 @@ config meshd 'meshd'
             &UserBook::new(),
             &ServiceBook::new(),
             &NodeNameBook::new(),
+            &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
             &[],
@@ -9302,6 +9553,7 @@ config meshd 'meshd'
         let addr_book = Arc::new(Mutex::new(AddrBook::new()));
         let user_book = Arc::new(Mutex::new(UserBook::new()));
         let node_name_book = Arc::new(Mutex::new(NodeNameBook::new()));
+        let coordinate_book = Arc::new(Mutex::new(CoordinateBook::new()));
 
         let (addr, handle) = control_api_start(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -9316,6 +9568,7 @@ config meshd 'meshd'
             addr_book,
             user_book,
             node_name_book,
+            coordinate_book,
             "10.254.1.1".parse().unwrap(),
         )
         .await

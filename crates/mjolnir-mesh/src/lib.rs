@@ -36,6 +36,9 @@ pub mod roster;
 pub mod tun;
 
 pub use crdt::{
+    coordinate::{
+        CoordinateBook, CoordinateProjection, CoordinateStamp, MICRODEGREES, project_coordinate,
+    },
     dns::DnsEntry,
     egress::{DefaultRoute, EXCLUDED_EGRESS_IFACES, EgressAd, ProbeHysteresis, classify_egress},
     gossip::GossipMessage,
@@ -44,8 +47,9 @@ pub use crdt::{
     leased_name::{LEASE_TTL_MS, LeasedName, LeasedNameBook, apply_leased_name, name_owned_by},
     liveness::{LivenessTracker, monotonic_now_ms},
     merge::{
-        MergeResult, ReservedServiceName, merge_node_name, merge_peer_addr, merge_service,
-        merge_service_v2, merge_subnet_claim, merge_user, resolve_subnet_conflict,
+        MergeResult, ReservedServiceName, apply_coordinate, merge_coordinate, merge_node_name,
+        merge_peer_addr, merge_service, merge_service_v2, merge_subnet_claim, merge_user,
+        resolve_subnet_conflict,
     },
     node_name::{NodeNameBook, NodeNameEntry},
     peer_addr::{AddrBook, PeerAddrEntry},

@@ -8,6 +8,16 @@ export interface DirectoryNode {
 	backhaul_addr: string;
 	/** Human router name, if one has been set (additive; older daemons omit it). */
 	name?: string;
+	/** Last-known WGS84 latitude in degrees (additive; unmarked nodes omit it). */
+	lat?: number;
+	/** Last-known WGS84 longitude in degrees (additive; unmarked nodes omit it). */
+	lon?: number;
+	/** Altitude in metres above the WGS84 ellipsoid, when the stamp carried one. */
+	alt?: number;
+	/** Author's Unix time in seconds. */
+	stamped_at?: number;
+	/** Stamper identity (phone identikey / later a compass). Attribution only. */
+	stamper?: string;
 }
 
 export interface DirectoryNeighbor {
@@ -16,6 +26,16 @@ export interface DirectoryNeighbor {
 	subnet: string | null;
 	/** Human router name, if one has been set (additive; older daemons omit it). */
 	name?: string;
+	/** Last-known WGS84 latitude in degrees (additive; unmarked nodes omit it). */
+	lat?: number;
+	/** Last-known WGS84 longitude in degrees (additive; unmarked nodes omit it). */
+	lon?: number;
+	/** Altitude in metres above the WGS84 ellipsoid, when the stamp carried one. */
+	alt?: number;
+	/** Author's Unix time in seconds. */
+	stamped_at?: number;
+	/** Stamper identity (phone identikey / later a compass). Attribution only. */
+	stamper?: string;
 }
 
 export interface DirectoryIdentity {

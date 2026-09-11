@@ -1,3 +1,4 @@
+use crate::crdt::coordinate::{CoordinateBook, CoordinateStamp};
 use crate::crdt::node_name::NodeNameEntry;
 use crate::crdt::peer_addr::PeerAddrEntry;
 use crate::crdt::service::{ServiceEntry, ServiceEntryV2, is_reserved_service_name};
@@ -117,6 +118,61 @@ pub fn merge_node_name(
             _ => MergeResult::Unchanged,
         },
     }
+}
+
+/// Last-writer-wins merge for last-known coordinate stamps (bead
+/// mjolnir-mesh-6hn.2).
+///
+/// The stamp author is a phone (or later a compass), not a mesh node, so the
+/// merge key is the author's Unix time — **not** an HLC minted at ingest
+/// (two nodes ingesting the same phone stamp would mint different HLCs and
+/// never converge). `stamper` is attribution / tie-break only, never an
+/// authority check: **subject may differ from stamper**. Do not add a
+/// `node_id == stamper` guard here.
+///
+/// Total order, so replicas that see the same pair in either order converge:
+/// - newer `stamped_at_unix` wins
+/// - equal time → lexicographically greater `stamper` wins
+/// - identical (time, stamper) → `Unchanged`
+///
+/// meshd does not rewrite `stamped_at_unix` and does not clamp a stamp from
+/// the future. There is no conflict arm.
+///
+/// Note: this function does not enforce that the map key matches
+/// `incoming.node_id` — the caller must look up local by subject `node_id`.
+pub fn merge_coordinate(
+    local: Option<&CoordinateStamp>,
+    incoming: &CoordinateStamp,
+) -> MergeResult<CoordinateStamp> {
+    match local {
+        None => MergeResult::Inserted,
+        Some(existing) => match incoming.stamped_at_unix.cmp(&existing.stamped_at_unix) {
+            Ordering::Greater => MergeResult::Updated,
+            Ordering::Less => MergeResult::Unchanged,
+            Ordering::Equal => match incoming.stamper.cmp(&existing.stamper) {
+                Ordering::Greater => MergeResult::Updated,
+                _ => MergeResult::Unchanged,
+            },
+        },
+    }
+}
+
+/// Insert or replace `incoming` in `book` under its subject `node_id`.
+///
+/// **Do not drop when `incoming.node_id != incoming.stamper`.** A phone stamps
+/// a router; that is the design. Gossip verifies no signatures — this is
+/// untrusted-but-attributed. Returning `Inserted`/`Updated` means the caller
+/// should persist and (if this node is the subject) keep re-announcing the
+/// original stamper and time on the anti-entropy cadence.
+pub fn apply_coordinate(
+    book: &mut CoordinateBook,
+    incoming: &CoordinateStamp,
+) -> MergeResult<CoordinateStamp> {
+    let result = merge_coordinate(book.get(&incoming.node_id), incoming);
+    if matches!(result, MergeResult::Inserted | MergeResult::Updated) {
+        book.insert(incoming.node_id.clone(), incoming.clone());
+    }
+    result
 }
 
 /// Last-writer-wins merge for user identity records (bead `2xd`).
@@ -518,6 +574,119 @@ mod tests {
             merge_node_name(Some(&local), &incoming),
             MergeResult::Updated
         ));
+    }
+
+    // --- merge_coordinate tests (bead mjolnir-mesh-6hn.2) ---
+
+    fn coordinate(
+        node_id: &str,
+        lat_e7: i32,
+        lon_e7: i32,
+        stamped_at_unix: u64,
+        stamper: &str,
+    ) -> CoordinateStamp {
+        CoordinateStamp {
+            node_id: node_id.to_string(),
+            lat_e7,
+            lon_e7,
+            alt_mm: None,
+            stamped_at_unix,
+            stamper: stamper.to_string(),
+        }
+    }
+
+    #[test]
+    fn coordinate_inserted_when_no_local() {
+        let incoming = coordinate("router-a", 1, 2, 1_000, "phone-ada");
+        assert!(matches!(
+            merge_coordinate(None, &incoming),
+            MergeResult::Inserted
+        ));
+    }
+
+    #[test]
+    fn coordinate_lww_newer_wins() {
+        let local = coordinate("router-a", 1, 2, 1_000, "phone-ada");
+        let incoming = coordinate("router-a", 3, 4, 2_000, "phone-bea");
+        assert!(matches!(
+            merge_coordinate(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
+    }
+
+    #[test]
+    fn coordinate_lww_older_unchanged() {
+        let local = coordinate("router-a", 3, 4, 2_000, "phone-bea");
+        let incoming = coordinate("router-a", 1, 2, 1_000, "phone-ada");
+        assert!(matches!(
+            merge_coordinate(Some(&local), &incoming),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn coordinate_lww_equal_time_greater_stamper_wins() {
+        // Phone clocks collide at second granularity: greater stamper is the
+        // total-order tie-break so replicas converge regardless of receive order.
+        let local = coordinate("router-a", 1, 2, 1_000, "aaa-phone");
+        let incoming = coordinate("router-a", 9, 9, 1_000, "zzz-phone");
+        assert!(matches!(
+            merge_coordinate(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
+        assert!(matches!(
+            merge_coordinate(Some(&incoming), &local),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn coordinate_lww_equal_time_lesser_stamper_unchanged() {
+        let local = coordinate("router-a", 1, 2, 1_000, "zzz-phone");
+        let incoming = coordinate("router-a", 9, 9, 1_000, "aaa-phone");
+        assert!(matches!(
+            merge_coordinate(Some(&local), &incoming),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn coordinate_lww_identical_pair_unchanged() {
+        let entry = coordinate("router-a", 1, 2, 5_000, "phone-ada");
+        assert!(matches!(
+            merge_coordinate(Some(&entry), &entry),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn coordinate_future_stamp_not_clamped() {
+        // stamped_at is the author's claim; a stamp from the future still wins.
+        let local = coordinate("router-a", 1, 2, 1_000, "phone-ada");
+        let incoming = coordinate("router-a", 3, 4, u64::MAX, "phone-bea");
+        assert!(matches!(
+            merge_coordinate(Some(&local), &incoming),
+            MergeResult::Updated
+        ));
+    }
+
+    #[test]
+    fn coordinate_apply_third_party_stamper_accepted() {
+        let incoming = coordinate("router-a", 1, 2, 1_000, "phone-ada");
+        assert_ne!(incoming.node_id, incoming.stamper);
+        let mut book = CoordinateBook::new();
+        assert!(matches!(
+            apply_coordinate(&mut book, &incoming),
+            MergeResult::Inserted
+        ));
+        assert_eq!(book.get("router-a"), Some(&incoming));
+
+        let newer = coordinate("router-a", 9, 9, 2_000, "other-phone");
+        assert!(matches!(
+            apply_coordinate(&mut book, &newer),
+            MergeResult::Updated
+        ));
+        assert_eq!(book.get("router-a"), Some(&newer));
     }
 
     // --- merge_user tests (bead 2xd) ---

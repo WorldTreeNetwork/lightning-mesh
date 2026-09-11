@@ -1,3 +1,4 @@
+pub mod coordinate;
 pub mod dns;
 pub mod egress;
 pub mod gossip;
