@@ -3084,9 +3084,9 @@ struct DirectorySnapshot {
     services: Vec<DirectoryService>,
     /// Service names this node lost to a conflicting claim (bead e21.2.5,
     /// FR32) — additive field, populated only by the control API's
-    /// `/v0/directory` handler ([`build_directory_snapshot_v2`]); the
-    /// file-based projection ([`build_directory_snapshot`]) always leaves
-    /// this empty (v1's `ServiceBook` has no conflict/loss concept). Additive
+    /// `/v0/directory` handler ([`build_directory_snapshot_v2`]). The
+    /// file-based projection ([`write_directory_projection`]) now sources
+    /// the same v2 book, so `lost_names` is populated there too. Additive
     /// so `mjolnir-hello` reading the on-disk file sees no schema break.
     #[serde(default)]
     lost_names: Vec<DirectoryLostName>,
@@ -3209,6 +3209,31 @@ fn format_mac(mac: &[u8; 6]) -> String {
         .join(":")
 }
 
+/// Front-desk protocol for a v2 service. Publish stores `_tcp` by default
+/// and puts the real scheme in TXT `proto=` (camera, wiki, …). hello.mesh
+/// only renders a clickable link for `http`/`https`, so project that TXT
+/// through when present.
+fn directory_protocol(stored: &str, txt: &BTreeMap<String, String>) -> String {
+    match txt.get("proto").map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("http") => "http".to_string(),
+        Some("https") => "https".to_string(),
+        _ => stored.to_string(),
+    }
+}
+
+fn directory_gateways<'a, I>(gateways: I) -> Vec<DirectoryGateway>
+where
+    I: IntoIterator<Item = &'a (String, mjolnir_mesh::EgressAd)>,
+{
+    gateways
+        .into_iter()
+        .map(|(node_id, ad)| DirectoryGateway {
+            node_id: node_id.clone(),
+            cost_hint: ad.cost_hint,
+        })
+        .collect()
+}
+
 /// Find the client `/24` (if any) owned by `node_id` in the claim map, e.g.
 /// `10.42.1.0/24`. Excludes backhaul `/32` claims (mjolnir-mesh-pt9) — those
 /// are overlay addressing, not a client subnet. Pure; shared by
@@ -3284,13 +3309,7 @@ fn build_directory_snapshot(
         })
         .collect();
 
-    let gateways = gateways
-        .iter()
-        .map(|(node_id, ad)| DirectoryGateway {
-            node_id: node_id.clone(),
-            cost_hint: ad.cost_hint,
-        })
-        .collect();
+    let gateways = directory_gateways(gateways);
 
     DirectorySnapshot {
         version: DIRECTORY_SCHEMA_VERSION,
@@ -3356,7 +3375,7 @@ fn build_directory_snapshot_v2(
             name: name.clone(),
             ip: entry.ip.to_string(),
             port: entry.port,
-            protocol: entry.protocol.clone(),
+            protocol: directory_protocol(&entry.protocol, &entry.txt),
             // v2 records carry no hostname; MAC is optional.
             hostname: None,
             txt: entry.txt.clone(),
@@ -3417,17 +3436,18 @@ fn persist_directory(snapshot: &DirectorySnapshot, path: &Path) {
     }
 }
 
-/// Briefly lock each of the four CRDT stores to clone a cheap snapshot,
-/// release the locks, then build and persist the `directory.json` projection
-/// (bead avs). Called once up front and once per anti-entropy tick from
-/// [`anti_entropy_loop`], mirroring how the other books re-persist on the same
-/// cadence.
+/// Briefly lock the CRDT stores to clone a cheap snapshot, release the
+/// locks, then build and persist the `directory.json` projection (bead avs).
+/// Services come from the **v2** book — the one `meshd publish` mutates —
+/// not the legacy v1 `ServiceBook`. Called once up front and once per
+/// anti-entropy tick from [`anti_entropy_loop`].
 #[allow(clippy::too_many_arguments)] // one more cohesive CRDT store (node names) to project
 fn write_directory_projection(
     claims: &ClaimStore,
     addr_book: &Arc<Mutex<AddrBook>>,
     user_book: &Arc<Mutex<UserBook>>,
-    service_book: &Arc<Mutex<ServiceBook>>,
+    service_book_v2: &Arc<Mutex<ServiceBookV2>>,
+    lost_names_v2: &Arc<Mutex<LostNameMap>>,
     node_name_book: &Arc<Mutex<NodeNameBook>>,
     coordinate_book: &Arc<Mutex<CoordinateBook>>,
     leased_names: &Arc<Mutex<LeasedNameBook>>,
@@ -3439,9 +3459,13 @@ fn write_directory_projection(
     let claims_snapshot = claims.lock().expect("claim store poisoned").clone();
     let addr_snapshot = addr_book.lock().expect("address book poisoned").clone();
     let user_snapshot = user_book.lock().expect("user directory poisoned").clone();
-    let service_snapshot = service_book
+    let service_snapshot = service_book_v2
         .lock()
-        .expect("service directory poisoned")
+        .expect("v2 service book poisoned")
+        .clone();
+    let lost_snapshot = lost_names_v2
+        .lock()
+        .expect("v2 service lost-names poisoned")
         .clone();
     let node_name_snapshot = node_name_book
         .lock()
@@ -3463,17 +3487,18 @@ fn write_directory_projection(
         ids = ?gateways.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
         "live internet gateways (5lw Lever 2)"
     );
-    let mut snapshot = build_directory_snapshot(
+    let mut snapshot = build_directory_snapshot_v2(
         &claims_snapshot,
         &addr_snapshot,
         &user_snapshot,
         &service_snapshot,
+        &lost_snapshot,
         &node_name_snapshot,
         &coordinate_snapshot,
         self_id,
         backhaul_ip,
-        &gateways,
     );
+    snapshot.gateways = directory_gateways(&gateways);
     // Fold currently-resolving key-owned leased names (71x) into the same
     // services list, so the front desk shows every reachable `.mesh` name in one
     // place. Filtered by the same resolve-freshness window the DNS responder
@@ -4182,7 +4207,8 @@ async fn anti_entropy_loop<T: GossipTransport>(
         &store,
         &addr_book,
         &user_book,
-        &service_book,
+        &service_book_v2,
+        &lost_names_v2,
         &node_name_book,
         &coordinate_book,
         &leased_names,
@@ -4300,7 +4326,8 @@ async fn anti_entropy_loop<T: GossipTransport>(
             &store,
             &addr_book,
             &user_book,
-            &service_book,
+            &service_book_v2,
+            &lost_names_v2,
             &node_name_book,
             &coordinate_book,
             &leased_names,
@@ -9333,6 +9360,71 @@ config meshd 'meshd'
         let decoded: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
         assert_eq!(decoded["version"], 1);
         assert_eq!(decoded["node"]["node_id"], "self");
+    }
+
+    fn svc_entry_v2(owner: &str, ip: &str, port: u16, proto_txt: Option<&str>) -> ServiceEntryV2 {
+        let mut txt = BTreeMap::new();
+        if let Some(p) = proto_txt {
+            txt.insert("proto".to_string(), p.to_string());
+        }
+        let hlc = HLC {
+            wall_clock: 1,
+            counter: 0,
+            node_id: owner.to_string(),
+        };
+        ServiceEntryV2 {
+            owner_node_id: owner.to_string(),
+            first_claimed_at: hlc.clone(),
+            updated_at: hlc,
+            ip: ip.parse().unwrap(),
+            port,
+            protocol: "_tcp".to_string(),
+            txt,
+            host_mac: Some([0x80, 0xb5, 0x4e, 0xf0, 0x8a, 0x08]),
+        }
+    }
+
+    #[test]
+    fn build_directory_snapshot_v2_projects_published_device() {
+        // hello.mesh reads directory.json; publish writes the v2 book. The
+        // file projection must show the same device-scoped name DNS answers.
+        let mut book = ServiceBookV2::new();
+        book.insert(
+            "cam0.6kwh".to_string(),
+            svc_entry_v2("self", "10.42.242.211", 80, Some("http")),
+        );
+        let snapshot = build_directory_snapshot_v2(
+            &HashMap::new(),
+            &AddrBook::new(),
+            &UserBook::new(),
+            &book,
+            &LostNameMap::new(),
+            &NodeNameBook::new(),
+            "self",
+            "10.254.1.1".parse().unwrap(),
+        );
+        assert_eq!(snapshot.services.len(), 1);
+        let s = &snapshot.services[0];
+        assert_eq!(s.name, "cam0.6kwh");
+        assert_eq!(s.ip, "10.42.242.211");
+        assert_eq!(s.port, 80);
+        assert_eq!(
+            s.protocol, "http",
+            "txt proto=http becomes a clickable scheme"
+        );
+        assert_eq!(s.host_mac.as_deref(), Some("80:b5:4e:f0:8a:08"));
+        assert_eq!(s.txt.get("proto").map(String::as_str), Some("http"));
+        let json = serde_json::to_string(&snapshot).expect("serializes");
+        assert!(json.contains("\"cam0.6kwh\""), "{json}");
+        assert!(json.contains("\"protocol\":\"http\""), "{json}");
+    }
+
+    #[test]
+    fn directory_protocol_falls_back_to_stored() {
+        assert_eq!(directory_protocol("_tcp", &BTreeMap::new()), "_tcp");
+        let mut txt = BTreeMap::new();
+        txt.insert("proto".to_string(), "HTTP".to_string());
+        assert_eq!(directory_protocol("_tcp", &txt), "http");
     }
 
     // --- node names + identity recency (mjolnir-mesh-t7i) ----------------------
