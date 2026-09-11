@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-wps-wan-admin-advise-fable",
+  "node_id": "add-wps-wan-admin-advise-fable",
+  "capability": "wan-lan-admin",
+  "change_id": "add-wps-wan-admin",
+  "goal": "Advise add-wps-wan-admin. You are Fable 5.1, other-family reader. Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-wps-wan-admin/reviews/2026-09-10-advise.md (that exact name).\n\nBLIND PASS first. From Why, living specs, and cited code only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md or tasks.md until that take is written. Then open those files and the spec delta, compare, steelman against your take.\n\nWhy (from proposal.md, not the design):\nA Lightning node on someone else's CPE is reachable by ICMP on its WAN lease, but OpenWrt wan input is REJECT, so SSH from that LAN is closed. Stock WPS only starts hostapd wps_pbc, which is a no-op on the open client AP. Operators standing next to the box need a physical-presence gate to administer it from the WAN LAN without leaving TCP/22 open to the internet.\nWhat: WPS short-press toggles a 15-minute nft window: TCP/22 from the WAN connected prefixes only (IPv4 subnet + IPv6 global prefixes). Second press or reboot closes it. No UCI persist. Hook /etc/rc.wps/00-mjolnir-wan-admin consumes the press. Merge operator pubkeys. Blink WPS LED. Do not expose LuCI/hello on WAN.\nBanner ACTIVE BUILD. Human activated 2026-09-03. Implementation already landed (tasks all [x]). This read is the missing architecture/instrument advise.\n\nCited code (read before design.md):\n- deploy/openwrt/files/usr/sbin/mjolnir-wan-admin — arm/disarm/toggle; timeout from mjolnir.wan_admin.timeout default 900; nft comment mjolnir-wps-admin; WAN prefixes only\n- deploy/openwrt/files/etc/rc.wps/00-mjolnir-wan-admin — WPS hook consumes the press\n- deploy/openwrt/install-node.sh:71-72 — stages the two files\n- ARCHITECTURE.md — overlay is the product; disruptive changes go through mjolnir-apply\n- openspec/specs/ has no living wan-lan-admin spec yet. Proposed SHALLs: openspec/changes/add-wps-wan-admin/specs/wan-lan-admin/spec.md — AFTER the take.\n\nLEARNINGS.md lines about WPS: 2026-09-04 wr3000s-a WPS window dies on fw4 reload; ap3000 leftover Allow-SSH-WAN.\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** fable-5.1-arch-review\n> **SPAWN:** <this spawn dir>\n",
+  "non_goals": [
+    "Implement leftover WAN-admin work",
+    "Fold",
+    "Flip the change banner"
+  ],
+  "anchors": [
+    {
+      "symbol": "deploy/openwrt/files/usr/sbin/mjolnir-wan-admin",
+      "invariant": "WAN SSH window is prefix-boxed nft, not 0.0.0.0/0, not UCI persist."
+    },
+    {
+      "symbol": "deploy/openwrt/files/etc/rc.wps/00-mjolnir-wan-admin",
+      "invariant": "WPS press is consumed before stock wps_pbc."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Physical-presence WAN SSH is prefix-and-time boxed, no UCI persist, keys required, LuCI/hello stay off WAN.",
+    "if_false": "Window opens 0.0.0.0/0, persists in UCI, or exposes hello/LuCI on WAN."
+  },
+  "out_of_scope": [
+    {"item": "dropbear.PasswordAuth=off", "tracked_as": "out of scope"},
+    {"item": "Permanent Allow-SSH-WAN", "tracked_as": "anti-pattern"},
+    {"item": "Real WPS-PBC STA enroll", "tracked_as": "mjolnir-mesh-m50"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-wps-wan-admin/reviews/",
+      "openspec/changes/add-wps-wan-admin/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-fable-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-fable-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

@@ -31,6 +31,22 @@ SSH-mutate UCI. `update-fleet.sh` remains the full binary+radio rollout.
 A staged `wireless.env` writes the store and is then wiped. LuCI-edited
 `wireless` is not canonical.
 
+Coverage survey (`add-coverage-survey`, bead `mjolnir-mesh-6hn`): last-known
+WGS84 lives on the gossiped directory projection, not in `radio.json` v1
+and not in UCI. Join to radio is `backhaul_addr`. A DreamBall is a signed
+snapshot plus render recipe, not the live store; export is an explicit
+operator act. v1 surveyor is a phone on the client SSID: associated AP
+plus nearby radio strength, operator picks a node, enters GPS. Stamp
+ingress is a signed claim to hello on the node's LAN gateway, spooled to
+meshd; hello verifies only; the CRDT is the authority. Routers are Wi-Fi
+and gain no NFC, BLE, or ESP-NOW. BLE/ESP-NOW is handheld-to-handheld
+only. Compass magnetometer exists; compass GPS is later. World-model
+capture is the AI Camera (cameras + Ethernet 3D lidar), not the LilyGo
+T-RGB. Visualizer home is web3d-space `/mesh`; the stamp UI is hello.mesh
+on the LAN gateway. Last-known is LWW by `stamped_at` + stamper; the
+viewer ages stale stamps. Do not confuse this with `e21` “north-star”
+roaming.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
@@ -38,3 +54,5 @@ A staged `wireless.env` writes the store and is then wiped. LuCI-edited
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
+- Coverage survey (directory last-known coords, phone stamp, `/mesh` viz):
+  `openspec/changes/add-coverage-survey/` until folded

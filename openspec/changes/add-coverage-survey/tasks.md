@@ -4,7 +4,7 @@
 - [x] Send-back: rewrite call 3 — router proximity is Wi-Fi association + nearby client-BSSID RSSI, then operator pick + entered GPS; BLE/ESP-NOW is handheld-to-handheld only; routers gain no NFC, BLE, or ESP-NOW
 - [x] Send-back: pin stamp ingress — signed claim to hello on the node's LAN gateway, spooled to meshd; hello verifies only; CRDT is the authority
 - [x] Advise accept (other-family reader) before act — `reviews/2026-09-10-re-advise.md`
-- [ ] Amend `ARCHITECTURE.md` with the five coverage-survey calls
+- [x] Amend `ARCHITECTURE.md` with the five coverage-survey calls
 
 Not owed here:
 
