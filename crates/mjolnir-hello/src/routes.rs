@@ -1385,7 +1385,8 @@ mod tests {
                     "subnet": "10.42.1.0/24",
                     "backhaul_addr": "10.254.1.1",
                     "link_local_lan": "fe80::aa",
-                    "link_local_mesh": "fe80::bb"
+                    "link_local_mesh": "fe80::bb",
+                    "ula": "fd00::1"
                 },
                 "neighbors": [],
                 "identities": [],
@@ -1412,6 +1413,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(value["link_local_lan"], "fe80::aa");
         assert_eq!(value["link_local_mesh"], "fe80::bb");
+        assert_eq!(value["ula"], "fd00::1");
         assert_eq!(value["backhaul_addr"], "10.254.1.1");
     }
 

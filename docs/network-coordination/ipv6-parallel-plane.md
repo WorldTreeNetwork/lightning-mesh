@@ -169,7 +169,11 @@ go through the access edge.
    first contact, no overlay. `directory.json` `node.link_local_lan` /
    `link_local_mesh` are kernel `fe80` on `br-lan` / `br-mesh`, not
    `mjolnir0`'s babel TUN LL. Operator adds `%iface` on their NIC.
-2. Identity-derived ULA on nodes (`v6.2`) — hash, assign beside `10.254`.
+2. Identity-derived ULA on nodes (`v6.2` / `add-identity-derived-ula`) —
+   `ula_addr`: `/48` = `fd` + 40 bits of `blake3(b"mjolnir/mesh/ula/v0")`,
+   subnet 0, IID = 64 bits of `blake3(node_id)`. Assigned `/64` on
+   `br-mesh` only (`nodad` / reconcile). Not on `mjolnir0`. Not an iroh
+   candidate. Babel `in`/`out ip fc00::/7 deny`.
 3. RA that `/64` on the client AP + CAPPORT on the RA (`v6.3`).
 4. Optional babel IPv6 FIB (`v6.4`) — never v4-via-v6.
 5. `.mesh` AAAA + app-side resolver (`v6.5`).

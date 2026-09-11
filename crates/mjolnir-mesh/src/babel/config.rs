@@ -166,7 +166,10 @@ pub fn render_babeld_conf(inputs: &BabelConfigInputs<'_>) -> String {
     out.push_str("redistribute deny\n\n");
 
     out.push_str("in ip 10.255.0.0/16 deny\n");
-    out.push_str("out ip 10.255.0.0/16 deny\n\n");
+    out.push_str("out ip 10.255.0.0/16 deny\n");
+    // Identity ULA / stock OpenWrt ula_prefix stay off babel until v6.4.
+    out.push_str("in ip fc00::/7 deny\n");
+    out.push_str("out ip fc00::/7 deny\n\n");
 
     out.push_str(&format!("default rxcost {}\n", inputs.tunnel_rxcost));
     out
@@ -265,6 +268,8 @@ pub fn render_overlay_babeld_conf(
     out.push_str("out ip 10.254.0.0/16 deny\n");
     out.push_str("in ip 10.255.0.0/16 deny\n");
     out.push_str("out ip 10.255.0.0/16 deny\n");
+    out.push_str("in ip fc00::/7 deny\n");
+    out.push_str("out ip fc00::/7 deny\n");
     out
 }
 
@@ -318,6 +323,8 @@ in ip 10.254.0.0/16 deny
 out ip 10.254.0.0/16 deny
 in ip 10.255.0.0/16 deny
 out ip 10.255.0.0/16 deny
+in ip fc00::/7 deny
+out ip fc00::/7 deny
 ";
         assert_eq!(got, expected);
     }
@@ -348,6 +355,8 @@ out ip 10.255.0.0/16 deny
         assert!(got.contains("in ip 10.254.0.0/16 deny"));
         assert!(got.contains("out ip 10.254.0.0/16 deny"));
         assert!(got.contains("in ip 10.255.0.0/16 deny"));
+        assert!(got.contains("in ip fc00::/7 deny"));
+        assert!(got.contains("out ip fc00::/7 deny"));
         // No client subnet claimed yet -> no redistribute-allow line.
         assert!(!got.contains("redistribute ip"));
     }
@@ -386,6 +395,8 @@ redistribute deny
 
 in ip 10.255.0.0/16 deny
 out ip 10.255.0.0/16 deny
+in ip fc00::/7 deny
+out ip fc00::/7 deny
 
 default rxcost 96
 ";
@@ -411,6 +422,8 @@ redistribute deny
 
 in ip 10.255.0.0/16 deny
 out ip 10.255.0.0/16 deny
+in ip fc00::/7 deny
+out ip fc00::/7 deny
 
 default rxcost 96
 ";
@@ -427,6 +440,8 @@ default rxcost 96
             "should have no redistribute ip line"
         );
         assert!(got.contains("redistribute deny"));
+        assert!(got.contains("in ip fc00::/7 deny"));
+        assert!(got.contains("out ip fc00::/7 deny"));
     }
 
     #[test]

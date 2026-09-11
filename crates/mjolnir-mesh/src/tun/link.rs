@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// The reserved link-addressing block for per-peer TUN /31s.
 /// Devices on the mesh never see these addresses.
@@ -22,6 +22,64 @@ pub const LINK_BLOCK: (Ipv4Addr, u8) = (Ipv4Addr::new(10, 255, 0, 0), 16);
 /// IPv6 ULA addresses, and binding one directly trips IPv6 DAD. See the
 /// `iroh-lan-backhaul-findings` memory for the empirical detail.
 pub const BACKHAUL_PREFIX_LEN: u8 = 16;
+
+/// Domain-separated input for the mesh ULA `/48` (add-identity-derived-ula).
+/// ASCII bytes, not the CRDT gossip topic (`mjolnir/mesh/crdt/v0`) — bumping
+/// gossip must not renumber every node. Federation (`yau`) may later replace
+/// this with a per-mesh id; not this change.
+pub const ULA_ID_INPUT: &[u8] = b"mjolnir/mesh/ula/v0";
+
+/// Prefix length of the identity-derived ULA on `br-mesh`. Every node's
+/// `/128` sits in this one `/64` (subnet id 0) so peers are on-link.
+pub const ULA_PREFIX_LEN: u8 = 64;
+
+/// RFC 4193 ULA `/48` for this software mesh: `fd` + first 40 bits of
+/// `blake3(ULA_ID_INPUT)`.
+pub fn ula_prefix() -> Ipv6NetPrefix {
+    let p = blake3::hash(ULA_ID_INPUT);
+    let b = p.as_bytes();
+    Ipv6NetPrefix {
+        octets: [0xfd, b[0], b[1], b[2], b[3], b[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    }
+}
+
+/// Tiny helper so tests can format the `/48` without depending on `ipnet` here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv6NetPrefix {
+    pub octets: [u8; 16],
+}
+
+impl Ipv6NetPrefix {
+    pub fn addr(self) -> Ipv6Addr {
+        Ipv6Addr::from(self.octets)
+    }
+}
+
+/// Derive this node's identity ULA from its node id.
+///
+/// `/48` from [`ula_prefix`], subnet id 0, interface id = first 64 bits of
+/// `blake3(node_id)` (opaque; RFC 7136). IID 0 is clamped to 1 (subnet-router
+/// anycast). Never hashed from the IPv4 `10.254` host — `pt9` may move that.
+pub fn ula_addr(node_id: &str) -> Ipv6Addr {
+    let p = blake3::hash(ULA_ID_INPUT);
+    let pb = p.as_bytes();
+    let i = blake3::hash(node_id.as_bytes());
+    let ib = i.as_bytes();
+    let mut iid = u64::from_be_bytes([ib[0], ib[1], ib[2], ib[3], ib[4], ib[5], ib[6], ib[7]]);
+    if iid == 0 {
+        iid = 1;
+    }
+    let idb = iid.to_be_bytes();
+    Ipv6Addr::from([
+        0xfd, pb[0], pb[1], pb[2], pb[3], pb[4], 0, 0, idb[0], idb[1], idb[2], idb[3], idb[4],
+        idb[5], idb[6], idb[7],
+    ])
+}
+
+/// True when `ip` is Unique Local (`fc00::/7`). Used to refuse iroh candidates.
+pub fn is_unique_local(ip: Ipv6Addr) -> bool {
+    ip.is_unique_local()
+}
 
 /// Return whether the wanted backhaul address needs to be restored.
 ///
@@ -254,6 +312,29 @@ mod tests {
         assert!(in_backhaul_block(&whole));
         assert!(!in_backhaul_block(&client));
         assert!(!in_backhaul_block(&link));
+    }
+
+    #[test]
+    fn ula_addr_is_deterministic_unique_local_and_on_link() {
+        let a = ula_addr("alpha");
+        let b = ula_addr("beta");
+        assert_eq!(a, ula_addr("alpha"));
+        assert!(a.is_unique_local());
+        assert!(b.is_unique_local());
+        assert_ne!(a, b);
+        // Same /64 (subnet id 0): first 8 octets match; last 8 are the IID.
+        assert_eq!(&a.octets()[..8], &b.octets()[..8]);
+        assert_eq!(&a.octets()[6..8], &[0, 0]);
+        assert_eq!(a.octets()[0], 0xfd);
+    }
+
+    #[test]
+    fn ula_addr_golden_vector() {
+        // Exact input bytes: b"mjolnir/mesh/ula/v0". Locked so Admin / apps
+        // can compute the same address without reading meshd.
+        let id = "fd7691128f2bb615d56cf2f0e202fa01472890dd8af89f9132d34d566776ed45";
+        let got = ula_addr(id);
+        assert_eq!(got, "fd53:6213:4797:0:1478:922e:5c61:d39f".parse().unwrap());
     }
 
     #[test]

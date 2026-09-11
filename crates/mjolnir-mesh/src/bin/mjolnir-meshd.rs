@@ -402,7 +402,9 @@ async fn main() -> Result<()> {
     };
     if !overlay_mode {
         if let Some(iface) = l2_backhaul.clone() {
-            tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip));
+            let ula = mjolnir_mesh::tun::ula_addr(&secret.public().to_string());
+            tokio::spawn(assign_ula_addr(iface.clone(), ula));
+            tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip, ula));
         }
     }
     // Pin the iroh socket to the derived backhaul address in LAN/mesh mode so
@@ -3145,6 +3147,9 @@ struct DirectoryNode {
     /// overlay TUN link-local.
     #[serde(skip_serializing_if = "Option::is_none")]
     link_local_mesh: Option<String>,
+    /// Identity-derived ULA (`ula_addr(node_id)`). On-link on `br-mesh`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ula: Option<String>,
 }
 
 /// Client AP bridge. Link-local here is SSH from a phone/laptop on the SSID.
@@ -3210,6 +3215,7 @@ fn read_iface_link_local(iface: &str) -> Option<Ipv6Addr> {
 fn stamp_node_link_locals(node: &mut DirectoryNode) {
     node.link_local_lan = read_iface_link_local(CLIENT_BRIDGE).map(|ip| ip.to_string());
     node.link_local_mesh = read_iface_link_local(MESH_BRIDGE).map(|ip| ip.to_string());
+    node.ula = Some(mjolnir_mesh::tun::ula_addr(&node.node_id).to_string());
 }
 
 /// One other mesh node, joining its [`AddrBook`] entry with any subnet claim
@@ -3355,6 +3361,7 @@ fn build_directory_snapshot(
         coordinate: project_coordinate(coordinate_book, self_id),
         link_local_lan: None,
         link_local_mesh: None,
+        ula: None,
     };
 
     let neighbors = addr_book
@@ -3430,6 +3437,7 @@ fn build_directory_snapshot_v2(
         coordinate: project_coordinate(coordinate_book, self_id),
         link_local_lan: None,
         link_local_mesh: None,
+        ula: None,
     };
 
     let neighbors = addr_book
@@ -6750,7 +6758,7 @@ async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
 /// the L2 device during a wifi reload. The interface name is stable across that
 /// operation, but its ifindex is not, so every pass resolves the index afresh.
 #[cfg(target_os = "linux")]
-async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr) {
+async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr, ula: Ipv6Addr) {
     use futures_util::stream::TryStreamExt;
     use rtnetlink::new_connection;
     use rtnetlink::packet_route::address::AddressAttribute;
@@ -6807,33 +6815,110 @@ async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr) {
                 }
             }
         }
-        if dump_failed || !mjolnir_mesh::tun::backhaul_addr_missing(&present, addr) {
+        if dump_failed {
             continue;
         }
+        if mjolnir_mesh::tun::backhaul_addr_missing(&present, addr) {
+            match handle
+                .address()
+                .add(
+                    index,
+                    IpAddr::V4(addr),
+                    mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
+                )
+                .execute()
+                .await
+            {
+                Ok(()) => info!(
+                    %addr,
+                    %iface,
+                    prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
+                    "re-added missing IPv4 backhaul address after interface reload"
+                ),
+                Err(e) => warn!(%addr, %iface, "could not re-add missing backhaul address: {e}"),
+            }
+        }
 
+        let mut have_ula = false;
+        let mut addrs = handle.address().get().execute();
+        loop {
+            match addrs.try_next().await {
+                Ok(Some(msg)) => {
+                    if msg.header.index != index {
+                        continue;
+                    }
+                    for attribute in &msg.attributes {
+                        if let AddressAttribute::Address(IpAddr::V6(ip))
+                        | AddressAttribute::Local(IpAddr::V6(ip)) = attribute
+                            && *ip == ula
+                        {
+                            have_ula = true;
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+        if have_ula {
+            continue;
+        }
         match handle
             .address()
-            .add(
-                index,
-                IpAddr::V4(addr),
-                mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
-            )
+            .add(index, IpAddr::V6(ula), mjolnir_mesh::tun::ULA_PREFIX_LEN)
             .execute()
             .await
         {
             Ok(()) => info!(
-                %addr,
+                %ula,
                 %iface,
-                prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
-                "re-added missing IPv4 backhaul address after interface reload"
+                prefix = mjolnir_mesh::tun::ULA_PREFIX_LEN,
+                "re-added missing identity ULA after interface reload"
             ),
-            Err(e) => warn!(%addr, %iface, "could not re-add missing backhaul address: {e}"),
+            Err(e) => warn!(%ula, %iface, "could not re-add missing identity ULA: {e}"),
         }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn reconcile_backhaul_addr(_iface: String, _addr: Ipv4Addr) {}
+async fn reconcile_backhaul_addr(_iface: String, _addr: Ipv4Addr, _ula: Ipv6Addr) {}
+
+#[cfg(target_os = "linux")]
+async fn assign_ula_addr(iface: String, ula: Ipv6Addr) {
+    use rtnetlink::new_connection;
+    let Some(index) = std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    else {
+        warn!(%ula, %iface, "no ifindex for identity ULA assign");
+        return;
+    };
+    let (connection, handle, _) = match new_connection() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(%ula, %iface, "netlink connect for ULA assign failed: {e}");
+            return;
+        }
+    };
+    tokio::spawn(connection);
+    match handle
+        .address()
+        .add(index, IpAddr::V6(ula), mjolnir_mesh::tun::ULA_PREFIX_LEN)
+        .execute()
+        .await
+    {
+        Ok(()) => info!(
+            %ula,
+            %iface,
+            prefix = mjolnir_mesh::tun::ULA_PREFIX_LEN,
+            "assigned identity ULA on br-mesh (nodad-equivalent: hash, not SLAAC)"
+        ),
+        Err(e) => warn!(%ula, %iface, "could not assign identity ULA (may already exist): {e}"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn assign_ula_addr(_iface: String, _ula: Ipv6Addr) {}
 
 /// Enable IPv4 forwarding in this (container) network namespace so the kernel
 /// routes client traffic between the TUN tunnels and the veth/bridge. Required
@@ -7833,6 +7918,17 @@ fn check_reachability(endpoint: &Endpoint, no_relay: bool) {
     let addr = endpoint.addr();
     let has_relay = addr.relay_urls().next().is_some();
     let ips: Vec<IpAddr> = addr.ip_addrs().map(|sa| sa.ip()).collect();
+    let ula: Vec<IpAddr> = ips
+        .iter()
+        .copied()
+        .filter(|ip| matches!(ip, IpAddr::V6(v) if v.is_unique_local()))
+        .collect();
+    if !ula.is_empty() {
+        error!(
+            ?ula,
+            "iroh candidates include Unique Local addresses — identity ULA must not be a QUIC candidate (add-identity-derived-ula)"
+        );
+    }
     let has_public = ips.iter().any(|ip| is_globally_reachable(*ip));
     let has_nonloopback = ips.iter().any(|ip| !ip.is_loopback());
 
@@ -10567,6 +10663,7 @@ fe80000000000000000000000000a1b2 04 40 20 80    mjolnir0
         let json = serde_json::to_value(&snapshot.node).unwrap();
         assert!(json.get("link_local_lan").is_none());
         assert!(json.get("link_local_mesh").is_none());
+        assert!(json.get("ula").is_none());
         assert_eq!(json["backhaul_addr"], "10.254.1.1");
     }
 
@@ -10585,8 +10682,11 @@ fe80000000000000000000000000a1b2 04 40 20 80    mjolnir0
         );
         snapshot.node.link_local_lan = Some("fe80::aa".into());
         snapshot.node.link_local_mesh = Some("fe80::bb".into());
+        snapshot.node.ula = Some(mjolnir_mesh::tun::ula_addr("self").to_string());
         let json = serde_json::to_value(&snapshot.node).unwrap();
         assert_eq!(json["link_local_lan"], "fe80::aa");
         assert_eq!(json["link_local_mesh"], "fe80::bb");
+        assert_eq!(json["ula"], mjolnir_mesh::tun::ula_addr("self").to_string());
+        assert!(json["ula"].as_str().unwrap().starts_with("fd"));
     }
 }

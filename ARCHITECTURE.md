@@ -13,7 +13,10 @@ client L2 is never bridged across nodes.
 Management is the overlay: reach nodes at derived `10.254.x` over SSH
 once you are on the mesh. First contact on the LAN/SSID is this node's
 link-local (`fe80` on `br-lan` / `br-mesh`), published on hello
-`/api/node` (`link_local_lan` / `link_local_mesh`).
+`/api/node` (`link_local_lan` / `link_local_mesh`). Nodes also have an
+identity-derived ULA (`blake3(b"mjolnir/mesh/ula/v0")` `/48` +
+`blake3(node_id)` IID) on `br-mesh` beside `10.254`; it is not an iroh
+QUIC candidate.
 No mDNS for mesh-wide discovery — gossip/CRDT is the address book.
 
 Disruptive node changes go through `mjolnir-apply` (snapshot → apply →
