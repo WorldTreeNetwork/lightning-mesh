@@ -45,3 +45,36 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  web:
+    name: hello.mesh frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hello-mesh-web
+    env:
+      # The smoke launches the debug mjolnir-hello from this target dir; keep it
+      # in step with the cargo build step below.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Playwright chromium
+        # Both the vitest browser project and the smoke drive real chromium.
+        run: bunx playwright install --with-deps chromium
+      - name: Unit tests
+        run: bun run test
+      - name: Build static bundle
+        run: bun run build
+      - name: Build mjolnir-hello
+        run: cargo build -p mjolnir-hello
+        working-directory: .
+      - name: Insecure-origin smoke
+        run: bun run test:smoke
