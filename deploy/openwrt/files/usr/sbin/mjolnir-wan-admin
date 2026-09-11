@@ -145,7 +145,15 @@ cmd_arm() {
 	fi
 	led_set arm
 	(
-		sleep "$TIMEOUT_SEC"
+		# Poll: fw4/wifi reload can drop the nft rule while we still sleep.
+		remaining=$TIMEOUT_SEC
+		while [ "$remaining" -gt 0 ]; do
+			step=5
+			[ "$remaining" -lt "$step" ] && step=$remaining
+			sleep "$step"
+			remaining=$((remaining - step))
+			armed || break
+		done
 		rm -f "$PIDFILE"
 		/usr/sbin/mjolnir-wan-admin disarm
 	) >/dev/null 2>&1 &
