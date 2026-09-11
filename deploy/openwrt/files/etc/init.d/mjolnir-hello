@@ -57,5 +57,16 @@ start_service() {
 }
 
 service_triggers() {
+	local lan_iface
+
 	procd_add_reload_trigger mjolnir
+
+	# start_service snapshots the LAN gateway IP at bind time, but meshd's
+	# client reconciler rewrites network.lan and reloads netifd underneath us —
+	# without this the front desk keeps LISTENing on the stale address. Read
+	# lan_iface from the same UCI key start_service binds from so the trigger
+	# cannot drift from the bind.
+	config_load mjolnir
+	config_get lan_iface hello lan_iface 'lan'
+	procd_add_reload_interface_trigger "$lan_iface"
 }
