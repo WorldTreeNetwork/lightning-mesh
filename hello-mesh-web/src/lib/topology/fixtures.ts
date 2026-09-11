@@ -22,7 +22,20 @@ export const mockTopologyGraph: TopoGraph = {
 				channel: 36,
 				freq_mhz: 5180,
 				collected_at_unix: 1751234567,
-				stations: [],
+				stations: [
+					{
+						mac: 'aa:bb:cc:e7:ba:9d',
+						signal_dbm: -42,
+						expected_throughput_mbps: 979,
+						inactive_ms: 0
+					},
+					{
+						mac: 'aa:bb:cc:98:fb:10',
+						signal_dbm: -78,
+						expected_throughput_mbps: 180,
+						inactive_ms: 0
+					}
+				],
 				mpaths: []
 			}
 		},

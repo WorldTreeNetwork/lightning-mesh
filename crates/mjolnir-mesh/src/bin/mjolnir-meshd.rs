@@ -1019,7 +1019,7 @@ async fn run_mesh(
     // stamp. Same persistence pattern as the node-name book — a sibling
     // `coordinates.state`, restored on boot so a pin shows immediately without
     // waiting to relearn it over gossip. Untrusted-but-attributed: gossip does
-    // not verify signatures. Hello-spool ingest is a later change.
+    // not verify signatures. Hello-spool ingest (6hn.5) is `coordinates/*.json`.
     let coordinate_book_file = coordinate_book_path(&claims_file);
     let restored_coordinates = load_coordinate_book(&coordinate_book_file);
     if !restored_coordinates.is_empty() {
@@ -1533,6 +1533,28 @@ async fn run_mesh(
                             spool_path,
                             leased_names_path,
                             self_id,
+                        )
+                        .await
+                    });
+                }
+
+                // Coordinate-stamp sweep (6hn.5): ingest phone stamps spooled
+                // by hello.mesh under `<spool>/coordinates/`, apply LWW, gossip
+                // CoordinateAnnounce, persist. Same cadence as name-claims so
+                // a just-submitted pin lands within a few seconds. Untrusted-
+                // but-attributed: hello already verified; we do not re-check
+                // signatures. Subject may differ from stamper.
+                {
+                    let sync = sync.clone();
+                    let coordinate_book = coordinate_book.clone();
+                    let spool_path = spool_dir.clone();
+                    let coordinate_book_path = coordinate_book_file.clone();
+                    tokio::spawn(async move {
+                        coordinate_stamp_sweep_loop(
+                            sync,
+                            coordinate_book,
+                            spool_path,
+                            coordinate_book_path,
                         )
                         .await
                     });
@@ -2908,6 +2930,134 @@ async fn name_claim_sweep_loop<T: GossipTransport>(
         }
         let snapshot = leased_names.lock().expect("leased names poisoned").clone();
         persist_leased_names(&snapshot, &leased_names_file);
+    }
+}
+
+/// A coordinate stamp spooled by `mjolnir-hello` under
+/// `<spool>/coordinates/{stamper}.json` (bead 6hn.5). hello already Ed25519-
+/// verified the claim; meshd does not re-verify (gossip is untrusted-but-
+/// attributed). Integers match [`CoordinateStamp`].
+#[derive(Debug, Clone, Deserialize)]
+struct CoordinateSpool {
+    node_id: String,
+    lat_e7: i32,
+    lon_e7: i32,
+    #[serde(default)]
+    alt_mm: Option<i32>,
+    stamped_at_unix: u64,
+    stamper: String,
+}
+
+/// Sweep the coordinate-stamp spool (`<spool>/coordinates/*.json`), applying
+/// each accepted stamp to `coordinate_book` and returning the entries that
+/// were newly inserted or updated (so the caller can gossip them). The spool
+/// file is removed after processing — the client re-POSTs a newer stamp.
+fn ingest_coordinate_stamp_spool(
+    spool_dir: &Path,
+    coordinate_book: &Arc<Mutex<CoordinateBook>>,
+) -> Vec<CoordinateStamp> {
+    let coords_dir = spool_dir.join("coordinates");
+    let entries = match std::fs::read_dir(&coords_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            warn!(path = %coords_dir.display(), "coordinate spool: failed to read dir: {e}");
+            return Vec::new();
+        }
+    };
+    let mut applied = Vec::new();
+    for dir_entry in entries.flatten() {
+        let path = dir_entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(path = %path.display(), "coordinate spool: failed to read file: {e}");
+                continue;
+            }
+        };
+        let claim: CoordinateSpool = match serde_json::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(path = %path.display(), "coordinate spool: malformed, quarantining: {e}");
+                let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                continue;
+            }
+        };
+        if claim.node_id.trim().is_empty() || claim.stamper.trim().is_empty() {
+            warn!(path = %path.display(), "coordinate spool: missing node_id/stamper, dropping");
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        let incoming = CoordinateStamp {
+            node_id: claim.node_id,
+            lat_e7: claim.lat_e7,
+            lon_e7: claim.lon_e7,
+            alt_mm: claim.alt_mm,
+            stamped_at_unix: claim.stamped_at_unix,
+            stamper: claim.stamper,
+        };
+        {
+            let mut book = coordinate_book.lock().expect("coordinate book poisoned");
+            match apply_coordinate(&mut book, &incoming) {
+                MergeResult::Inserted | MergeResult::Updated => {
+                    applied.push(incoming);
+                }
+                MergeResult::Unchanged | MergeResult::Conflict { .. } => {}
+            }
+        }
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!(path = %path.display(), "coordinate spool: failed to remove ingested file: {e}");
+        }
+    }
+    applied
+}
+
+/// How often to sweep the coordinate-stamp spool. Same cadence as name-claims:
+/// cheaper than anti-entropy and short enough that a just-submitted pin lands
+/// within a few seconds.
+const COORDINATE_STAMP_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Periodic task: ingest spooled coordinate stamps, gossip each accepted
+/// stamp, and persist the book (bead 6hn.5). Runs for the life of the daemon.
+async fn coordinate_stamp_sweep_loop<T: GossipTransport>(
+    sync: Arc<GossipSync<T>>,
+    coordinate_book: Arc<Mutex<CoordinateBook>>,
+    spool_dir: PathBuf,
+    coordinate_book_file: PathBuf,
+) {
+    let mut ticker = tokio::time::interval(COORDINATE_STAMP_SWEEP_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let applied = ingest_coordinate_stamp_spool(&spool_dir, &coordinate_book);
+        if applied.is_empty() {
+            continue;
+        }
+        for entry in &applied {
+            info!(
+                node = %entry.node_id,
+                stamper = %entry.stamper,
+                lat_e7 = entry.lat_e7,
+                lon_e7 = entry.lon_e7,
+                "coordinate: ingested stamp, broadcasting"
+            );
+            if let Err(e) = sync
+                .publish(GossipMessage::CoordinateAnnounce {
+                    node_id: entry.node_id.clone(),
+                    entry: entry.clone(),
+                })
+                .await
+            {
+                warn!(node = %entry.node_id, "coordinate: broadcast failed: {e}");
+            }
+        }
+        let snapshot = coordinate_book
+            .lock()
+            .expect("coordinate book poisoned")
+            .clone();
+        persist_coordinate_book(&snapshot, &coordinate_book_file);
     }
 }
 

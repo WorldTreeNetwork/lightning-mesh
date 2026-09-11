@@ -13,6 +13,7 @@
 	import { mockTopologyGraph } from '$lib/topology/fixtures';
 	import type { TopoGraph } from '$lib/topology/graph';
 	import RadioGraph from './RadioGraph.svelte';
+	import StampCoords from './StampCoords.svelte';
 	import { Waypoints, MapPin } from '@lucide/svelte';
 
 	const params = browser ? new URLSearchParams(window.location.search) : undefined;
@@ -34,6 +35,8 @@
 		fallback: string;
 		subnet: string | null;
 		isSelf: boolean;
+		lat?: number;
+		lon?: number;
 	}
 
 	function fallbackLabel(nodeId: string, subnet: string | null): string {
@@ -52,14 +55,18 @@
 			name: directory.node.name?.trim() ?? '',
 			fallback: fallbackLabel(directory.node.node_id, directory.node.subnet),
 			subnet: directory.node.subnet,
-			isSelf: true
+			isSelf: true,
+			lat: directory.node.lat,
+			lon: directory.node.lon
 		};
 		const neighbors = directory.neighbors.map((n) => ({
 			key: n.node_id,
 			name: n.name?.trim() ?? '',
 			fallback: fallbackLabel(n.node_id, n.subnet),
 			subnet: n.subnet,
-			isSelf: false
+			isSelf: false,
+			lat: n.lat,
+			lon: n.lon
 		}));
 		return [self, ...neighbors];
 	});
@@ -95,6 +102,11 @@
 					{#if row.subnet}
 						<span class="font-mono text-xs text-muted-foreground">{row.subnet}</span>
 					{/if}
+					{#if row.lat !== undefined && row.lon !== undefined}
+						<span class="font-mono text-xs text-muted-foreground"
+							>{row.lat.toFixed(5)}, {row.lon.toFixed(5)}</span
+						>
+					{/if}
 					{#if row.isSelf}
 						<span class="ml-auto flex items-center gap-1 text-xs text-primary">
 							<MapPin class="size-3.5" aria-hidden="true" />
@@ -104,6 +116,8 @@
 				</li>
 			{/each}
 		</ul>
+
+		<StampCoords {directory} {graph} mock={useMock} />
 
 		<RadioGraph {graph} {loaded} {lastUpdated} />
 	{/if}

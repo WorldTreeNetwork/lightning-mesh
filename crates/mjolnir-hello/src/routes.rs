@@ -600,6 +600,232 @@ fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path)
     RouteResponse::json(200, record_json)
 }
 
+/// Subdirectory of the identity spool that holds coordinate-stamp submissions
+/// (bead mjolnir-mesh-6hn.5). Sibling of `names/`: meshd's identity sweep is
+/// non-recursive, so `coordinates/` is invisible to it. The coordinate sweep
+/// (a separate meshd stage) reads `spool_dir/coordinates/*.json`.
+const COORDINATE_SPOOL_SUBDIR: &str = "coordinates";
+
+/// Domain-separation prefix for a coordinate stamp. Distinct from identity
+/// (raw nonce) and name-claim so a captured signature cannot be replayed as
+/// a pin on the map. Client and server must sign/verify identical bytes
+/// ([`coordinate_stamp_signing_message`]).
+const COORDINATE_STAMP_DOMAIN: &str = "mjolnir-coordinate-stamp:v1";
+
+#[derive(Debug, Deserialize)]
+struct CoordinateStampRequest {
+    pubkey: String,
+    sig: String,
+    challenge: String,
+    node_id: String,
+    /// WGS84 latitude in degrees. Missing/null → reject (do not write).
+    lat: Option<f64>,
+    /// WGS84 longitude in degrees. Missing/null → reject (do not write).
+    lon: Option<f64>,
+    /// Altitude in metres above the WGS84 ellipsoid, when the phone has one.
+    #[serde(default)]
+    alt: Option<f64>,
+    /// Author's Unix time in seconds (phone wall clock). Required: LWW is on
+    /// this field, not ingest time.
+    stamped_at: Option<u64>,
+}
+
+/// What meshd's coordinate-stamp sweep ingests. Integers match
+/// [`mjolnir_mesh::CoordinateStamp`] so meshd can apply without re-converting
+/// floats. Gossip does not re-verify the signature (untrusted-but-attributed);
+/// hello already did.
+#[derive(Debug, Serialize)]
+struct CoordinateStampRecord<'a> {
+    node_id: &'a str,
+    lat_e7: i32,
+    lon_e7: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alt_mm: Option<i32>,
+    stamped_at_unix: u64,
+    stamper: &'a str,
+    pubkey: &'a str,
+    sig: &'a str,
+    challenge: &'a str,
+}
+
+/// Exact bytes a coordinate stamp signs: domain, challenge, subject node,
+/// lat/lon in microdegrees, optional altitude millimetres (empty if none),
+/// and the author's unix time — newline-separated. Conversion to e7 happens
+/// before this is built so client and server agree on integers, not JSON
+/// floats.
+fn coordinate_stamp_signing_message(
+    challenge_hex: &str,
+    node_id: &str,
+    lat_e7: i32,
+    lon_e7: i32,
+    alt_mm: Option<i32>,
+    stamped_at: u64,
+) -> Vec<u8> {
+    let alt = alt_mm.map(|m| m.to_string()).unwrap_or_default();
+    format!(
+        "{COORDINATE_STAMP_DOMAIN}\n{challenge_hex}\n{node_id}\n{lat_e7}\n{lon_e7}\n{alt}\n{stamped_at}"
+    )
+    .into_bytes()
+}
+
+fn wgs84_in_range(lat: f64, lon: f64) -> bool {
+    lat.is_finite()
+        && lon.is_finite()
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
+}
+
+/// True when `node_id` is this node's directory self or a listed neighbor.
+/// Empty / unreadable / `node: null` directories know nobody.
+fn directory_knows_node(cache: &DirectoryCache, directory_file: &Path, node_id: &str) -> bool {
+    if node_id.is_empty() {
+        return false;
+    }
+    let body = cache.read(directory_file);
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return false;
+    };
+    if value
+        .get("node")
+        .and_then(|n| n.get("node_id"))
+        .and_then(|s| s.as_str())
+        == Some(node_id)
+    {
+        return true;
+    }
+    value
+        .get("neighbors")
+        .and_then(|n| n.as_array())
+        .into_iter()
+        .flatten()
+        .any(|n| n.get("node_id").and_then(|s| s.as_str()) == Some(node_id))
+}
+
+/// `POST /api/coordinate-stamp` — validate a signed last-known coordinate
+/// for a directory node and spool it for meshd (bead mjolnir-mesh-6hn.5).
+///
+/// Mirrors [`submit_name_claim`]: challenge-response, domain-separated
+/// message, hello holds no key. Rejects missing node_id, unknown node (not
+/// in directory self+neighbors), missing lat/lon, out-of-range WGS84, or a
+/// bad signature — and writes nothing in those cases.
+fn submit_coordinate_stamp(
+    body: &[u8],
+    challenges: &ChallengeStore,
+    spool_dir: &Path,
+    directory_cache: &DirectoryCache,
+    directory_file: &Path,
+) -> RouteResponse {
+    let req: CoordinateStampRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(_) => return bad_request("invalid request body"),
+    };
+
+    let node_id = req.node_id.trim();
+    if node_id.is_empty() {
+        return bad_request("missing node_id");
+    }
+    let (Some(lat), Some(lon)) = (req.lat, req.lon) else {
+        return bad_request("missing lat/lon");
+    };
+    if !wgs84_in_range(lat, lon) {
+        return bad_request("invalid lat/lon");
+    }
+    let Some(stamped_at) = req.stamped_at else {
+        return bad_request("missing stamped_at");
+    };
+
+    let Some(lat_e7) = mjolnir_mesh::degrees_to_e7(lat) else {
+        return bad_request("invalid lat/lon");
+    };
+    let Some(lon_e7) = mjolnir_mesh::degrees_to_e7(lon) else {
+        return bad_request("invalid lat/lon");
+    };
+    let alt_mm = match req.alt {
+        None => None,
+        Some(alt) => match mjolnir_mesh::metres_to_mm(alt) {
+            Some(mm) => Some(mm),
+            None => return bad_request("invalid alt"),
+        },
+    };
+
+    if !directory_knows_node(directory_cache, directory_file, node_id) {
+        return bad_request("unknown node");
+    }
+
+    let Ok(pubkey_bytes) = HEXLOWER.decode(req.pubkey.as_bytes()) else {
+        return bad_request("invalid pubkey encoding");
+    };
+    let Ok(sig_bytes) = HEXLOWER.decode(req.sig.as_bytes()) else {
+        return bad_request("invalid signature encoding");
+    };
+    let Ok(pubkey_arr): Result<[u8; 32], _> = pubkey_bytes.try_into() else {
+        return bad_request("invalid pubkey length");
+    };
+    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
+        return bad_request("invalid signature length");
+    };
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&pubkey_arr) else {
+        return bad_request("invalid pubkey");
+    };
+    let signature = Signature::from_bytes(&sig_arr);
+
+    let signed_message = coordinate_stamp_signing_message(
+        &req.challenge,
+        node_id,
+        lat_e7,
+        lon_e7,
+        alt_mm,
+        stamped_at,
+    );
+
+    {
+        let store = challenges.lock().expect("challenge store poisoned");
+        match store.get(&req.challenge) {
+            Some(issued_at) if issued_at.elapsed() < CHALLENGE_TTL => {}
+            _ => return bad_request("unknown or expired challenge"),
+        }
+    }
+
+    if verifying_key.verify(&signed_message, &signature).is_err() {
+        return bad_request("invalid signature");
+    }
+
+    let mut store = challenges.lock().expect("challenge store poisoned");
+    if store.remove(&req.challenge).is_none() {
+        return bad_request("unknown or expired challenge");
+    }
+    drop(store);
+
+    let coord_spool = spool_dir.join(COORDINATE_SPOOL_SUBDIR);
+    if let Err(err) = std::fs::create_dir_all(&coord_spool) {
+        tracing::error!(%err, "failed to create coordinate spool dir");
+        return RouteResponse::json(500, r#"{"error":"spool unavailable"}"#);
+    }
+
+    let record = CoordinateStampRecord {
+        node_id,
+        lat_e7,
+        lon_e7,
+        alt_mm,
+        stamped_at_unix: stamped_at,
+        stamper: &req.pubkey,
+        pubkey: &req.pubkey,
+        sig: &req.sig,
+        challenge: &req.challenge,
+    };
+    let record_json = serde_json::to_string(&record).expect("record serializes");
+
+    // One pending stamp per stamper (latest write wins if they stamp twice
+    // before meshd sweeps).
+    let dest = coord_spool.join(format!("{}.json", req.pubkey));
+    if let Err(err) = std::fs::write(&dest, &record_json) {
+        tracing::error!(%err, path = %dest.display(), "failed to write coordinate spool entry");
+        return RouteResponse::json(500, r#"{"error":"spool write failed"}"#);
+    }
+
+    RouteResponse::json(200, record_json)
+}
+
 /// Route a `(method, path)` pair to a response. `static_root` is the optional
 /// on-disk override of the embedded bundle (`--static-root`, dev only).
 /// `body` is the raw request body (only consulted for `POST` handlers).
@@ -654,6 +880,9 @@ pub fn route(
         ("GET", "/api/challenge") => issue_challenge(challenges),
         ("POST", "/api/identity") => submit_identity(body, challenges, spool_dir),
         ("POST", "/api/name-claim") => submit_name_claim(body, challenges, spool_dir),
+        ("POST", "/api/coordinate-stamp") => {
+            submit_coordinate_stamp(body, challenges, spool_dir, directory_cache, directory_file)
+        }
 
         ("GET", _) => serve_static(path, static_root),
         _ => RouteResponse {
@@ -1575,5 +1804,244 @@ mod tests {
                 "name {bad:?} should be rejected"
             );
         }
+    }
+
+    // --- coordinate stamp (bead mjolnir-mesh-6hn.5) ----------------------
+
+    fn post_coordinate_stamp(
+        challenges: &ChallengeStore,
+        spool: &Path,
+        directory_file: &Path,
+        cache: &DirectoryCache,
+        body: &str,
+    ) -> RouteResponse {
+        route(
+            "POST",
+            "/api/coordinate-stamp",
+            None,
+            body.as_bytes(),
+            challenges,
+            spool,
+            cache,
+            directory_file,
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
+        )
+    }
+
+    fn write_sample_directory(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("directory.json");
+        std::fs::write(&path, SAMPLE_DIRECTORY).unwrap();
+        path
+    }
+
+    #[test]
+    fn coordinate_stamp_valid_signature_spools_and_consumes_nonce() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = write_sample_directory(dir.path());
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let lat = 37.0_f64;
+        let lon = -122.0_f64;
+        let stamped_at = 1_700_000_042_u64;
+        let lat_e7 = mjolnir_mesh::degrees_to_e7(lat).unwrap();
+        let lon_e7 = mjolnir_mesh::degrees_to_e7(lon).unwrap();
+        let sig = key.sign(&coordinate_stamp_signing_message(
+            &challenge_hex,
+            "n1",
+            lat_e7,
+            lon_e7,
+            None,
+            stamped_at,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","node_id":"n1","lat":{lat},"lon":{lon},"stamped_at":{stamped_at}}}"#
+        );
+
+        let resp = post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, &body);
+        assert_eq!(
+            resp.status,
+            200,
+            "body: {}",
+            String::from_utf8_lossy(&resp.body)
+        );
+
+        let spooled = spool
+            .path()
+            .join("coordinates")
+            .join(format!("{pubkey_hex}.json"));
+        assert!(spooled.exists(), "expected coordinate stamp at {spooled:?}");
+        let rec: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&spooled).unwrap()).unwrap();
+        assert_eq!(rec["node_id"], "n1");
+        assert_eq!(rec["lat_e7"], lat_e7);
+        assert_eq!(rec["lon_e7"], lon_e7);
+        assert_eq!(rec["stamped_at_unix"], stamped_at);
+        assert_eq!(rec["stamper"], pubkey_hex);
+        assert!(rec.get("alt_mm").is_none(), "unmarked alt omitted: {rec}");
+
+        // Single-use nonce.
+        let replay =
+            post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, &body);
+        assert_eq!(replay.status, 400);
+    }
+
+    #[test]
+    fn coordinate_stamp_wrong_signature_is_rejected_and_spools_nothing() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = write_sample_directory(dir.path());
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        // Sign node n1, claim neighbor n2 — MITM rebinding the subject.
+        let lat_e7 = mjolnir_mesh::degrees_to_e7(37.0).unwrap();
+        let lon_e7 = mjolnir_mesh::degrees_to_e7(-122.0).unwrap();
+        let sig = key.sign(&coordinate_stamp_signing_message(
+            &challenge_hex,
+            "n1",
+            lat_e7,
+            lon_e7,
+            None,
+            1,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","node_id":"n2","lat":37.0,"lon":-122.0,"stamped_at":1}}"#
+        );
+
+        let resp = post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, &body);
+        assert_eq!(resp.status, 400);
+        assert!(
+            !spool
+                .path()
+                .join("coordinates")
+                .join(format!("{pubkey_hex}.json"))
+                .exists()
+        );
+        // Directory must not have been created on the reject path.
+        assert!(
+            !spool.path().join("coordinates").exists()
+                || spool
+                    .path()
+                    .join("coordinates")
+                    .read_dir()
+                    .map(|d| d.count() == 0)
+                    .unwrap_or(true)
+        );
+    }
+
+    #[test]
+    fn coordinate_stamp_unknown_node_is_rejected_and_spools_nothing() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = write_sample_directory(dir.path());
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let lat_e7 = mjolnir_mesh::degrees_to_e7(37.0).unwrap();
+        let lon_e7 = mjolnir_mesh::degrees_to_e7(-122.0).unwrap();
+        let sig = key.sign(&coordinate_stamp_signing_message(
+            &challenge_hex,
+            "ghost",
+            lat_e7,
+            lon_e7,
+            None,
+            1,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","node_id":"ghost","lat":37.0,"lon":-122.0,"stamped_at":1}}"#
+        );
+
+        let resp = post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, &body);
+        assert_eq!(resp.status, 400, "unknown node must 400");
+        assert!(
+            !spool.path().join("coordinates").exists()
+                || !spool
+                    .path()
+                    .join("coordinates")
+                    .join(format!("{pubkey_hex}.json"))
+                    .exists()
+        );
+    }
+
+    #[test]
+    fn coordinate_stamp_missing_lat_lon_spools_nothing() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = write_sample_directory(dir.path());
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"00","challenge":"{challenge_hex}","node_id":"n1","stamped_at":1}}"#
+        );
+        let resp = post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, &body);
+        assert_eq!(resp.status, 400);
+        assert!(!spool.path().join("coordinates").exists());
+    }
+
+    #[test]
+    fn coordinate_stamp_missing_node_id_spools_nothing() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = write_sample_directory(dir.path());
+        let body = r#"{"pubkey":"00","sig":"00","challenge":"00","node_id":"","lat":1.0,"lon":2.0,"stamped_at":1}"#;
+        let resp = post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, body);
+        assert_eq!(resp.status, 400);
+        assert!(!spool.path().join("coordinates").exists());
+    }
+
+    #[test]
+    fn coordinate_stamp_neighbor_is_known() {
+        let (challenges, spool) = no_state();
+        let (cache, dir) = no_directory();
+        let directory_path = write_sample_directory(dir.path());
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let lat_e7 = mjolnir_mesh::degrees_to_e7(1.0).unwrap();
+        let lon_e7 = mjolnir_mesh::degrees_to_e7(2.0).unwrap();
+        let alt_mm = mjolnir_mesh::metres_to_mm(12.5).unwrap();
+        let sig = key.sign(&coordinate_stamp_signing_message(
+            &challenge_hex,
+            "n2",
+            lat_e7,
+            lon_e7,
+            Some(alt_mm),
+            9,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","node_id":"n2","lat":1.0,"lon":2.0,"alt":12.5,"stamped_at":9}}"#
+        );
+        let resp = post_coordinate_stamp(&challenges, spool.path(), &directory_path, &cache, &body);
+        assert_eq!(
+            resp.status,
+            200,
+            "body: {}",
+            String::from_utf8_lossy(&resp.body)
+        );
+        let rec: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                spool
+                    .path()
+                    .join("coordinates")
+                    .join(format!("{pubkey_hex}.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rec["node_id"], "n2");
+        assert_eq!(rec["alt_mm"], alt_mm);
     }
 }

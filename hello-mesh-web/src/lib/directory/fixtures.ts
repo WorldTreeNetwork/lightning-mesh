@@ -18,7 +18,11 @@ export function mockDirectory(now: number = Date.now()): Directory {
 			node_id: 'wr3000s-a9f3e21c',
 			subnet: '10.42.243.0/24',
 			backhaul_addr: '10.254.242.84',
-			name: 'Front Porch'
+			name: 'Front Porch',
+			lat: 37.7749,
+			lon: -122.4194,
+			stamped_at: Math.floor(now / 1000) - 3600,
+			stamper: 'phone-ada'
 		},
 		neighbors: [
 			{

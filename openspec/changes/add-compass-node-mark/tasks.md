@@ -1,10 +1,10 @@
 # Tasks
 
-- [ ] hello.mesh stamp UI: nearby-narrowed node list, default = associated node, pick + GPS (geolocation or typed)
-- [ ] POST signed stamp to hello on the LAN gateway; verify; spool; meshd ingest
-- [ ] Reject missing node_id, unknown node, missing GPS-and-empty-typed, bad signature (write nothing)
-- [ ] Fixture test: pick+GPS writes; cancel writes nothing; no-GPS writes nothing
-- [ ] Rank list by associated-first, then nearby radio strength when known
+- [x] hello.mesh stamp UI: nearby-narrowed node list, default = associated node, pick + GPS (geolocation or typed)
+- [x] POST signed stamp to hello on the LAN gateway; verify; spool; meshd ingest
+- [x] Reject missing node_id, unknown node, missing GPS-and-empty-typed, bad signature (write nothing)
+- [x] Fixture test: pick+GPS writes; cancel writes nothing; no-GPS writes nothing
+- [x] Rank list by associated-first, then nearby radio strength when known
 
 Not owed here:
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as ed from '@noble/ed25519';
-import { generateKeyPair, publicKeyHex, signChallengeHex } from './keys';
+import { generateKeyPair, publicKeyHex, signChallengeHex, signMessage } from './keys';
 import { hexToBytes } from './hex';
 
 describe('rung-1 keypair generation + signing', () => {
@@ -20,5 +20,13 @@ describe('rung-1 keypair generation + signing', () => {
 		const { publicKey } = await generateKeyPair();
 		const hex = publicKeyHex(publicKey);
 		expect(hex).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it('signs arbitrary message bytes', async () => {
+		const { publicKey, secretKey } = await generateKeyPair();
+		const msg = new TextEncoder().encode('mjolnir-coordinate-stamp:v1\ntest');
+		const sigHex = signMessage(secretKey, msg);
+		const isValid = await ed.verifyAsync(hexToBytes(sigHex), msg, publicKey);
+		expect(isValid).toBe(true);
 	});
 });

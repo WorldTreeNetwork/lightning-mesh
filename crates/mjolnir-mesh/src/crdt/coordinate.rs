@@ -93,6 +93,36 @@ impl CoordinateStamp {
     }
 }
 
+/// Convert WGS84 degrees to microdegrees (`i32` e7).
+///
+/// Rounds half away from zero (Rust `f64::round`). `None` if non-finite or
+/// the rounded value does not fit in `i32`.
+pub fn degrees_to_e7(deg: f64) -> Option<i32> {
+    if !deg.is_finite() {
+        return None;
+    }
+    let v = (deg * f64::from(MICRODEGREES)).round();
+    if v < f64::from(i32::MIN) || v > f64::from(i32::MAX) {
+        None
+    } else {
+        Some(v as i32)
+    }
+}
+
+/// Convert metres to millimetres. Same rounding / overflow rules as
+/// [`degrees_to_e7`].
+pub fn metres_to_mm(metres: f64) -> Option<i32> {
+    if !metres.is_finite() {
+        return None;
+    }
+    let v = (metres * 1000.0).round();
+    if v < f64::from(i32::MIN) || v > f64::from(i32::MAX) {
+        None
+    } else {
+        Some(v as i32)
+    }
+}
+
 /// Look up `node_id` in `book` and project it. Unmarked → all fields `None`
 /// (JSON omits the keys).
 pub fn project_coordinate(book: &CoordinateBook, node_id: &str) -> CoordinateProjection {
@@ -245,5 +275,25 @@ mod tests {
         let a = stamp("n", 1, 2, 3, "s");
         let b = a.clone();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn degrees_to_e7_round_trip_exact() {
+        assert_eq!(degrees_to_e7(37.0), Some(370_000_000));
+        assert_eq!(degrees_to_e7(-122.0), Some(-1_220_000_000));
+        assert_eq!(degrees_to_e7(0.0), Some(0));
+    }
+
+    #[test]
+    fn degrees_to_e7_rejects_non_finite() {
+        assert_eq!(degrees_to_e7(f64::NAN), None);
+        assert_eq!(degrees_to_e7(f64::INFINITY), None);
+        assert_eq!(metres_to_mm(f64::NEG_INFINITY), None);
+    }
+
+    #[test]
+    fn metres_to_mm_converts() {
+        assert_eq!(metres_to_mm(1.5), Some(1_500));
+        assert_eq!(metres_to_mm(-0.001), Some(-1));
     }
 }

@@ -37,7 +37,8 @@ pub mod tun;
 
 pub use crdt::{
     coordinate::{
-        CoordinateBook, CoordinateProjection, CoordinateStamp, MICRODEGREES, project_coordinate,
+        CoordinateBook, CoordinateProjection, CoordinateStamp, MICRODEGREES, degrees_to_e7,
+        metres_to_mm, project_coordinate,
     },
     dns::DnsEntry,
     egress::{DefaultRoute, EXCLUDED_EGRESS_IFACES, EgressAd, ProbeHysteresis, classify_egress},

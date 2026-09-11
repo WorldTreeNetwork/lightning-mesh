@@ -46,6 +46,11 @@ export async function signChallengeHex(
 	return bytesToHex(signature);
 }
 
+/** Sign arbitrary bytes (domain-separated messages), returning hex. */
+export function signMessage(secretKey: Uint8Array, message: Uint8Array): string {
+	return bytesToHex(ed.sign(message, secretKey));
+}
+
 export function publicKeyHex(publicKey: Uint8Array): string {
 	return bytesToHex(publicKey);
 }
