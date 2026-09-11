@@ -3777,25 +3777,54 @@ async fn roam_loop(store: ClaimStore, self_id: String, client_iface: String) {
 
 /// Drop every mobility `/32` on the client interface. Run once at loop start so
 /// routes orphaned by a crash or restart cannot black-hole a client that has
-/// since moved on. Safe because the protocol number is exclusively ours.
+/// since moved on.
+///
+/// **Do not** `ip route flush proto 158`: OpenWrt BusyBox `ip` silently ignores
+/// the proto selector (same trap as `mjolnir-babeld`'s stale-default flush) and
+/// deletes *every* route out `client_iface`, including the connected client
+/// `/24`. Field: m3000 2026-09-11, DHCP ok, ARP ok, IPv4 to `.1` blackhole.
+/// Enumerate host routes from `ip route show` and delete those destinations.
 #[cfg(target_os = "linux")]
 async fn flush_mobility_routes(client_iface: &str) {
     use tokio::process::Command;
-    let proto = mjolnir_mesh::roam::MOBILITY_ROUTE_PROTO.to_string();
-    let out = Command::new("ip")
-        .args(["route", "flush", "proto", &proto, "dev", client_iface])
+    let show = Command::new("ip")
+        .args(["-4", "route", "show", "dev", client_iface])
         .output()
         .await;
-    match out {
-        Ok(o) if o.status.success() => debug!(
-            iface = client_iface,
-            "roaming: flushed stale mobility routes"
-        ),
-        Ok(o) => debug!(
-            "roaming: mobility flush failed: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Err(e) => debug!("roaming: could not run mobility flush: {e}"),
+    let stdout = match show {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        Ok(o) => {
+            debug!(
+                "roaming: mobility flush could not list routes: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            return;
+        }
+        Err(e) => {
+            debug!("roaming: could not list routes for mobility flush: {e}");
+            return;
+        }
+    };
+    let dests = mjolnir_mesh::roam::parse_host_route_dests(&stdout);
+    for dest in dests {
+        let dst = format!("{dest}/32");
+        match Command::new("ip")
+            .args(["route", "del", &dst, "dev", client_iface])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => debug!(
+                %dest,
+                iface = client_iface,
+                "roaming: dropped stale mobility /32"
+            ),
+            Ok(o) => debug!(
+                %dest,
+                "roaming: ip route del /32 failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => debug!(%dest, "roaming: could not run ip route del: {e}"),
+        }
     }
 }
 

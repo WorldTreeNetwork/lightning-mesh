@@ -15,9 +15,11 @@ use std::net::Ipv4Addr;
 
 use ipnet::Ipv4Net;
 
-/// Linux `rtm_protocol` stamped on mobility `/32`s so `ip route flush proto`
-/// cannot touch anything else on the box. Numeric: babeld 1.13 rejects named
-/// proto filters.
+/// Linux `rtm_protocol` stamped on mobility `/32`s. Numeric: babeld 1.13
+/// rejects named proto filters. **Do not** `ip route flush proto 158` on
+/// OpenWrt: BusyBox `ip` silently ignores `proto` and deletes every route
+/// out the client bridge, including the connected `/24` (clients DHCP then
+/// blackhole). Delete host routes by destination instead.
 pub const MOBILITY_ROUTE_PROTO: u8 = 158;
 
 /// One IPv4 neighbour on the client bridge.
@@ -145,6 +147,35 @@ pub fn route_delta(
     let add: Vec<_> = desired.difference(installed).copied().collect();
     let del: Vec<_> = installed.difference(desired).copied().collect();
     (add, del)
+}
+
+/// Host `/32` destinations from `ip -4 route show dev <client>`.
+///
+/// BusyBox (OpenWrt) prints a host route as a bare IPv4 (`10.42.5.23`);
+/// iproute2 prints `10.42.5.23/32`. Connected `/24`s and `default` are
+/// skipped — those must survive a mobility flush.
+pub fn parse_host_route_dests(output: &str) -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let Some(dest) = line.split_whitespace().next() else {
+            continue;
+        };
+        if dest == "default" {
+            continue;
+        }
+        if let Some((ip, plen)) = dest.split_once('/') {
+            if plen == "32"
+                && let Ok(addr) = ip.parse()
+            {
+                out.push(addr);
+            }
+            continue;
+        }
+        if let Ok(addr) = dest.parse::<Ipv4Addr>() {
+            out.push(addr);
+        }
+    }
+    out
 }
 
 // --- island formation (read-only, mjolnir-mesh-77f / 190 / 3kd) -----------
@@ -430,5 +461,24 @@ Station 11:22:33:44:55:66 (on phy0-ap0)
         let (add, del) = route_delta(&installed, &desired);
         assert_eq!(add, vec![Ipv4Addr::new(10, 42, 5, 3)]);
         assert_eq!(del, vec![Ipv4Addr::new(10, 42, 5, 1)]);
+    }
+
+    #[test]
+    fn parse_host_route_dests_keeps_connected_slash24() {
+        // Live m3000 2026-09-11: BusyBox `ip route show dev br-lan` after a
+        // proto-158 flush had already dropped the /24. This is the healthy
+        // table — flush must delete only the /32s (bare IPv4 on BusyBox).
+        let raw = "\
+10.42.242.0/24 dev br-lan scope link  src 10.42.242.1
+10.42.5.23 dev br-lan scope link
+10.42.5.24/32 dev br-lan proto 158 scope link
+192.168.1.0/24 dev br-lan scope link  src 192.168.1.1
+default via 192.168.0.1 dev eth0
+";
+        let got = parse_host_route_dests(raw);
+        assert_eq!(
+            got,
+            vec![Ipv4Addr::new(10, 42, 5, 23), Ipv4Addr::new(10, 42, 5, 24)]
+        );
     }
 }
