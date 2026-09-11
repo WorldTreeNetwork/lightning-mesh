@@ -78,3 +78,5 @@ heatmaps.
   `openspec/specs/wan-lan-admin/spec.md`
 - Link-local first-contact SSH (`br-lan` / `br-mesh` `fe80`; overlay
   `10.254` stays mesh-wide): `openspec/specs/link-local-mgmt/spec.md`
+- Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
+  candidate): `openspec/specs/identity-derived-ula/spec.md`
