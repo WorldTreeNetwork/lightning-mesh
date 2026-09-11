@@ -334,7 +334,12 @@ mod tests {
         // can compute the same address without reading meshd.
         let id = "fd7691128f2bb615d56cf2f0e202fa01472890dd8af89f9132d34d566776ed45";
         let got = ula_addr(id);
-        assert_eq!(got, "fd53:6213:4797:0:1478:922e:5c61:d39f".parse().unwrap());
+        assert_eq!(
+            got,
+            "fd53:6213:4797:0:1478:922e:5c61:d39f"
+                .parse::<Ipv6Addr>()
+                .unwrap()
+        );
     }
 
     #[test]
