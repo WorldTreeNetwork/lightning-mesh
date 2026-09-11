@@ -4,10 +4,10 @@
 
 A short press of the WPS button SHALL toggle a time-boxed nft accept of
 TCP/22 on the `wan` zone, sourced only from prefixes currently configured
-on the WAN interface. The window SHALL last 15 minutes unless closed
-earlier. The rule SHALL NOT be written to UCI. LuCI and hello.mesh SHALL
-remain closed on WAN. Stock hostapd/wpa_supplicant WPS-PBC SHALL NOT start
-as a result of that press.
+on the WAN interface. The window SHALL last `mjolnir.wan_admin.timeout`
+seconds (default 900) unless closed earlier. The rule SHALL NOT be written
+to UCI. LuCI and hello.mesh SHALL remain closed on WAN. Stock
+hostapd/wpa_supplicant WPS-PBC SHALL NOT start as a result of that press.
 
 #### Scenario: Press opens SSH from the WAN LAN
 
@@ -25,8 +25,8 @@ as a result of that press.
 #### Scenario: Second press or reboot closes
 
 - GIVEN an armed window
-- WHEN the operator presses WPS again, or the node reboots, or 15 minutes
-  elapse
+- WHEN the operator presses WPS again, or the node reboots, or
+  `mjolnir.wan_admin.timeout` seconds elapse (900 if unset)
 - THEN WAN TCP/22 is refused again and the WPS LED stops blinking
 
 ### Requirement: Operator keys merge on apply

@@ -6,7 +6,7 @@
 - [x] Operator pubkeys merged into `/etc/dropbear/authorized_keys` on apply
 - [x] `install-node.sh` stages the three files; `mjolnir-apply` installs them
 - [x] Field: arm on wr3000s-a, SSH `root@192.168.0.15`, disarm, `:22` closed again
-- [ ] Delta: window length SHALL be `mjolnir.wan_admin.timeout` seconds (default 900), reconciled with living `mjolnir-settings` (advise 2026-09-10 item 1)
+- [x] Delta: window length SHALL be `mjolnir.wan_admin.timeout` seconds (default 900), reconciled with living `mjolnir-settings` (advise 2026-09-10 item 1)
 
 Not owed here (bullets, not boxes):
 
