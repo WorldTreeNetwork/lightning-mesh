@@ -25,6 +25,8 @@ Lightning Admin is a writer of that radio apply (`apply-network-name.sh`
 LAN the overlay is unreachable; `LIGHTNING_FLEET_SSH` names WPS-armed
 WAN `root@` addrs. Discovery stays a link-local scan and does not
 SSH-mutate UCI. `update-fleet.sh` remains the full binary+radio rollout.
+WPS arms a prefix-boxed nft WAN SSH window; not UCI persist; overlay
+remains the management plane.
 
 `/etc/config/mjolnir` (`radio`, `wan_admin`) is the live operator store.
 `mjolnir-apply` is the only projector of those knobs onto UCI `wireless`.
@@ -56,3 +58,5 @@ roaming.
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
 - Coverage survey (directory last-known coords, phone stamp, `/mesh` viz):
   `openspec/specs/mesh-coverage/spec.md`
+- WAN-LAN admin (WPS-armed prefix-boxed nft WAN SSH):
+  `openspec/specs/wan-lan-admin/spec.md`
