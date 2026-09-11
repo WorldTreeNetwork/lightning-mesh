@@ -55,4 +55,4 @@ roaming.
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
 - Coverage survey (directory last-known coords, phone stamp, `/mesh` viz):
-  `openspec/changes/add-coverage-survey/` until folded
+  `openspec/specs/mesh-coverage/spec.md`
