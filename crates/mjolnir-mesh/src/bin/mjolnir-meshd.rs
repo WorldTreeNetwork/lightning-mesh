@@ -1672,6 +1672,11 @@ async fn run_mesh(
     // uplink presence, so it's harmless on a non-gateway node; detached because
     // its verdict is consumed via local_egress, not a join handle.
     tokio::spawn(gateway_probe_task());
+    tokio::spawn(reconcile_client_dataplane(
+        claims.clone(),
+        self_id_str.clone(),
+        client_iface.clone(),
+    ));
     if let Some(iface) = &l2_backhaul {
         info!(%iface, "LAN mode: routing babel over the shared-L2 backhaul (no per-peer iroh tunnels)");
     }
@@ -3621,6 +3626,11 @@ async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
 /// inbound traffic to a just-arrived client keeps following the stale route.
 const ROAM_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How often to re-assert kernel dataplane state the claim path only sets
+/// once (mjolnir-mesh-70t). Same cadence as [`reconcile_backhaul_addr`]:
+/// wifi/netifd can drop a connected `/24` while the address stays.
+const CLIENT_DATAPLANE_INTERVAL: Duration = Duration::from_secs(3);
+
 /// Enable proxy ARP (and loosen reverse-path filtering) on the client bridge —
 /// the half of roaming that makes *outbound* traffic work the instant a client
 /// associates, before any route has propagated.
@@ -3637,11 +3647,22 @@ const ROAM_INTERVAL: Duration = Duration::from_secs(2);
 /// Best-effort and OpenWrt/Linux-only: a missing `/proc` entry (non-Linux, or a
 /// bridge that does not exist yet) is logged at debug, never fatal.
 #[cfg(target_os = "linux")]
+fn ensure_sysctl_value(path: &str, want: &str) -> std::io::Result<bool> {
+    let current = std::fs::read_to_string(path).unwrap_or_default();
+    if current.trim() == want {
+        return Ok(false);
+    }
+    std::fs::write(path, want)?;
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
 fn enable_roam_sysctls(client_iface: &str) {
     for (knob, value) in [("proxy_arp", "1"), ("rp_filter", "2")] {
         let path = format!("/proc/sys/net/ipv4/conf/{client_iface}/{knob}");
-        match std::fs::write(&path, value) {
-            Ok(()) => info!(iface = client_iface, knob, value, "roaming: sysctl set"),
+        match ensure_sysctl_value(&path, value) {
+            Ok(true) => info!(iface = client_iface, knob, value, "roaming: sysctl set"),
+            Ok(false) => {}
             Err(e) => debug!(path, "roaming: could not set sysctl (non-fatal): {e}"),
         }
     }
@@ -5991,7 +6012,99 @@ async fn assign_client_addr(subnet: Ipv4Net, iface: &str) {
             warn!(%subnet, %gw, iface, "could not assign client address (may already exist): {e}")
         }
     }
+    // Address-already-exists does not imply the connected /24 is in the FIB
+    // (dpn: BusyBox flush left 10.42.x.1/24 on br-lan with no route).
+    ensure_client_connected_route(subnet, iface).await;
 }
+
+/// Put the claimed `/24` back in the FIB when the address is on the iface
+/// but the connected route is gone. `ip route replace` so a race with netifd
+/// is not fatal. Logs only when we actually restore.
+#[cfg(target_os = "linux")]
+async fn ensure_client_connected_route(subnet: Ipv4Net, iface: &str) {
+    use tokio::process::Command;
+    let show = Command::new("ip")
+        .args(["-4", "route", "show", "dev", iface])
+        .output()
+        .await;
+    let stdout = match show {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        Ok(o) => {
+            debug!(
+                iface,
+                "could not list routes for client /24 heal: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            return;
+        }
+        Err(e) => {
+            debug!(iface, "could not list routes for client /24 heal: {e}");
+            return;
+        }
+    };
+    if mjolnir_mesh::heal::connected_prefix_present(&stdout, subnet) {
+        return;
+    }
+    let dst = subnet.to_string();
+    let src = client_gateway_addr(subnet).to_string();
+    match Command::new("ip")
+        .args(["route", "replace", &dst, "dev", iface, "src", &src])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => info!(
+            %subnet,
+            iface,
+            "restored connected client /24 (address was present, route was not)"
+        ),
+        Ok(o) => warn!(
+            %subnet,
+            iface,
+            "could not restore connected client /24: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => warn!(%subnet, iface, "could not restore connected client /24: {e}"),
+    }
+}
+
+/// Re-assert client LAN dataplane: forwarding, roam sysctls, claimed `.1`
+/// address, connected `/24`. Independent of gossip so a restored claim still
+/// heals after wifi/netifd/flush. Log only on change.
+#[cfg(target_os = "linux")]
+async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_iface: String) {
+    use tokio::process::Command;
+    let mut interval = tokio::time::interval(CLIENT_DATAPLANE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        enable_ip_forwarding();
+        enable_roam_sysctls(&client_iface);
+        let own_subnet = {
+            let s = store.lock().expect("claim store poisoned");
+            partition_claims(&s, &self_id).0.map(|(net, _)| net)
+        };
+        let Some(net) = own_subnet else {
+            continue;
+        };
+        let addr_show = Command::new("ip")
+            .args(["-4", "addr", "show", "dev", &client_iface])
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let gw = client_gateway_addr(net);
+        if !mjolnir_mesh::heal::iface_has_ipv4(&addr_show, gw) {
+            assign_client_addr(net, &client_iface).await;
+        } else {
+            ensure_client_connected_route(net, &client_iface).await;
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn reconcile_client_dataplane(_store: ClaimStore, _self_id: String, _client_iface: String) {}
 
 #[cfg(not(target_os = "linux"))]
 async fn assign_client_addr(_subnet: Ipv4Net, _iface: &str) {}
@@ -6647,8 +6760,9 @@ async fn reconcile_backhaul_addr(_iface: String, _addr: Ipv4Addr) {}
 /// RouterOS-side routes live in deploy/mikrotik/client-routing.rsc.
 #[cfg(target_os = "linux")]
 fn enable_ip_forwarding() {
-    match std::fs::write("/proc/sys/net/ipv4/ip_forward", "1") {
-        Ok(()) => info!("enabled net.ipv4.ip_forward (client transit)"),
+    match ensure_sysctl_value("/proc/sys/net/ipv4/ip_forward", "1") {
+        Ok(true) => info!("enabled net.ipv4.ip_forward (client transit)"),
+        Ok(false) => {}
         Err(e) => warn!("could not enable ip_forward — cross-mesh client transit needs it: {e}"),
     }
 }
