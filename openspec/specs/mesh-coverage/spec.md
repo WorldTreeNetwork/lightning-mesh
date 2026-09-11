@@ -3,11 +3,12 @@
 Last-known node coordinates live on the gossiped directory projection.
 A DreamBall is a signed snapshot, not the live store. The v1 surveyor
 is a phone on the client SSID; visualization lives on web3d-space
-`/mesh`. Folded from `add-coverage-survey` (2026-09-10).
+`/mesh`. Folded from `add-coverage-survey` (2026-09-10). Directory
+lat/lon projection folded from `add-node-coordinates` (2026-09-10).
 
-This capability is the architecture contract. Directory lat/lon fields,
-DreamBall payload, hello stamp UI, `/mesh` paint, and the sweep game
-are sibling changes.
+This capability is the architecture contract. Directory lat/lon fields
+are projected. DreamBall payload, hello stamp UI, `/mesh` paint, and
+the sweep game are sibling changes.
 
 ## Requirements
 
@@ -135,3 +136,31 @@ myscape SHALL NOT be the home of this visualizer.
 - WHEN the operator stamps a coordinate
 - THEN the surface is hello.mesh on that node's LAN gateway, not `/mesh`
   and not TopologyPanel
+
+### Requirement: Directory entries may carry a last-known stamp
+
+`DirectoryNode` and `DirectoryNeighbor` SHALL accept an optional last-known
+coordinate: WGS84 latitude and longitude, optional altitude metres, Unix
+stamp time, and stamper identity. Serialization SHALL omit the coordinate
+when unset (`skip_serializing_if` / equivalent). Older hello.mesh readers
+SHALL remain schema-safe.
+
+#### Scenario: Additive on a named node
+
+- GIVEN neighbor `wr3000s-a` with a stamp `{lat, lon, stamped_at, stamper}`
+- WHEN `directory.json` is written
+- THEN that neighbor object includes those fields and still includes
+  `node_id` and `backhaul_addr`
+
+#### Scenario: Unmarked neighbor
+
+- GIVEN neighbor `m3000` with no stamp
+- WHEN `directory.json` is written
+- THEN that neighbor object has no lat/lon keys
+
+#### Scenario: Join to radio
+
+- GIVEN a directory neighbor with `backhaul_addr` `10.254.242.84` and a stamp
+- WHEN a consumer also has that node's `GET /api/radio`
+- THEN the coordinate joins on `backhaul_addr` without reading lat/lon
+  from the radio document

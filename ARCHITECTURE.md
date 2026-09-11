@@ -46,8 +46,9 @@ only. Compass magnetometer exists; compass GPS is later. World-model
 capture is the AI Camera (cameras + Ethernet 3D lidar), not the LilyGo
 T-RGB. Visualizer home is web3d-space `/mesh`; the stamp UI is hello.mesh
 on the LAN gateway. Last-known is LWW by `stamped_at` + stamper; the
-viewer ages stale stamps. Do not confuse this with `e21` “north-star”
-roaming.
+viewer ages stale stamps. Last-known is now projected from a
+CoordinateBook (i32 e7, LWW unix, gossip CoordinateAnnounce). Do not
+confuse this with `e21` “north-star” roaming.
 
 ## Pointers
 
