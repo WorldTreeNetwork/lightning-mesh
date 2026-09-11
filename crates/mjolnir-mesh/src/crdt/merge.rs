@@ -78,7 +78,8 @@ pub fn merge_subnet_claim(
 /// Last-writer-wins merge for self-announced peer address entries.
 ///
 /// Since only the subject node announces its own entry, there is no conflict
-/// arm — a newer `announced_at` always wins outright.
+/// arm. A newer `announced_at` wins only when the address set or relay changed;
+/// stamp-only refreshes are discarded so anti-entropy does not create writes.
 ///
 /// Note: this function does not enforce that the map key matches
 /// `incoming.node_id` — the caller must look up local by `node_id` before
@@ -89,6 +90,12 @@ pub fn merge_peer_addr(
 ) -> MergeResult<PeerAddrEntry> {
     match local {
         None => MergeResult::Inserted,
+        Some(existing)
+            if existing.direct_addrs == incoming.direct_addrs
+                && existing.relay_url == incoming.relay_url =>
+        {
+            MergeResult::Unchanged
+        }
         Some(existing) => match incoming.announced_at.cmp(&existing.announced_at) {
             Ordering::Greater => MergeResult::Updated,
             _ => MergeResult::Unchanged,
@@ -457,9 +464,20 @@ mod tests {
     }
 
     #[test]
-    fn peer_addr_updated_on_newer_announced_at() {
+    fn peer_addr_unchanged_on_newer_announced_at_without_field_change() {
         let local = peer("node-a", 1_000, 0);
         let incoming = peer("node-a", 2_000, 0);
+        assert!(matches!(
+            merge_peer_addr(Some(&local), &incoming),
+            MergeResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn peer_addr_updated_on_newer_announced_at_with_address_change() {
+        let local = peer("node-a", 1_000, 0);
+        let mut incoming = peer("node-a", 2_000, 0);
+        incoming.direct_addrs = vec!["10.254.1.2:49737".parse().unwrap()];
         assert!(matches!(
             merge_peer_addr(Some(&local), &incoming),
             MergeResult::Updated
@@ -496,8 +514,8 @@ mod tests {
     }
 
     #[test]
-    fn peer_addr_hlc_counter_breaks_wall_clock_tie() {
-        // Same wall_clock, higher counter → newer.
+    fn peer_addr_hlc_counter_only_change_is_unchanged() {
+        // Same wall_clock, higher counter, but no address field change.
         let local = peer("node-a", 1_000, 0);
         let incoming = PeerAddrEntry {
             announced_at: HLC {
@@ -509,7 +527,7 @@ mod tests {
         };
         assert!(matches!(
             merge_peer_addr(Some(&local), &incoming),
-            MergeResult::Updated
+            MergeResult::Unchanged
         ));
     }
 

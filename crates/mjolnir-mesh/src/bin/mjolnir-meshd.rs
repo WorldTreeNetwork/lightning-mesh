@@ -4659,11 +4659,10 @@ struct SelfAnnounce {
 /// Build this node's self-announced address-book entry: our observed direct
 /// addresses (from the endpoint) plus the deterministic bound backhaul address
 /// every node binds in LAN mode (`backhaul_ip:MESH_IROH_PORT`), and our relay
-/// URL unless relays are disabled. Stamped with a fresh HLC each call so LWW
-/// always carries the latest snapshot — re-stamping every tick is simpler than
-/// diffing the address set and still converges, since a single node is the sole
-/// announcer of its own entry (no conflict arm). See mjolnir-mesh-0yb.
-fn build_self_addr_entry(ctx: &SelfAnnounce) -> PeerAddrEntry {
+/// URL unless relays are disabled. The existing HLC is retained when those
+/// fields are unchanged; a real address or relay change receives a fresh HLC.
+/// See mjolnir-mesh-0yb and mjolnir-mesh-7bf.
+fn build_self_addr_entry(ctx: &SelfAnnounce, existing: Option<&PeerAddrEntry>) -> PeerAddrEntry {
     let observed = ctx.endpoint.addr();
     let mut direct: Vec<SocketAddr> = observed.ip_addrs().copied().collect();
     // Always include the derived bound backhaul address: in LAN mode this is the
@@ -4675,16 +4674,21 @@ fn build_self_addr_entry(ctx: &SelfAnnounce) -> PeerAddrEntry {
     } else {
         observed.relay_urls().next().map(|u| u.to_string())
     };
-    PeerAddrEntry::new(
-        ctx.self_id.clone(),
-        direct,
-        relay_url,
-        now_hlc(&ctx.self_id),
-    )
+    let announced_at = existing
+        .map(|entry| entry.announced_at.clone())
+        .unwrap_or_else(|| now_hlc(&ctx.self_id));
+    let mut entry = PeerAddrEntry::new(ctx.self_id.clone(), direct, relay_url, announced_at);
+    if existing.is_some_and(|existing| {
+        existing.direct_addrs != entry.direct_addrs || existing.relay_url != entry.relay_url
+    }) {
+        entry.announced_at = now_hlc(&ctx.self_id);
+    }
+    entry
 }
 
-/// Refresh this node's own entry (fresh HLC), then re-broadcast the FULL known
-/// address book — ours and every peer's — and rewrite the on-disk book.
+/// Refresh this node's own entry when its fields changed, then re-broadcast the
+/// FULL known address book — ours and every peer's. The on-disk book is rewritten
+/// only when the self entry actually changed.
 /// Full-map anti-entropy mirroring the claim map, so a late joiner or a node
 /// that missed a packet still converges without a pull protocol (0yb). The lock
 /// is held only to insert-and-clone the snapshot; it is never held across an
@@ -4695,11 +4699,14 @@ async fn announce_addr_book<T: GossipTransport>(
     addr_book_file: &Path,
     self_announce: &SelfAnnounce,
 ) {
-    let snapshot = {
-        let entry = build_self_addr_entry(self_announce);
+    let (snapshot, self_changed) = {
         let mut book = addr_book.lock().expect("address book poisoned");
-        book.insert(self_announce.self_id.clone(), entry);
-        book.clone()
+        let entry = build_self_addr_entry(self_announce, book.get(&self_announce.self_id));
+        let self_changed = book.get(&self_announce.self_id) != Some(&entry);
+        if self_changed {
+            book.insert(self_announce.self_id.clone(), entry);
+        }
+        (book.clone(), self_changed)
     };
     for (node_id, entry) in &snapshot {
         if let Err(e) = sync
@@ -4716,7 +4723,9 @@ async fn announce_addr_book<T: GossipTransport>(
         count = snapshot.len(),
         "addrbook anti-entropy: re-broadcast full address book"
     );
-    persist_addr_book(&snapshot, addr_book_file);
+    if self_changed {
+        persist_addr_book(&snapshot, addr_book_file);
+    }
 }
 
 /// Announce this node's own human name (t7i) and re-broadcast the FULL known
