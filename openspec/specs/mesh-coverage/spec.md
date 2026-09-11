@@ -6,11 +6,13 @@ is a phone on the client SSID; visualization lives on web3d-space
 `/mesh`. Folded from `add-coverage-survey` (2026-09-10). Directory
 lat/lon projection folded from `add-node-coordinates` (2026-09-10).
 Phone stamp UI (hello.mesh Routers panel → `POST /api/coordinate-stamp`)
-folded from `add-compass-node-mark` (2026-09-10).
+folded from `add-compass-node-mark` (2026-09-10). Fixture coverage
+walks (unknown / thin / covered + completeness score on `/mesh`)
+folded from `add-coverage-sweep` (2026-09-10).
 
 This capability is the architecture contract. Directory lat/lon fields
-are projected. DreamBall payload, `/mesh` paint, and the sweep game
-are sibling changes.
+are projected. DreamBall payload and world-model overlay remain sibling
+changes. First-slice `/mesh` paint of fixture walks lives in web3d-space.
 
 ## Requirements
 
@@ -196,3 +198,29 @@ a bad signature SHALL write nothing.
   and the typed fields are empty
 - WHEN no stamp is confirmed
 - THEN directory coordinates are unchanged
+
+### Requirement: A walk paints region coverage
+
+Geolocated RSSI samples SHALL paint a region as unknown, thin, or covered.
+A walk that heard strong client-SSID (or joined node radio) signal SHALL
+mark covered. A walk that heard nothing SHALL leave unknown. Completeness
+SHALL be a visible score on `/mesh`, not a hidden metric.
+
+#### Scenario: Strong walk
+
+- GIVEN a recorded walk whose samples are strong RSSI through a cell
+- WHEN `/mesh` consumes the walk
+- THEN that cell is covered
+
+#### Scenario: Silence
+
+- GIVEN a recorded walk whose samples are missing or below the thin
+  threshold
+- WHEN `/mesh` consumes the walk
+- THEN those cells stay unknown
+
+#### Scenario: Score
+
+- GIVEN a region with a mix of covered and unknown cells
+- WHEN `/mesh` is showing the sweep
+- THEN completeness is on-screen

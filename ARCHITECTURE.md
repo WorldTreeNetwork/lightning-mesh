@@ -49,7 +49,11 @@ hello.mesh Routers panel on the LAN gateway (pick nearby + GPS) posting
 to `/api/coordinate-stamp`. Last-known is LWW by `stamped_at` + stamper;
 the viewer ages stale stamps. Last-known is now projected from a
 CoordinateBook (i32 e7, LWW unix, gossip CoordinateAnnounce). Do not
-confuse this with `e21` “north-star” roaming.
+confuse this with `e21` “north-star” roaming. Fixture coverage walks
+paint unknown / thin / covered cells on web3d-space `/mesh` with an
+on-screen completeness score (`add-coverage-sweep`). First slice is
+recorded-walk replay on the four-router fixture, not live fleet RF
+heatmaps.
 
 ## Pointers
 
@@ -58,7 +62,8 @@ confuse this with `e21` “north-star” roaming.
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
-- Coverage survey (directory last-known coords, phone stamp, `/mesh` viz):
+- Coverage survey (directory last-known coords, phone stamp, `/mesh` viz,
+  fixture walk paint unknown/thin/covered + completeness):
   `openspec/specs/mesh-coverage/spec.md`
 - WAN-LAN admin (WPS-armed prefix-boxed nft WAN SSH):
   `openspec/specs/wan-lan-admin/spec.md`
