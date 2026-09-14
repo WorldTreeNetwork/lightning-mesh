@@ -1,0 +1,39 @@
+# Join Lightning Mesh
+
+> Step-by-step instructions for joining a Lightning Mesh network: a decentralized router mesh (OpenWrt routers, 802.11s backhaul, babel routing, CRDT coordination, iroh transport) with a local front desk at http://hello.mesh. Written for people and agents from one Markdown source. Every page has YAML frontmatter (id, path, status: built|partial|coming-soon, requires, next_step, verified_against) and every step is Do / Expect / If not. Only `built` and `partial` pages describe deployed behavior. Paths below are relative to this file (docs/join/ in https://github.com/WorldTreeNetwork/lightning-mesh).
+
+Verified against commit 503cd17 (2026-09-13).
+
+## Start
+
+- [Overview](index.md): choose a path; what works today vs not yet
+
+## Join with a phone or laptop (read in order)
+
+- [Connect to the Wi-Fi](person/01-connect.md): open SSID (factory "⚡", home fleet "Lightning Mesh"); confirm a 10.42.x.n address; roaming and DNS caveats
+- [Say hello](person/02-hello-mesh.md): captive welcome sheet buttons; open http://hello.mesh (http only); page tour
+- [Create your identity](person/03-identity.md): IdentiKey (browser-held Ed25519, soft custody); 24-word BIP39 recovery phrase; what is shared mesh-wide
+- [Sign in to mesh apps](person/04-sign-in.md): /assert consent flow; what apps learn; remembered approvals
+- [Find services](person/05-services.md): Services panel; self-signed https warnings; internet vs offline behavior
+- [Take your identity with you](person/06-leave.md): export and restore; what cannot be deleted yet
+- [Troubleshooting](person/troubleshooting.md): symptom → cause → fix tables; shell checks for agents
+
+## Bring a router (operators, read in order)
+
+- [Choose a router and flash OpenWrt](node/01-hardware-and-flash.md): mt76 MT7981/MT7986 aarch64 (Cudy fleet); Cudy signed intermediates; OpenWrt 25.12.5+; keep /etc/mjolnir/ across sysupgrade
+- [Install](node/02-install.md): build.sh, build-hello.sh, fleet wireless.env, review shipped authorized_keys, install-node.sh with health-gated rollback
+- [Join the mesh](node/03-join-the-mesh.md): node id, `uci add_list mjolnir.meshd.peer`, start, verify (diag, station dump, routes, gossip, /api/health); no membership gate yet
+- [Operate](node/04-operate.md): reach over 10.254.x overlay; WPS WAN SSH window; update-fleet.sh; names; gateway auto/never; recovery
+
+## Publish a service (operators and developers)
+
+- [Publish a service](publish/01-publish-a-service.md): `mjolnir-meshd publish` on the router (not `meshd`); key-owned leased names via /api/challenge + /api/name-claim; /api/directory
+- [Mini-apps](publish/02-mini-apps.md): COMING SOON — accepted design (app=v1 TXT, router-fetched /.well-known/mesh-app.json, sandboxed cards, postMessage identity); not deployed
+
+## Optional
+
+- [Contribute](contribute.md): AGPL + commercial license, CLA, beads issue tracking, editing this guide
+- [Identity assertion protocol](../network-coordination/identity-assertion.md): /assert wire format and verifier
+- [Mesh app publishing reference](../deploy/mesh-app-publishing.md): full publish and leased-name protocol
+- [User identity design](../network-coordination/user-identity.md): custody rungs and front-desk rationale
+- [Node operations design](../deploy/node-operations.md): overlay management plane, staged self-healing updates
