@@ -19,8 +19,12 @@ new token format for app authors to verify.
 
 ## What
 
-- Bridge types `identity.request` (app to host: `nonce`, `prompt`) and
-  `identity.response` (host to app: `token` or `error`).
+- Bridge types `identity.request` (app to host: `nonce`, `prompt`, plus one
+  transferred `MessagePort`) and `identity.response` (host to app, only on
+  that port: `token` or `error`). The token can't reach any document except
+  the one that asked.
+- Bounded consent: one pending request across all cards, a 60 s host-owned
+  expiry, and a growing per-card cooldown after deny, dismiss or expiry.
 - The **audience is the frame's entry origin as seen in `event.origin`**.
   The app never supplies it, so it can't be spoofed. There is no
   `return_to`.
