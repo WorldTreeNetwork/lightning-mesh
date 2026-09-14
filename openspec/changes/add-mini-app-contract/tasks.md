@@ -14,3 +14,4 @@
 - [ ] Directory fixture gains an app-marked service and a same-origin trap service
 - [ ] Propose a "Publishing a mini-app" section for `docs/deploy/mesh-app-publishing.md` and get Duke's sign-off before editing it
 - [ ] `bun run check` and `bun run test` green
+- [ ] Act verification from advise r2 (accept): prove direct record-IP connection (no DNS/proxy), redirect refusal, streaming body caps after transfer decoding, cache keyed by (name, protocol, ip, port) and pruned/invalidated on record mutation or removal, TLS no-verify private to the manifest fetcher module (no credentials, no exported client), nonblocking `/api/apps` (memory-only), `/api/apps` entries bound to directory service identity with the browser still deriving entry origin from the record, and the measured aarch64 binary-size delta. Dropping to plain-HTTP fetch requires a change amendment (it contradicts the self-signed-https scenario).
