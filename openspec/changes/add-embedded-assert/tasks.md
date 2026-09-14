@@ -8,7 +8,7 @@
 - [ ] Consent sheet component, rendered in the hello.mesh document with the origin as the primary label
 - [ ] Frame refusal, fail-closed ordering: when `window.top !== window` (any parent, including a hello.mesh origin), the bridge and `/assert` exit before identity load, approval reads, listener registration or signing. Tests cover foreign framing and same-origin self-framing for the bridge and a previously approved `/assert?prompt=none`.
 - [ ] Port-bound delivery: `identity.request` must transfer exactly one `MessagePort`; token and errors go only on it, and no token is ever sent through `window.postMessage`. Test a replacement same-origin document that is listening before the parent's `load` and gets no token.
-- [ ] Pending lifecycle: 60 s host-owned expiry and per-card cooldown (30 s doubling to 10 min, reset by visitor approval or re-open). Test that B gets consent after A expires and that A can't re-acquire the slot in a deny loop.
+- [ ] Pending lifecycle: absolute 60 s host deadline with atomic claim, the single outcome table for response-eligible requests, and cooldown keyed by **service name** (30 s doubling to 10 min; survives card re-creation and same-name republish; reset only by visitor approval or a trusted tap on that app's shelf control). Tapping an already-open app focuses its card and does not end its pending request. Test that B gets consent after A expires, that A can't re-acquire the slot in a deny loop, and that cooldown persists across port and ip republish.
 - [ ] `crates/mjolnir-hello`: `Content-Security-Policy: frame-ancestors 'self'` on HTML responses (not on `/api/*` or the captive-portal probe payloads), with a routes test
 - [ ] Propose the transport addendum for `docs/network-coordination/identity-assertion.md` and get Duke's sign-off before editing it
 - [ ] `bun run check`, `bun run test`, `CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-hello` green
@@ -44,3 +44,7 @@
 
 - [ ] Make cooldown survive same-name service-record churn (including publisher-controlled IP, port, or protocol changes), keep distinct service names independent, define how an already inserted old-record card is reconciled, and test active cooldown across both IP and port republish
 - [ ] Reconcile the universal “every request gets one port outcome” rule with intentional no-port and same-card-duplicate drops: precisely define response-eligible requests or add every ending to the table, and align the delta, scenarios, proposal, and design
+
+## Owed from advise round 6 (sol-arch-review, 2026-09-13)
+
+- [ ] Align the base pending-lifecycle task and the design threat row with the amended contract: cooldown is per service name (not per card), survives card/record churn, and tapping an already-open app focuses its existing card rather than ending its pending request
