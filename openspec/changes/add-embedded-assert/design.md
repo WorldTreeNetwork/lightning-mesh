@@ -5,12 +5,20 @@
 | Threat | Answer |
 |---|---|
 | App claims to be another audience | Audience is taken from `event.origin`, which the browser sets. The message has no `audience` field. |
-| Frame navigates to an attacker origin after the request | The response goes out with `targetOrigin = entryOrigin`, so the browser drops it for any other origin. The receive side also requires `event.origin === entryOrigin`. |
-| Some other window posts a request | `event.source` must be this card's `contentWindow`. |
+| Frame navigates to an attacker origin after the request | The pending record is invalidated on the iframe's next `load`, so nothing is signed. The response also goes out with `targetOrigin = entryOrigin`. |
+| Frame navigates away **and back** to the same origin before approval | A `WindowProxy` survives navigation and the origin matches again, so origin checks alone would pass. The `load` invalidation catches it. |
+| Same-origin sibling card | `targetOrigin` can't tell two `keyed.mesh` cards apart. The response is posted to the window captured in the pending record, not looked up by origin. |
+| Some other window posts a request | `event.source` must be a registered card's `contentWindow`, and `null` origins are refused. |
 | App draws a fake consent inside its card | Consent that counts is only ever drawn by hello.mesh. The app gets a token only through the host. A fake in-frame "Allow" does nothing. |
-| Attacker page frames hello.mesh and clickjacks Allow | `frame-ancestors 'self'` on hello.mesh HTML, and the consent UI refuses to render when `window.top !== window`. |
+| Attacker page frames hello.mesh and clickjacks Allow | `frame-ancestors 'self'` on SPA/static HTML, plus a fail-closed `window.top !== window` check that runs **before** identity load, approval lookup, bridge registration or signing. That order matters: today's `/assert` signs `prompt=none` before rendering anything, so hiding controls alone would not stop a framed silent sign. |
 | Replay of a token | Unchanged from v1: app-minted single-use nonce plus a 300 s expiry. |
-| Request spam, or a prompt-storm to fatigue the visitor | At most one open sheet per card. Requests while one is pending are dropped. |
+| Two cards race one consent sheet (origin confusion at the click) | One global pending request. Other cards get `interaction_required` at once, and Allow signs only the displayed (card, origin, nonce). |
+| Request spam, or a prompt-storm to fatigue the visitor | Same-card duplicates are dropped. Other cards get an immediate error, never a second sheet. |
+| Silent `prompt:none` becomes invisible ambient sharing | Every silent issuance shows "Identity shared with `<origin>`" in hello.mesh chrome on that card. It doesn't say "signed in", because the host can't know the app made a session. |
+
+(Rows for navigate-back, sibling, race and silent disclosure, plus the
+fail-closed ordering, come from the advise send-back of 2026-09-13,
+sol-arch-review.)
 | Self-claimed manifest name ("Bank of Mesh") | The sheet leads with the origin; the manifest name is labelled as what the app calls itself. |
 | Signing oracle | The host signs only the fixed v1 payload shape. No app-supplied bytes are signed. |
 
@@ -52,10 +60,14 @@ One store, one accessor, shared with `/assert`. Approving `keyed.mesh:3000`
 in a card also lets a link-out `/assert` from that origin go silent, and the
 reverse. The audience string is identical in both cases.
 
-## Open questions for advise
+## Resolved at advise (2026-09-13)
 
-- Should `frame-ancestors 'self'` also cover the captive-portal page? It is
-  opened by the OS sheet, never framed, so the proposal leaves it alone.
-- Should `prompt: none` in a card require a visible "signed in to Keyed"
-  indicator in hello.mesh chrome? Proposed: yes, as a small badge on the
-  card header. The shelf change owns the pixels.
+- **Captive portal and CSP.** Excluded explicitly. `PORTAL_HTML` holds no
+  key and no approval control, and it's served at intercepted OS probe
+  origins. The header goes on SPA/static application HTML only, with
+  regression tests for both presence and absence.
+- **Silent indicator.** Required, and it reads "Identity shared with
+  `<origin>`", not "signed in". The shelf change (`ncy.3`) owns the pixels,
+  so `ncy.4` can't ship before that indicator exists (bead edge added).
+- **Revoke UI.** Not a blocker here. Approval revocation is an existing
+  `/assert` lifecycle concern.

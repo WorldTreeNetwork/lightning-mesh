@@ -22,9 +22,21 @@ hello.mesh origin.** Everything else here follows from that.
 Sandbox: `allow-scripts allow-same-origin allow-forms allow-popups
 allow-popups-to-escape-sandbox`. `allow-same-origin` is safe **only because**
 the frame is cross-origin; it lets the app use its own storage. That is why
-`canEmbed` refuses any entry origin equal to a hello.mesh origin: with a
-same-origin src, `allow-scripts` + `allow-same-origin` lets the frame reach
-the parent and remove its own sandbox. No `allow-top-navigation`; the app
+`canEmbed` refuses every **key-bearing** origin, not only the current page:
+with a same-origin src, `allow-scripts` + `allow-same-origin` lets the frame
+reach the parent and remove its own sandbox, and with a src at *another*
+key-bearing origin, app code runs where a key may already be stored.
+
+The key-bearing set is open-ended. Every node serves hello.mesh at its own
+LAN gateway `http://10.42.<x>.1`, and a visitor may have minted a key on any
+of them, so enumerating the set from the directory can't be complete.
+The rule is therefore structural rather than enumerated: card embedding
+requires a `.mesh` **name** host that isn't reserved. IP-literal hosts
+(every gateway, and the IP fallback for dotted mDNS-style names) always
+link out. Reserved names (`hello.mesh`, `id.mesh`) always link out. So does
+the current page origin. Invariant for later work: any new name that serves
+the hello.mesh page must join the reserved list. (Advise send-back
+2026-09-13, sol-arch-review.) No `allow-top-navigation`; the app
 asks the host to `open` instead. `allow=""` grants no camera, microphone,
 geolocation or similar features in v1. `referrerpolicy="no-referrer"`.
 
@@ -40,14 +52,40 @@ description, icon, embed mode, height) lives in
 `/.well-known/mesh-app.json` on the app, so an app can restyle itself
 without republishing and gossip stays small.
 
-Costs:
-- The app must answer that GET with `Access-Control-Allow-Origin: *` or
-  hello.mesh cannot read it.
-- An `https` app with a self-signed certificate (for example today's
-  walkie-talkie) fails the fetch and the frame load from an `http`
-  hello.mesh page. It degrades to a link tile, where the visitor can accept
-  the certificate in a full tab. Stage 1 reference apps should serve `http`
-  or a trusted certificate.
+**Who fetches it: the node, not the visitor's browser** (steer 2026-09-13,
+after advise flagged that a browser-side fetch announces every visitor to
+every app host on page load).
+
+| Option | Verdict |
+|---|---|
+| Browser fetches on load | Rejected. Every app host sees every visitor's IP, apps must send CORS, and self-signed https apps can't be read. |
+| Browser fetches on tap | Rejected. Private, but tiles are bare names until tapped. |
+| **Node fetches, caches, serves `/api/apps`** | Chosen. The browser talks only to hello.mesh origins until the visitor opens an app. No CORS burden, and self-signed https apps still get decorated. |
+
+Shape in `mjolnir-hello` (sync `tiny_http`, and no HTTP client today):
+- A background refresher thread reads the same cached `directory.json`
+  projection that `/api/directory` serves (`routes.rs` `DirectoryCache`).
+  It fetches each mini-app's manifest and icon and swaps an in-memory map
+  that `GET /api/apps` serializes. No request path ever blocks on an app
+  host.
+- The client is `ureq` with rustls and a certificate verifier that
+  **skips verification, used only by this fetcher** (manifest is
+  presentation data, never authority). It follows no redirects, sets
+  `Host` to the entry host, times out at 3 s and caps bodies at 128 KiB.
+- Scope guard against making the router a general fetch proxy: only the
+  record's own `ip` inside `10.42.0.0/16` or `10.254.0.0/16`, only the
+  manifest path and the manifest-named same-origin icon path, `GET` only.
+- Budget: the static aarch64 binary grows by the TLS stack. Measure it on
+  the cross-build and record the delta in the act result. If it's
+  unacceptable, drop to plain-HTTP-only fetch over `std::net::TcpStream`,
+  and https apps link out undecorated.
+
+Costs that remain:
+- Decoration lags a manifest change by up to the 5-minute refresh.
+- A self-signed https app still can't be **framed** from an `http`
+  hello.mesh page until the visitor has accepted its certificate. The card
+  shows the open-in-new-tab control, and that tab is where the visitor
+  accepts it.
 
 Manifest values are data. They render as text or as `<img src>`, never as
 HTML. The manifest name is self-claimed, so any identity or consent surface
@@ -64,7 +102,10 @@ shows the entry **origin** as the authority (see `add-embedded-assert`).
   itself to another origin.
 - Send: always `postMessage(msg, entryOrigin)`, never `"*"`, so a navigated
   frame gets nothing.
-- Drop messages whose serialized size is over 16 KiB, and any unknown `type`.
+- Drop any unknown `type`, and any message whose `JSON.stringify` throws
+  (caught) or yields more than 16 KiB of UTF-8 bytes.
+- Numeric fields must be finite numbers before use. One `clampHeight` serves
+  both the manifest `height` and bridge `resize`.
 - v1 types: app→host `ready`, `resize {height}`, `open {url}`; host→app
   `init {v: 1}`, sent once in response to the first `ready`.
 - Heights clamp to 120–640 CSS px; `open` accepts only `http:` / `https:`
@@ -79,7 +120,9 @@ The same rule `ServicesPanel.webUrl` uses today, plus the path:
 `<protocol>://<host><port><path>`. `host` is `<name>.mesh`, or the record IP
 for dotted mDNS-style names. The port is omitted when it is the scheme
 default. `path` defaults to `/`. Only `http` and `https` protocols qualify as
-mini-apps.
+mini-apps. As a final check, `new URL(entry).origin` must equal the origin
+derived from the record. Path validation is defense in depth, not the only
+origin guard.
 
 ## Open questions for advise
 

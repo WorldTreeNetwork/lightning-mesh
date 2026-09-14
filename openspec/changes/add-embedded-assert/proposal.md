@@ -47,7 +47,9 @@ the Apps shelf. Keyed's Sign in button asks the host for identity.
 1. **Working.** hello.mesh shows a consent sheet over the page, outside the
    card: "`http://keyed.mesh:3000` (calls itself Keyed) wants to know you're
    *Duke* · `a270e81d`". Allow sends the token to the card, and Keyed shows
-   the visitor signed in. Next time, `prompt: none` signs in silently.
+   the visitor signed in. Next time, `prompt: none` shares identity without a
+   sheet, and the card header in hello.mesh says "Identity shared with
+   `http://keyed.mesh:3000`".
 2. **Empty.** No key yet: the sheet offers "Create your identity first" and
    scrolls to the Identity section. The card gets `interaction_required`
    only if the visitor dismisses it.

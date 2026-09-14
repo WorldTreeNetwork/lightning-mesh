@@ -6,7 +6,9 @@ A directory service SHALL be treated as a mini-app when, and only when, its
 protocol is `http` or `https` and its `txt` carries `app=v1`. An optional
 `txt` `path` SHALL name the entry path. It SHALL begin with `/`, SHALL NOT
 contain `//`, a scheme, `\`, or control characters, and SHALL default to
-`/` when absent. A service whose marker or path is invalid SHALL NOT be a
+`/` when absent. After the entry URL is built, its origin SHALL equal the
+origin derived from the record (protocol, host, port) or the service SHALL
+NOT be a mini-app. A service whose marker or path is invalid SHALL NOT be a
 mini-app and SHALL still be listed as an ordinary service.
 
 #### Scenario: Marked web service is a mini-app
@@ -35,27 +37,66 @@ mini-app and SHALL still be listed as an ordinary service.
 
 ### Requirement: App manifest
 
-hello.mesh SHALL request `<entry origin>/.well-known/mesh-app.json` from the
-browser with a 3-second timeout. A valid manifest SHALL have `v` equal to
-`1` and MAY carry `name` (≤ 40 chars), `description` (≤ 140 chars), `icon`
-(a same-origin path or a `data:image/` URI ≤ 64 KiB), `embed` (`card` or
-`link`, default `link`) and `height` (CSS px, clamped to 120–640). Over-long
-strings SHALL be truncated. Manifest values SHALL be rendered only as text
-or as an image source, never as markup. When the manifest is missing,
-unreachable, blocked by CORS, times out, or is invalid, hello.mesh SHALL
-fall back to the service name and `embed: link`.
+Each node's hello service SHALL fetch `/.well-known/mesh-app.json` for every
+mini-app in its directory **server-side**, and SHALL serve the validated
+results at `GET /api/apps`. The visitor's browser SHALL NOT contact any app
+host to discover or decorate apps.
+
+The fetch SHALL go only to the record's own `ip` and `port`, and only when
+that `ip` is inside the mesh client or overlay ranges (`10.42.0.0/16`,
+`10.254.0.0/16`). It SHALL send `Host` set to the entry host and use `GET`
+on that one path. It SHALL NOT follow redirects, SHALL time out after 3
+seconds, and SHALL cap the body at 128 KiB. It SHALL re-fetch at most once
+every 5 minutes per app and SHALL keep the last good manifest for up to 1
+hour. For `https` entries the fetch MAY accept an unverified certificate,
+because the manifest is presentation data only.
+
+A valid manifest SHALL have `v` equal to `1` and MAY carry `name` (≤ 40
+chars), `description` (≤ 140 chars), `icon` (a same-origin path, which the
+node fetches under the same rules and inlines as a `data:image/` URI ≤ 64
+KiB of type png, jpeg, webp or svg+xml), `embed` (`card` or `link`, default
+`link`) and `height` (CSS px, clamped to 120–640). Over-long strings SHALL
+be truncated. The node SHALL validate, and the browser SHALL re-validate
+`/api/apps` entries with the same rules. Manifest values SHALL be rendered
+only as text or as an `<img>` source, never as markup. When the manifest is
+missing, unreachable, out of range, redirected, over size, timed out or
+invalid, the app SHALL fall back to its service name and `embed: link`.
 
 #### Scenario: Valid manifest
 
 - GIVEN an app whose manifest is `{"v":1,"name":"Keyed","embed":"card","height":900}`
-- WHEN hello.mesh loads it
+- WHEN the node fetches it and hello.mesh reads `/api/apps`
 - THEN the app shows as "Keyed", embed mode `card`, height 640
 
-#### Scenario: Manifest blocked by CORS
+#### Scenario: App without CORS is still decorated
 
 - GIVEN an app whose manifest response has no `Access-Control-Allow-Origin`
-- WHEN hello.mesh loads it
-- THEN the app shows under its service name with embed mode `link`
+- WHEN the node fetches it
+- THEN `/api/apps` carries its name, icon and embed mode
+
+#### Scenario: Self-signed https app is decorated
+
+- GIVEN an `https` app on `10.42.12.165:443` with a self-signed certificate and a valid manifest
+- WHEN the node fetches it
+- THEN `/api/apps` carries its manifest fields
+
+#### Scenario: Out-of-range address is not fetched
+
+- GIVEN a mini-app record whose `ip` is `203.0.113.9`
+- WHEN the node refreshes manifests
+- THEN no request is made to that address and the app falls back to `embed: link`
+
+#### Scenario: Redirect is not followed
+
+- GIVEN an app whose manifest path answers `302` to another host
+- WHEN the node fetches it
+- THEN the redirect is not followed and the app falls back to `embed: link`
+
+#### Scenario: Visitor's browser contacts no app host on load
+
+- GIVEN a directory with three mini-apps
+- WHEN a visitor loads hello.mesh
+- THEN every request the page makes goes to a hello.mesh origin
 
 #### Scenario: Markup in manifest is inert
 
@@ -67,10 +108,15 @@ fall back to the service name and `embed: link`.
 
 hello.mesh SHALL insert a mini-app only as an iframe whose `src` is the
 entry URL, only after the visitor chooses to open it, and only when the
-manifest embed mode is `card` and the entry origin differs from every
-hello.mesh origin (the current page origin and `http://hello.mesh`).
-The iframe SHALL carry `sandbox="allow-scripts allow-same-origin allow-forms
-allow-popups allow-popups-to-escape-sandbox"`, `allow=""`, and
+manifest embed mode is `card` and the entry origin is not a key-bearing
+hello origin. An entry origin SHALL be treated as key-bearing, and so
+never embedded, when any of these holds: its host is an IP literal (every
+node's hello.mesh is also served at its LAN gateway IP, and each such
+origin can hold a key); its host is a reserved well-known name
+(`hello.mesh`, `id.mesh`, and any future name that serves the hello.mesh
+page); or it equals the current page origin. The iframe SHALL carry
+`sandbox="allow-scripts allow-same-origin allow-forms allow-popups
+allow-popups-to-escape-sandbox"`, `allow=""`, and
 `referrerpolicy="no-referrer"`. hello.mesh SHALL NOT load app-supplied
 script, style or markup into its own document. Every inserted card SHALL
 keep an open-in-new-tab control. Otherwise the app SHALL be offered as a
@@ -82,15 +128,27 @@ link that opens the entry URL in a new tab.
 - WHEN the visitor opens it from hello.mesh
 - THEN a sandboxed iframe loads the entry URL and an open-in-new-tab control is visible
 
-#### Scenario: Nothing loads before the tap
+#### Scenario: No frame loads before the tap
 
 - GIVEN three card-mode mini-apps in the directory
 - WHEN hello.mesh renders the page
-- THEN no request is made to any app entry URL
+- THEN no iframe is created and no request is made to any app entry URL
 
 #### Scenario: Same-origin entry is refused as a card
 
 - GIVEN a mini-app whose entry origin equals the page origin `http://10.42.7.1`
+- WHEN hello.mesh decides how to present it
+- THEN it is offered as a link, never as an iframe
+
+#### Scenario: Another node's gateway origin is refused as a card
+
+- GIVEN the page is `http://hello.mesh`, the visitor earlier stored a key under `http://10.42.7.1`, and a card-mode mini-app record with a dotted mDNS-style name resolves its entry to `http://10.42.7.1/`
+- WHEN hello.mesh decides how to present it
+- THEN it is offered as a link, never as an iframe
+
+#### Scenario: Reserved name is refused as a card
+
+- GIVEN a card-mode mini-app whose entry origin is `http://id.mesh`
 - WHEN hello.mesh decides how to present it
 - THEN it is offered as a link, never as an iframe
 
@@ -100,12 +158,16 @@ Messages between hello.mesh and an inserted mini-app SHALL be `postMessage`
 objects carrying `mesh: "mini-app/v1"` and a `type`. hello.mesh SHALL accept
 a message only when its source is that iframe's window and its origin equals
 that iframe's entry origin. It SHALL ignore messages with an unknown `mesh`
-value or `type`, and messages over 16 KiB serialized. hello.mesh SHALL send
-messages only with `targetOrigin` equal to the entry origin. v1 types SHALL
-be: `ready` (app to host), `init` with `v: 1` (host to app, once, after the
-first `ready`), `resize` with `height` (app to host, clamped to 120–640 CSS
-px), and `open` with `url` (app to host; opened in a new tab with
-`noopener` only when the scheme is `http` or `https`).
+value or `type`, messages that fail `JSON.stringify` (cycles, `BigInt` and
+the like; the failure SHALL be caught, not thrown), and messages whose
+`JSON.stringify` output exceeds 16 KiB of UTF-8 bytes. hello.mesh SHALL
+send messages only with `targetOrigin` equal to the entry origin. v1 types
+SHALL be: `ready` (app to host), `init` with `v: 1` (host to app, once,
+after the first `ready`), `resize` with `height` (app to host; `height`
+SHALL be a finite number or the message is ignored, then clamped to
+120–640 CSS px by the same function that clamps manifest heights), and
+`open` with `url` (app to host; opened in a new tab with `noopener` only
+when the scheme is `http` or `https`).
 
 #### Scenario: Message from a foreign origin is ignored
 
@@ -124,6 +186,18 @@ px), and `open` with `url` (app to host; opened in a new tab with
 - GIVEN an inserted card
 - WHEN the app sends `resize` with height `5000`
 - THEN the card height becomes 640
+
+#### Scenario: Non-finite height is ignored
+
+- GIVEN an inserted card at height 320
+- WHEN the app sends `resize` with height `NaN`, `Infinity`, or `"400"`
+- THEN the card height stays 320
+
+#### Scenario: Oversize or unserializable message is ignored
+
+- GIVEN an inserted card
+- WHEN the app sends a message whose JSON is 16 KiB + 1 byte of UTF-8, or one containing a `BigInt`
+- THEN the message is ignored and no error escapes the listener
 
 #### Scenario: Only web URLs open
 

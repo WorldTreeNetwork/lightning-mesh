@@ -22,9 +22,13 @@ origin that holds the visitor's identity key. Settle the contract once.
 - **Marker.** A service is a mini-app when its TXT carries `app=v1`;
   optional `path=` names the entry path. Works with today's
   `meshd publish --txt`, no CRDT schema change.
-- **Manifest.** hello.mesh reads `<entry origin>/.well-known/mesh-app.json`
-  from the browser for name, description, icon, embed mode and height.
-  Missing or bad manifest degrades to a link tile.
+- **Manifest.** Each node's hello service fetches
+  `/.well-known/mesh-app.json` from every published app (bounded: mesh
+  ranges only, no redirects, size and time caps, cached) and serves the
+  results at `GET /api/apps`. Visitors never contact an app host until they
+  open it, apps need no CORS, and self-signed https apps still get decorated.
+  A missing or bad manifest degrades to a link tile. (Steer 2026-09-13 after
+  advise: node-side fetch.)
 - **Insertion.** `embed: card` renders a tap-to-load sandboxed iframe on the
   app's own origin; otherwise, or whenever the entry origin equals a
   hello.mesh origin, the tile links out. No app script, markup or style
