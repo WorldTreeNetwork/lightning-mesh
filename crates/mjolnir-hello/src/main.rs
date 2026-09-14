@@ -14,12 +14,14 @@
 //! docs/network-coordination/hello-mesh-service.md §3 and bead
 //! mjolnir-mesh-bl2.
 
+mod apps;
 mod assets;
 mod config;
 mod portal;
 mod routes;
 
 use clap::Parser;
+use std::sync::Arc;
 use tiny_http::{Header, Response, Server};
 use tracing::info;
 
@@ -32,9 +34,10 @@ fn main() {
     let config = Config::parse();
 
     let challenges = new_challenge_store();
-    let directory_cache = DirectoryCache::new();
+    let directory_cache = Arc::new(DirectoryCache::new());
     let radio_cache = RadioCache::new();
     let releases = new_portal_releases();
+    apps::start_refresher(Arc::clone(&directory_cache), config.directory_file.clone());
 
     let server = Server::http(&config.bind).unwrap_or_else(|err| {
         panic!("failed to bind {}: {err}", config.bind);

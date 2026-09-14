@@ -32,6 +32,9 @@ tracing-subscriber.workspace = true
 rand.workspace = true
 data-encoding.workspace = true
 ed25519-dalek = "2"
+base64 = "0.22"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 tempfile = "3"

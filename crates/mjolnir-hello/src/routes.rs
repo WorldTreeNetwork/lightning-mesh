@@ -87,7 +87,7 @@ impl DirectoryCache {
     }
 
     /// Read (or serve cached) directory.json contents as a raw JSON string.
-    fn read(&self, path: &Path) -> String {
+    pub(crate) fn read(&self, path: &Path) -> String {
         read_cached(&self.inner, path, EMPTY_DIRECTORY)
     }
 }
@@ -346,6 +346,12 @@ fn probe_response(
 /// on read failure, empty-but-valid directory if there's no last-good copy).
 fn directory(cache: &DirectoryCache, directory_file: &Path) -> RouteResponse {
     RouteResponse::json(200, cache.read(directory_file))
+}
+
+/// `GET /api/apps` — serialize only the background refresher's in-memory
+/// snapshot. App-host I/O never occurs on the request thread.
+fn apps() -> RouteResponse {
+    RouteResponse::json(200, crate::apps::global_cache().response_json())
 }
 
 /// `GET /api/radio` — serve `radio.json` verbatim (bead ng9): cached, last-good
@@ -872,6 +878,7 @@ pub fn route(
         // --- S3 (mjolnir-mesh-11l): read-only mesh state ---------------
         ("GET", "/api/directory") => directory(directory_cache, directory_file),
         ("GET", "/api/node") => node(directory_cache, directory_file),
+        ("GET", "/api/apps") => apps(),
 
         // --- radio telemetry (mjolnir-mesh-ng9): live mesh-topology view --
         ("GET", "/api/radio") => radio(radio_cache, radio_file),
@@ -1538,9 +1545,20 @@ mod tests {
         assert!(route_for("GET", "/api/radio").cors);
         assert!(route_for("GET", "/api/directory").cors);
         assert!(route_for("GET", "/api/node").cors);
+        assert!(route_for("GET", "/api/apps").cors);
         assert!(route_for("GET", "/api/health").cors);
         assert!(route_for("GET", "/api/challenge").cors);
         assert!(route_for("GET", "/api/captive-portal").cors);
+    }
+
+    #[test]
+    fn apps_endpoint_serializes_the_memory_snapshot() {
+        let resp = route_for("GET", "/api/apps");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.content_type, "application/json");
+        let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(body["version"], 1);
+        assert!(body["apps"].is_array());
     }
 
     #[test]

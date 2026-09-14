@@ -73,6 +73,22 @@ export function mockDirectory(now: number = Date.now()): Directory {
 		],
 		services: [
 			{
+				name: 'keyed',
+				ip: '10.42.12.165',
+				port: 3000,
+				protocol: 'http',
+				txt: { app: 'v1', path: '/app' }
+			},
+			{
+				// Dotted service names fall back to their raw IP; this deliberately
+				// exercises the key-bearing gateway-origin refusal in canEmbed.
+				name: 'front-desk._http._tcp',
+				ip: '10.42.7.1',
+				port: 80,
+				protocol: 'http',
+				txt: { app: 'v1' }
+			},
+			{
 				name: 'Library._http._tcp',
 				ip: '10.42.12.5',
 				port: 8080,

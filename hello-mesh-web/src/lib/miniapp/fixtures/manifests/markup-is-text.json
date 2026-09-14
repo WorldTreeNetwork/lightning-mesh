@@ -1,0 +1,1 @@
+{"input":{"v":1,"name":"<img src=x onerror=alert(1)>"},"expect":{"v":1,"name":"<img src=x onerror=alert(1)>","embed":"link"}}
