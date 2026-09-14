@@ -895,7 +895,7 @@ mod tests {
     // --- ServiceTable liveness filter (bead e21.9) ---
 
     fn liveness_tracker() -> Arc<Mutex<LivenessTracker>> {
-        // 60s stale / 1h hard-expiry, matching the daemon defaults.
+        // 90s stale / 1h hard-expiry, matching the daemon defaults.
         Arc::new(Mutex::new(LivenessTracker::new(60_000, 3_600_000)))
     }
 

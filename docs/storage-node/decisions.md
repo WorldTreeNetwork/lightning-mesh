@@ -3,6 +3,10 @@
 **Status: open.** Each decision lists options and, where we have one, a
 proposed default. Record the outcome here, then link a bead.
 
+The architecture proposal that covers D2–D4 is
+[Secure context, certificates, and an SSH-free control plane](../network-coordination/secure-context-and-control-plane.md).
+It was informed by the [Astra-6 consult](consults/2026-09-13-astra-6-secure-context.md).
+
 ## D1: One node class or two
 
 Is local AI (Hailo) an optional add-on to a storage node, or a separate node
@@ -18,47 +22,54 @@ a Hailo device is detected. Keep hardware builds separate.
 
 ## D2: What a storage node mirrors
 
-Should storage nodes keep local copies of published services and apps, and of
-what?
+**Proposed:** CRDT metadata plus signed content-hash pointers plus opt-in
+`iroh-blobs` pulls. Mirroring needs publisher permission, storage-owner quotas
+and explicit pins.
 
 | Candidate | Mirror? | Notes |
 |---|---|---|
-| App static bundles and `/.well-known/mesh-app.json` manifests | Candidate | Keeps apps loadable when the origin host is down. Needs integrity (content hash) so a mirror can't alter an app |
-| Directory snapshots | Candidate | Lets a rejoining site catch up quickly |
-| Users' encrypted backups | Candidate | Only ciphertext; owner holds the key |
-| App databases / live state | Probably not | Belongs to the app; mirroring live state needs app-level replication |
-| Anyone's private keys | **Never** | |
-
-Open: the replication primitive (content-addressed blobs over iroh, or CRDT
-pointers plus pull-on-demand). Pending the architecture consult in D3 and D4.
+| App static bundles and `/.well-known/mesh-app.json` manifests | Yes, opt-in | Verified by content hash. A replica serves under its **own** origin; copying bytes never grants another app's origin |
+| Directory snapshots | Yes | Timestamped. Must never resurrect expired services |
+| Users' client-encrypted backups | Yes, opt-in | Ciphertext only. The user keeps a full export; deletion across replicas can't be guaranteed |
+| App databases / live state | No | Needs app-level replication design |
+| Private keys, CA or DNS credentials, sessions, plaintext private data | **Never** | |
+| Arbitrary executable workloads | **Never** automatically | Installing software needs the node owner's capability |
 
 ## D3: Control plane without SSH
 
-Publishing (`mjolnir-meshd publish`) and node admin currently require SSH to a
-router, because the control API only listens on `127.0.0.1`. We're replacing
-that with a UI path in Lightning Admin and/or hello.mesh.
+**Proposed:** one typed admin protocol over authenticated iroh connections.
+- Lightning Admin calls it directly.
+- mjolnir-hello forwards signed envelopes over HTTP through any router.
+- The destination node verifies authorization itself.
 
-Open questions:
-- Where authorization lives: per-node owner keys, name-owner keys, or both.
-- Transport: signed HTTP via any router's hello service, proxied over the
-  overlay, or iroh RPC.
-- Which operations require a hard-custody key (desktop app or extension) and
-  which a browser-held key may do.
+Authorization:
 
-Architecture consult in progress (2026-09-13). Record the recommendation here.
+| Operation | Authorized by | Signer |
+|---|---|---|
+| Publish, renew or unpublish your own name | Name owner key | Browser key is enough |
+| Node-scoped actions (device names, hosting, storage, radio, installs, ownership transfer) | Node owner capability | Installed signer (Lightning Admin first) |
+
+Node ownership is bootstrapped by physical pairing (a WPS-button window), never
+by first gossip claim. Prerequisite: owner-signed name records verified by every
+consumer.
+
+Awaiting Duke's decision. Bead `mjolnir-mesh-b6j.2`.
 
 ## D4: HTTPS and certificates
 
-`.mesh` isn't a public suffix, so apps and hello.mesh can't get certificates
-browsers trust. Without a secure context, browsers withhold WebCrypto key
-protection, camera and microphone, service workers and app install.
+**Proposed:**
+- Keep `http://hello.mesh` as walk-up.
+- Add key-qualified HTTPS origins under a delegated domain (bring-your-own
+  supported), answered locally by mesh DNS.
+- Issue certificates with ACME DNS-01 through a replaceable DNS adapter. An
+  owner-signed issuance authorization approves each one. TLS keys stay on each
+  host, with no shared or wildcard keys.
+- Never reuse a security origin across owners.
+- Use the `classic` 90-day profile with opportunistic renewal and an
+  offline-validity display.
+- Hard custody comes from an installed signer, not from HTTPS or Service
+  Workers.
+- A private per-mesh CA is for managed devices only.
 
-Options under consideration:
-- Public-suffix names under a project domain with real certificates obtained
-  by DNS challenge (bead `mjolnir-mesh-3fg`), with certificate keys held by the
-  app host.
-- A per-mesh private certificate authority installed on devices.
-- Keep plain HTTP for walk-up use, and make a native app or browser extension
-  the secure path for strong keys.
-
-Architecture consult in progress (2026-09-13). Record the recommendation here.
+Awaiting Duke's decision. Bead `mjolnir-mesh-b6j.1` (supersedes the direct
+lease-to-certificate idea in `mjolnir-mesh-3fg`).

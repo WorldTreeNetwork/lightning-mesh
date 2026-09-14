@@ -10,7 +10,8 @@
 - [ ] Port-bound delivery: `identity.request` must transfer exactly one `MessagePort`; token and errors go only on it, and no token is ever sent through `window.postMessage`. Test a replacement same-origin document that is listening before the parent's `load` and gets no token.
 - [ ] Pending lifecycle: absolute 60 s host deadline with atomic claim, the single outcome table for response-eligible requests, and cooldown keyed by **service name** (30 s doubling to 10 min; survives card re-creation and same-name republish; reset only by visitor approval or a trusted tap on that app's shelf control). Tapping an already-open app focuses its card and does not end its pending request. Test that B gets consent after A expires, that A can't re-acquire the slot in a deny loop, and that cooldown persists across port and ip republish.
 - [ ] `crates/mjolnir-hello`: `Content-Security-Policy: frame-ancestors 'self'` on HTML responses (not on `/api/*` or the captive-portal probe payloads), with a routes test
-- [ ] Propose the transport addendum for `docs/network-coordination/identity-assertion.md` and get Duke's sign-off before editing it
+- [x] Propose the transport addendum for `docs/network-coordination/identity-assertion.md` and get Duke's sign-off before editing it (signed off 2026-09-13; added as §8 "Planned: embedded transport (not built)" in 76add1a)
+- [ ] When the bridge ships, change `identity-assertion.md` §8 from "Planned" to built and remove the §4 note about today's unguarded framed `prompt=none`
 - [ ] `bun run check`, `bun run test`, `CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-hello` green
 
 ## Owed from advise (sol-arch-review, 2026-09-13)

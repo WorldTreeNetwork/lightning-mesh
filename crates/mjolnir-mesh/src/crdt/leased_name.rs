@@ -10,7 +10,7 @@
 //! ## Two-tier fade
 //!
 //! - *Resolving* fade is the ephemeral liveness plane (e21.9): the name stops
-//!   answering DNS ~60s after the owner's heartbeats stop. That does NOT change
+//!   answering DNS ~90s after the owner's heartbeats stop. That does NOT change
 //!   ownership — it's a fast UX signal.
 //! - *Ownership* fade is this durable lease. The claim carries an HLC
 //!   ([`renewed_at`](LeasedName::renewed_at)); the lease expires at

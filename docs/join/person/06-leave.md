@@ -27,8 +27,11 @@ permission.
 phrase**. Write down the 24 words, or tap **Copy raw hex** for the 64-character
 seed.
 
-**Expect:** the phrase is a standard BIP39 encoding of your Ed25519 key.
-It's not tied to this mesh or this software.
+**Expect:** 24 words from the standard BIP39 word list. They encode your raw
+32-byte Ed25519 key directly. They aren't tied to this mesh or this software,
+but they're **not a crypto-wallet seed phrase**. A wallet app that derives
+keys from BIP39 words produces a different key, so restore only into
+hello.mesh or another tool that uses the same raw-key encoding.
 
 ## Step 2: Restore somewhere else
 
