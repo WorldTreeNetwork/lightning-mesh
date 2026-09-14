@@ -38,28 +38,45 @@ before signing. A claimed record SHALL NOT expire, be claimed again, or be
 answered twice. A timer MAY close the sheet at the deadline, but correctness
 SHALL NOT depend on that timer running on time.
 
-The pending record SHALL also end, with the sheet closed, nothing signed and
-a terminal response only if none was sent, when:
-- the visitor denies or dismisses
-- the iframe fires `load` again, is removed, or is replaced
+Every request SHALL end with exactly one outcome, sent once on its port
+before the port is closed:
+
+| Ending | Error sent | Starts cooldown |
+|---|---|---|
+| Visitor approves (or `prompt: none` signs) | none, a token | no, resets it |
+| Visitor presses Deny | `access_denied` | yes |
+| Visitor dismisses the sheet without choosing (no key or key) | `interaction_required` | yes |
+| Deadline reached | `interaction_required` | yes |
+| The app's iframe fires `load` again (app-driven navigation or reload) | `interaction_required` | yes |
+| Visitor closes the card, or the card is removed by the host | `interaction_required` | no |
+| Slot busy with another app's request | `interaction_required` | no |
+| App in cooldown | `interaction_required` | no (unchanged) |
+| `prompt: none` without key or prior approval | `interaction_required` | no |
+| Malformed request with a port | `invalid_request` | no |
+
+The error goes to the port even when the app's document has gone. It
+carries no identity, and closing the port releases it.
 
 While a request is pending, further requests from the same card SHALL be
 dropped without a response. A request from any other card SHALL first apply
 the deadline check above, which may end an overdue record. It SHALL then
 open its own sheet if the slot is free, or else be answered at once on its
 own port with error `interaction_required`. A busy-slot rejection SHALL NOT
-change the incumbent record or start or extend any card's cooldown.
+change the incumbent record or start or extend any app's cooldown.
 
-Cooldown SHALL be keyed by entry origin. When a request ends without
-approval (deny, dismiss or expiry), that origin SHALL enter a cooldown.
-During it, requests from any card of that origin are answered at once with
-`interaction_required` and no sheet opens. The cooldown SHALL be 30 seconds
-and SHALL double on each consecutive unapproved ending, up to 10 minutes. It
-SHALL reset only when the visitor approves a request from that origin, or on
-a direct, trusted visitor gesture (`event.isTrusted`) on that app's open
-control in the hello.mesh shelf. Iframe navigation or reload, bridge
-traffic, and card teardown or re-creation that isn't caused by that gesture
-SHALL NOT reset or shorten it.
+Cooldown SHALL be keyed by the **app record**, meaning the directory service
+tuple (name, protocol, ip, port) that the shelf presents as one app. It is
+not keyed by card instance, which the host re-creates, and not by bare
+origin. When a request ends in an outcome marked "starts cooldown" above,
+that app SHALL enter a cooldown. During it, its requests are answered at
+once with `interaction_required` and no sheet opens. The cooldown SHALL be
+30 seconds and SHALL double on each consecutive cooldown-starting ending, up
+to 10 minutes. It SHALL reset only when the visitor approves a request from
+that app, or on a direct, trusted visitor gesture (`event.isTrusted`) on that
+app's open control in the hello.mesh shelf. Iframe navigation or reload,
+bridge traffic, and card teardown or re-creation that isn't caused by that
+gesture SHALL NOT reset or shorten it. One app's cooldown SHALL NOT affect
+any other app.
 
 #### Scenario: Audience comes from the origin
 
@@ -95,7 +112,7 @@ SHALL NOT reset or shorten it.
 
 - GIVEN cards A and B are both inserted and A's request is pending and not overdue
 - WHEN B sends `identity.request`
-- THEN B receives error `interaction_required` on its port, A's sheet still names A's origin and is bound to A's nonce, and neither origin's cooldown changes
+- THEN B receives error `interaction_required` on its port, A's sheet still names A's origin and is bound to A's nonce, and neither app's cooldown changes
 
 #### Scenario: Hostile card cannot hold the slot
 
@@ -119,7 +136,25 @@ SHALL NOT reset or shorten it.
 
 - GIVEN the visitor denied a request from `http://keyed.mesh:3000`
 - WHEN that app sends `identity.request` again 5 seconds later
-- THEN no sheet opens and it receives `interaction_required`, and after a second unapproved ending the cooldown for that origin is 60 seconds
+- THEN no sheet opens and it receives `interaction_required`, and after a second cooldown-starting ending that app's cooldown is 60 seconds
+
+#### Scenario: One app's cooldown does not throttle another
+
+- GIVEN apps Keyed (`http://keyed.mesh:3000`) and Guestbook (`http://guestbook.mesh`) are both inserted, and Keyed is in cooldown
+- WHEN Guestbook sends `identity.request`
+- THEN Guestbook's sheet opens normally
+
+#### Scenario: Dismiss versus Deny
+
+- GIVEN a visitor with a key and a pending consent sheet
+- WHEN the visitor presses Deny, or in a second run closes the sheet without choosing
+- THEN Deny sends `access_denied` and dismissal sends `interaction_required`, and both start the app's cooldown
+
+#### Scenario: App reload ends the request with one outcome
+
+- GIVEN a pending request from Keyed
+- WHEN Keyed's iframe reloads itself before the visitor decides
+- THEN the sheet closes, the designated port receives exactly one `interaction_required`, nothing is signed, and Keyed's cooldown starts
 
 #### Scenario: App cannot reset its cooldown
 
@@ -197,11 +232,12 @@ nonce and a token built exactly as `mjolnir-identity-assert` v1 (same
 payload key order, domain prefix, 300-second expiry, base64url encoding),
 only on the pending record's port, and then close that port. It SHALL NOT
 send an identity token or identity error through `window.postMessage` to any
-window. On deny or dismiss it SHALL send error `access_denied` on the port.
+window. Every non-token ending SHALL send the single error given by the
+outcome table in "Identity request over the bridge".
 
 For `prompt: none` it SHALL sign without a sheet only when a key exists, the
 audience is already in the approvals store shared with `/assert`, and the
-origin is not in cooldown. It SHALL otherwise answer `interaction_required`
+app is not in cooldown. It SHALL otherwise answer `interaction_required`
 on the port. Every successful `prompt: none` issuance SHALL show "Identity
 shared with `<origin>`" in hello.mesh chrome on that card. It SHALL NOT
 claim the app signed the visitor in, and the indicator SHALL clear when the
@@ -214,11 +250,11 @@ transport SHALL record the audience in that shared store.
 - WHEN the visitor approves
 - THEN the token arrives on that port, and `verifyAssertion(token, "http://keyed.mesh:3000", n)` accepts it
 
-#### Scenario: Same-origin sibling does not receive the response
+#### Scenario: Re-opened card does not receive the old response
 
-- GIVEN two inserted cards, both from `http://keyed.mesh:3000`, and the first sent the pending request
-- WHEN the visitor approves
-- THEN only the port designated by the first card's request receives `identity.response`
+- GIVEN a pending request from Keyed's card
+- WHEN the visitor closes that card and re-opens Keyed from the shelf, creating a new iframe, then the new card sends its own request
+- THEN the first request already ended with one `interaction_required` on its port, no token is ever sent on it, and the new request is handled on its own port
 
 #### Scenario: Replacement document does not inherit the response port
 
@@ -243,6 +279,21 @@ transport SHALL record the audience in that shared store.
 - GIVEN a card that navigated to `http://other.mesh` after requesting identity
 - WHEN the visitor approves
 - THEN nothing is signed and no token is sent
+
+### Requirement: One card per app
+
+hello.mesh SHALL keep at most one inserted card per app record (directory
+service tuple name, protocol, ip, port) at a time. Opening an app that
+already has a card SHALL focus that card rather than insert a second.
+Because a non-reserved `.mesh` name host maps to exactly one service record,
+and IP-literal hosts are never embedded, two inserted cards never share an
+entry origin.
+
+#### Scenario: Opening an open app focuses it
+
+- GIVEN Keyed's card is inserted
+- WHEN the visitor taps Keyed's open control again
+- THEN no second iframe is created, the existing card is focused, and Keyed's cooldown (if any) resets per the trusted-gesture rule
 
 ## MODIFIED Requirements
 

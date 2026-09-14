@@ -30,7 +30,9 @@ new token format for app authors to verify.
   add the two identity types, with the port as the sole exception to
   window-message delivery.
 - Bounded consent: one pending request across all cards, a 60 s host-owned
-  expiry, and a growing per-card cooldown after deny, dismiss or expiry.
+  expiry, one card per app, and a growing per-app cooldown after Deny,
+  dismiss, expiry or an app-driven reload. Every ending has exactly one
+  outcome.
 - The **audience is the frame's entry origin as seen in `event.origin`**.
   The app never supplies it, so it can't be spoofed. There is no
   `return_to`.
