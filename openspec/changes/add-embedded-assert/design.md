@@ -37,12 +37,34 @@ sol-arch-review.)
 { "mesh": "mini-app/v1", "type": "identity.response", "nonce": "<echo>", "error": "access_denied" }
 ```
 
-Why a port: the requesting document creates the `MessageChannel`, so only
-that document holds `port1`. If the frame navigates, even back to the same
-origin and even before the parent sees `load`, the new document has no
-reference to it. Host code never sends identity through
-`window.postMessage`, so `targetOrigin` is no longer the delivery guard for
-tokens, only for the non-identity v1 types.
+Why a port, and what it does and doesn't prove: the port the host receives
+is a **one-shot response capability designated by an authenticated request**
+(the outer window event passed the `source` and `origin` checks). A document
+that replaces the requester in the frame, even on the same origin and even
+before the parent sees `load`, holds no reference to that endpoint, so the
+accidental-replacement race is closed. The platform gives no proof of which
+context holds the other end. A requester can hand its endpoint to another
+document before asking, and the host can't detect that. That's acceptable
+because such a requester could disclose the token after receiving it anyway.
+The spec therefore promises delivery to the designated capability, not to a
+verified document. (Round-3 send-back.)
+
+The port is strictly one-way. The host never calls `start()`, never
+attaches a listener, and never interprets anything arriving on it. A
+`MessagePort` message carries no origin the host could check, so every
+identity input comes only from the authenticated window event. One terminal
+response, then `close()`.
+
+Lifecycle is decided by an absolute deadline stored on the pending record
+and checked at the top of every request and decision handler. Timers are
+cosmetic. Allow claims the record atomically before signing. Cooldown is
+keyed by entry origin, and only a trusted visitor gesture on the shelf's
+open control resets it.
+
+Host code never sends identity through `window.postMessage`, so
+`targetOrigin` guards only the non-identity v1 window messages. The
+accepted `add-mini-app-contract` bridge envelope is amended by a MODIFIED
+delta in this change, not edited in place.
 
 The token is byte-identical in shape to the `/assert` fragment token: the
 same `buildAssertionPayload` with `audience = entryOrigin`, the same

@@ -21,8 +21,14 @@ new token format for app authors to verify.
 
 - Bridge types `identity.request` (app to host: `nonce`, `prompt`, plus one
   transferred `MessagePort`) and `identity.response` (host to app, only on
-  that port: `token` or `error`). The token can't reach any document except
-  the one that asked.
+  that port: `token` or `error`). The port is a one-shot, one-way response
+  capability designated by the authenticated request. A page that later
+  replaces the requester in the frame doesn't inherit it. (A requester that
+  deliberately hands its port away has only given away a token it could leak
+  anyway, and the host doesn't pretend to detect that.)
+- Amends the accepted contract's bridge envelope (a MODIFIED delta here) to
+  add the two identity types, with the port as the sole exception to
+  window-message delivery.
 - Bounded consent: one pending request across all cards, a 60 s host-owned
   expiry, and a growing per-card cooldown after deny, dismiss or expiry.
 - The **audience is the frame's entry origin as seen in `event.origin`**.
