@@ -39,3 +39,8 @@
 - [ ] Replace or constrain origin-keyed cooldown so one separately presented same-origin card/shared-host app cannot throttle a sibling, while app-driven card churn still cannot evade cooldown; reconcile proposal, design, delta, and add a same-origin sibling denial/reset regression
 - [ ] Resolve the no-key dismissal contradiction (`interaction_required` in the scenario/proposal versus unqualified `access_denied` in the response requirement), and specify the terminal error for iframe reload/removal/replacement so each ending has exactly one outcome
 - [ ] Remove the stale design claim that a port “doesn't survive” the requesting document or supplies document-owned proof; retain only the requester-designated, deliberately delegable capability boundary stated by the delta
+
+## Owed from advise round 5 (sol-arch-review, 2026-09-13)
+
+- [ ] Make cooldown survive same-name service-record churn (including publisher-controlled IP, port, or protocol changes), keep distinct service names independent, define how an already inserted old-record card is reconciled, and test active cooldown across both IP and port republish
+- [ ] Reconcile the universal “every request gets one port outcome” rule with intentional no-port and same-card-duplicate drops: precisely define response-eligible requests or add every ending to the table, and align the delta, scenarios, proposal, and design

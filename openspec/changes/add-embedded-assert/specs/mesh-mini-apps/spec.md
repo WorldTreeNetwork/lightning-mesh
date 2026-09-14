@@ -38,8 +38,15 @@ before signing. A claimed record SHALL NOT expire, be claimed again, or be
 answered twice. A timer MAY close the sheet at the deadline, but correctness
 SHALL NOT depend on that timer running on time.
 
-Every request SHALL end with exactly one outcome, sent once on its port
-before the port is closed:
+A request is **response-eligible** when all of these hold:
+- it passed the window checks (`source`, `origin`, envelope, size)
+- it transferred exactly one port
+- it isn't a duplicate from an app whose request is already pending
+
+A request that isn't response-eligible SHALL be dropped. It gets no
+response, no pending record, and no change to any cooldown. Every
+response-eligible request SHALL end with exactly one outcome, sent once on
+its port before the port is closed:
 
 | Ending | Error sent | Starts cooldown |
 |---|---|---|
@@ -49,6 +56,7 @@ before the port is closed:
 | Deadline reached | `interaction_required` | yes |
 | The app's iframe fires `load` again (app-driven navigation or reload) | `interaction_required` | yes |
 | Visitor closes the card, or the card is removed by the host | `interaction_required` | no |
+| The app's record is republished with a different entry origin while its card is open (the host closes the card) | `interaction_required` | yes |
 | Slot busy with another app's request | `interaction_required` | no |
 | App in cooldown | `interaction_required` | no (unchanged) |
 | `prompt: none` without key or prior approval | `interaction_required` | no |
@@ -64,10 +72,13 @@ open its own sheet if the slot is free, or else be answered at once on its
 own port with error `interaction_required`. A busy-slot rejection SHALL NOT
 change the incumbent record or start or extend any app's cooldown.
 
-Cooldown SHALL be keyed by the **app record**, meaning the directory service
-tuple (name, protocol, ip, port) that the shelf presents as one app. It is
-not keyed by card instance, which the host re-creates, and not by bare
-origin. When a request ends in an outcome marked "starts cooldown" above,
+Cooldown SHALL be keyed by the **service name**, the stable `ServiceBookV2`
+key under which the shelf presents one app. It is not keyed by card
+instance, which the host re-creates. It is not keyed by the record's
+mutable ip, port or protocol, which the publisher can republish. And it is
+not keyed by bare origin. A republish of the same name SHALL keep that
+name's cooldown state. Distinct service names SHALL never share cooldown
+state. When a request ends in an outcome marked "starts cooldown" above,
 that app SHALL enter a cooldown. During it, its requests are answered at
 once with `interaction_required` and no sheet opens. The cooldown SHALL be
 30 seconds and SHALL double on each consecutive cooldown-starting ending, up
@@ -282,12 +293,39 @@ transport SHALL record the audience in that shared store.
 
 ### Requirement: One card per app
 
-hello.mesh SHALL keep at most one inserted card per app record (directory
-service tuple name, protocol, ip, port) at a time. Opening an app that
-already has a card SHALL focus that card rather than insert a second.
-Because a non-reserved `.mesh` name host maps to exactly one service record,
-and IP-literal hosts are never embedded, two inserted cards never share an
-entry origin.
+hello.mesh SHALL keep at most one inserted card per service name at a time.
+Opening an app that already has a card SHALL focus that card rather than
+insert a second. When the directory record for an open card's name changes
+so that its entry origin changes (a new protocol or port), hello.mesh SHALL
+close that card, ending any pending request as in the outcome table. When
+only the record's ip changes, the entry origin is unchanged, so the card
+stays. Because a non-reserved `.mesh` name host maps to exactly one service
+name, and IP-literal hosts are never embedded, two inserted cards never
+share an entry origin.
+
+#### Scenario: Cooldown survives a port republish
+
+- GIVEN Keyed (`keyed`, port 3000) is in a 60-second cooldown
+- WHEN its publisher republishes `keyed` on port 3001 and the visitor's directory updates
+- THEN the open Keyed card (if any) closes, a card opened for the new record is still in the same cooldown, and its requests get `interaction_required` until the cooldown ends
+
+#### Scenario: Cooldown survives an ip republish
+
+- GIVEN Keyed is in cooldown with its card open
+- WHEN its publisher republishes `keyed` with a different ip and the same port and protocol
+- THEN the card stays open and Keyed remains in the same cooldown
+
+#### Scenario: Different names never share cooldown
+
+- GIVEN `keyed` is in cooldown and `guestbook` is published at the same ip and port as `keyed`'s previous record
+- WHEN Guestbook's card sends `identity.request`
+- THEN Guestbook's sheet opens normally
+
+#### Scenario: Ineligible requests are dropped
+
+- GIVEN an inserted card
+- WHEN it sends `identity.request` without a port, with two ports, or as a duplicate while its app's request is pending
+- THEN no response is sent anywhere, no pending record is created or changed, and no cooldown changes
 
 #### Scenario: Opening an open app focuses it
 

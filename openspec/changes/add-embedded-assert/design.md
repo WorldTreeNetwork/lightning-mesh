@@ -7,7 +7,7 @@
 | App claims to be another audience | Audience is taken from `event.origin`, which the browser sets. The message has no `audience` field. |
 | Frame navigates to an attacker origin after the request | The token goes only to the one-shot port **designated by the authenticated request**. A document that replaces the requester doesn't gain the other end of that port unless the requester deliberately handed it over, and that would be the requester disclosing its own token. The iframe's `load` also ends the request with `interaction_required`. |
 | Frame navigates away **and back** to the same origin before approval | A `WindowProxy` survives navigation, and a new same-origin document can listen **before** the parent sees `load`, so origin checks and `load` timing prove nothing. Delivery goes to the designated port capability, which the replacement doesn't inherit. It is not proof of which document holds it, and the spec doesn't claim that. (Rounds 2–4.) |
-| Two cards of one origin | Can't happen: one card per app record, a `.mesh` name maps to one record, and IP hosts never embed. Re-opening an app ends the old request and delivers nothing on its port. |
+| Two cards of one origin | One card per service name, a `.mesh` name host is one service name, and IP hosts never embed. A republish that changes the entry origin closes the open card, so an old-record card can't linger beside the new one. Re-opening an app ends the old request with a single `interaction_required` and delivers nothing else on its port. |
 | Some other window posts a request | `event.source` must be a registered card's `contentWindow`, and `null` origins are refused. |
 | App draws a fake consent inside its card | Consent that counts is only ever drawn by hello.mesh. The app gets a token only through the host. A fake in-frame "Allow" does nothing. |
 | Attacker page frames hello.mesh and clickjacks Allow | `frame-ancestors 'self'` on SPA/static HTML, plus a fail-closed `window.top !== window` check that runs **before** identity load, approval lookup, bridge registration or signing. That order matters: today's `/assert` signs `prompt=none` before rendering anything, so hiding controls alone would not stop a framed silent sign. |
@@ -15,8 +15,8 @@
 | Replay of a token | Unchanged from v1: app-minted single-use nonce plus a 300 s expiry. |
 | Two cards race one consent sheet (origin confusion at the click) | One global pending request. Other cards get `interaction_required` at once, and Allow signs only the displayed (card, origin, nonce, port) and only while it's still pending. |
 | One hostile card holds the global slot forever | Host-owned 60 s expiry ends any pending request. (Round-2 send-back.) |
-| Deny, re-request, deny loop, or reload-to-re-prompt, to fatigue the visitor | After each cooldown-starting ending (Deny, dismiss, expiry, app-driven reload) the **app record** enters a cooldown with no sheet: 30 s, doubling to 10 min, reset only by the visitor's approval or a trusted tap on that app in the shelf. The app can't reset it, and re-creating cards doesn't escape it, since the key is the record, not the card. Duplicates while pending are dropped. |
-| One app throttling a different app | Cooldown is per app record, so it never spans apps. A busy-slot rejection starts no cooldown. |
+| Deny, re-request, deny loop, or reload-to-re-prompt, to fatigue the visitor | After each cooldown-starting ending (Deny, dismiss, expiry, app-driven reload) the app's **service name** enters a cooldown with no sheet: 30 s, doubling to 10 min, reset only by the visitor's approval or a trusted tap on that app in the shelf. The app can't reset it. Re-creating cards doesn't escape it (the key isn't the card), and neither does republishing at a new ip, port or protocol (the key isn't the endpoint). Duplicates while pending are dropped. (Round-5 send-back.) |
+| One app throttling a different app | Cooldown is per service name, so it never spans names, even ones that share an endpoint. A busy-slot rejection starts no cooldown. |
 | Silent `prompt:none` becomes invisible ambient sharing | Every silent issuance shows "Identity shared with `<origin>`" in hello.mesh chrome on that card. It doesn't say "signed in", because the host can't know the app made a session. |
 
 (Rows for navigate-back, sibling, race and silent disclosure, plus the
@@ -59,10 +59,12 @@ response, then `close()`.
 Lifecycle is decided by an absolute deadline stored on the pending record
 and checked at the top of every request and decision handler. Timers are
 cosmetic. Allow claims the record atomically before signing. Every ending
-has exactly one outcome (see the outcome table in the delta). Cooldown is
-keyed by the app record (name, protocol, ip, port), with one card per app,
-and only visitor approval or a trusted tap on that app's shelf control
-resets it. (Round-4 send-back: an origin key let sibling cards throttle each
+has exactly one outcome for every **response-eligible** request (see the
+outcome table in the delta). Ineligible requests (no port, several ports,
+duplicates while pending) are dropped silently. Cooldown is keyed by the
+stable service name, with one card per name, and it survives
+republishing. Only visitor approval or a trusted tap on that app's shelf
+control resets it. (Round-4 send-back: an origin key let sibling cards throttle each
 other.)
 
 Host code never sends identity through `window.postMessage`, so

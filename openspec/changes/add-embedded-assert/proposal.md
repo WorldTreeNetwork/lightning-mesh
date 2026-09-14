@@ -31,8 +31,10 @@ new token format for app authors to verify.
   window-message delivery.
 - Bounded consent: one pending request across all cards, a 60 s host-owned
   expiry, one card per app, and a growing per-app cooldown after Deny,
-  dismiss, expiry or an app-driven reload. Every ending has exactly one
-  outcome.
+  dismiss, expiry or an app-driven reload. Every response-eligible
+  request ends with exactly one outcome, and malformed-envelope, portless or
+  duplicate requests are dropped silently. Cooldown is keyed by service name
+  and survives republishing.
 - The **audience is the frame's entry origin as seen in `event.origin`**.
   The app never supplies it, so it can't be spoofed. There is no
   `return_to`.
