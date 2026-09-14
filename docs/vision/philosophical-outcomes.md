@@ -190,8 +190,6 @@ is a property of participation, not a product you subscribe to.
 
 ## Related
 
-- [DWeb talk source](../talk/dweb-2026-technical-arc.md) — the narrative form
-  of these ideas.
 - [Why decentralized mesh networking](why-decentralized-mesh.md) — motivation
   and system comparisons.
 - [Prior art](../network-coordination/prior-art.md) — auditable comparison to

@@ -6,6 +6,13 @@ scope_tier: mvp
 ---
 # PRD: .mesh Naming — First Stone
 
+> **As built (2026-09-13).** This is the July 2026 plan, kept as written. The
+> first stone shipped; see [`network-coordination/mesh-naming.md`](network-coordination/mesh-naming.md)
+> for what's built. Two details differ from the text: the CLI is
+> `mjolnir-meshd publish|unpublish|status` (this doc originally said `meshd`;
+> no `meshd` alias exists on a node), and DHCP option 114 now points at the
+> RFC 8908 API `http://hello.mesh/api/captive-portal` rather than the page.
+
 ## Problem Statement
 
 The mesh has no name layer: reaching a node or service today requires knowing a derived `10.254.x` address or an iroh node-id, which is unusable for a phone at a demo table and clunky even for operators. `hello.mesh` (rp9) and any node-hosted service need a name that resolves the same way whether the target is one radio hop away or across a site, without a registrar, a zone file, or any single point of authority — consistent with the mesh's no-central-authority ethos. This PRD ("first stone") delivers the minimum naming slice needed for the 2026-07-06 DWeb demo: a working `.mesh` DNS responder, the compiled-in `hello.mesh`/`id.mesh` well-knowns, and operator-publishable services (e.g. `wiki.mesh`) that resolve and converge across nodes via the same gossip/CRDT pattern already proven by the `0yb` address book.
@@ -22,9 +29,9 @@ The mesh has no name layer: reaching a node or service today requires knowing a 
 
 **Journey 1 — Phone joins, front desk loads (Demo attendee).** The attendee's phone joins the mesh SSID and DHCP hands out the node's client subnet, including option 114 pointing at `http://hello.mesh`. The phone's browser resolves `hello.mesh`: dnsmasq forwards the query to `127.0.0.1:5335`, the embedded responder answers with the compiled-in well-known rule (this node's own gateway IP, TTL 30s), and the front desk page loads immediately. No manual IP entry, no captive portal wall. Outcome: the phone is online and looking at a live directory within seconds of associating.
 
-**Journey 2 — Operator publishes, a different node's client resolves it (Node operator + attendee).** An operator SSHes to node A over the overlay and runs `meshd publish wiki --port 8080`. The daemon writes a `ServiceEntry v2` record (owner = node A's iroh key, HLC-stamped), persists it to `services.state`, and immediately gossips a `ServicePublishV2` message rather than waiting for the next anti-entropy tick. Within one gossip hop, node B's daemon merges the new record (different name, no conflict) and its embedded responder starts answering `wiki.mesh` with node A's gateway IP. A client on node B's segment requests `http://wiki.mesh`, resolves it locally at node B, and the request routes over babel (802.11s island) or the iroh overlay (`mjolnir0`, cross-site) to node A — DNS never has to know which. Outcome: end-to-end publish-to-load within the 60-second demo acceptance bound, no shared authority involved.
+**Journey 2 — Operator publishes, a different node's client resolves it (Node operator + attendee).** An operator SSHes to node A over the overlay and runs `mjolnir-meshd publish wiki --port 8080`. The daemon writes a `ServiceEntry v2` record (owner = node A's iroh key, HLC-stamped), persists it to `services.state`, and immediately gossips a `ServicePublishV2` message rather than waiting for the next anti-entropy tick. Within one gossip hop, node B's daemon merges the new record (different name, no conflict) and its embedded responder starts answering `wiki.mesh` with node A's gateway IP. A client on node B's segment requests `http://wiki.mesh`, resolves it locally at node B, and the request routes over babel (802.11s island) or the iroh overlay (`mjolnir0`, cross-site) to node A — DNS never has to know which. Outcome: end-to-end publish-to-load within the 60-second demo acceptance bound, no shared authority involved.
 
-**Journey 3 — Partition conflict, loser experience (Two operators).** During a network partition, an operator at node A publishes `printer.mesh` (HLC t1) and, unaware, an operator at node C publishes `printer.mesh` too (HLC t2 > t1). While partitioned, each island resolves the name locally as if it were the sole owner. When the partition heals and gossip re-converges, `merge_service` sees two different owners for the same name: first-claim HLC wins deterministically everywhere (node A, t1, keeps the name), tie-broken by node-id if HLCs were ever equal. Node C's daemon immediately stops answering `printer.mesh`, `meshd status` on node C shows the name as lost with node A's node-id as the winner, and a subsequent `meshd publish printer` on node C fails with an actionable error naming node A as the current owner. Outcome: no split-brain, no silent data loss — the loser gets an honest, discoverable explanation instead of a mysteriously broken name.
+**Journey 3 — Partition conflict, loser experience (Two operators).** During a network partition, an operator at node A publishes `printer.mesh` (HLC t1) and, unaware, an operator at node C publishes `printer.mesh` too (HLC t2 > t1). While partitioned, each island resolves the name locally as if it were the sole owner. When the partition heals and gossip re-converges, `merge_service` sees two different owners for the same name: first-claim HLC wins deterministically everywhere (node A, t1, keeps the name), tie-broken by node-id if HLCs were ever equal. Node C's daemon immediately stops answering `printer.mesh`, `mjolnir-meshd status` on node C shows the name as lost with node A's node-id as the winner, and a subsequent `mjolnir-meshd publish printer` on node C fails with an actionable error naming node A as the current owner. Outcome: no split-brain, no silent data loss — the loser gets an honest, discoverable explanation instead of a mysteriously broken name.
 
 ## Success Metrics
 
@@ -61,8 +68,8 @@ FR22. [MVP] The daemon shall persist service state to `services.state` via atomi
 FR23. [MVP] The daemon shall restore `services.state` on boot and be able to answer for its own previously-published services immediately, before any gossip round-trip.
 FR24. [MVP] The daemon shall re-announce its own published services on every anti-entropy tick (~20s), matching the `0yb` address-book pattern.
 FR25. [MVP] The daemon shall broadcast a gossip message immediately on publish or unpublish, rather than deferring the announcement to the next anti-entropy tick.
-FR26. [MVP] The daemon shall provide a `meshd publish <name> --port <N>` command that creates or updates a service entry.
-FR27. [MVP] The daemon shall provide a `meshd unpublish <name>` command that removes a service entry.
+FR26. [MVP] The daemon shall provide a `mjolnir-meshd publish <name> --port <N>` command that creates or updates a service entry.
+FR27. [MVP] The daemon shall provide a `mjolnir-meshd unpublish <name>` command that removes a service entry.
 FR28. [MVP] The daemon shall expose a write-path IPC mechanism (file-spool or unix socket) so `publish`/`unpublish` can mutate the state of an already-running daemon process, since the existing `status` surface is read-only.
 FR29. [MVP] A published service's `A` record shall resolve to the publishing node's client gateway IP.
 FR30. [MVP] An unpublish shall gossip a tombstone, and all nodes shall stop answering for that name within one anti-entropy cycle (20s).
@@ -95,7 +102,7 @@ NFR7. [Determinism] Conflict resolution (FWW + node-id tiebreak) shall produce t
 - The embedded `.mesh` DNS responder on `127.0.0.1:5335` and its dnsmasq/UCI wiring (server line, option 114, DoH canary).
 - Compiled-in well-known names (`hello.mesh`, `id.mesh`) resolving to the local node's own gateway IP.
 - `ServiceEntry` v2, `merge_service`, and the new appended `ServicePublishV2` gossip variant, reusing the `0yb` self-announce/persist/re-announce/boot-restore pattern.
-- A `meshd publish`/`unpublish` CLI plus the write-path IPC needed to reach a running daemon.
+- A `mjolnir-meshd publish`/`unpublish` CLI plus the write-path IPC needed to reach a running daemon.
 - Owner-bound conflict resolution (first-claim HLC, deterministic node-id tiebreak) and its operator-visible provenance/loser UX via `status`.
 - Tombstoning on unpublish (propagation only; GC deferred).
 
@@ -150,7 +157,7 @@ FR42 — off-mesh dial-by-node-id.
 - Tombstone wire format: what does a tombstone gossip message/record look like, distinct from a live `ServiceEntry`?
 - SOA field values (MNAME, RNAME, serial, refresh/retry/expire/minimum) for negative-answer authority sections — what values make sense for a CRDT-backed, authority-less zone?
 - Responder observability: is query logging needed for demo-day debugging, and if so, where does it go (syslog, in-memory ring buffer, `status` extension)?
-- Publish IPC mechanism: file-spool (matching the existing daemon pattern) vs. unix socket — which fits the near-synchronous `meshd publish` UX better?
+- Publish IPC mechanism: file-spool (matching the existing daemon pattern) vs. unix socket — which fits the near-synchronous `mjolnir-meshd publish` UX better?
 - `hello.mesh` before a `/24` is claimed: answer the stock `192.168.1.1` alias, or refuse the query? Needs an explicit decision before implementation.
 - How are locally-published services restored and re-owned correctly after a daemon restart (distinguish "this node's own services to restore" from "other nodes' services learned via gossip" in `services.state`)?
 

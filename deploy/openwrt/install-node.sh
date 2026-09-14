@@ -234,8 +234,8 @@ case "$RES" in
 >> done on $HOST. Next (fresh node only):
    1. ssh $HOST 'mjolnir-meshd id --secret-file /etc/mjolnir/secret'   # this node's id
    2. add the OTHER nodes' ids to /etc/config/mjolnir   (list peer '<id>')
-   3. set backhaul_iface: 'br-lan' for the wired-switch bench, or pass
-      --wireless <env-file> next run (or run /root/setup-wireless.sh) then 'br-mesh'
+   3. keep backhaul_iface 'br-mesh' (the fleet default; pass --wireless <env-file>
+      or run /root/setup-wireless.sh to build it). 'br-lan' is wired-bench only
    4. ssh $HOST 'service mjolnir-meshd start && logread -e mjolnir_meshd'
 EOF
 		;;

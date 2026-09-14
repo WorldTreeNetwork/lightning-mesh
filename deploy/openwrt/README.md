@@ -86,22 +86,26 @@ What lands on the node:
 | `/etc/hotplug.d/usb/70-mjolnir-dongle` | configures a supported dongle the moment it's plugged in |
 | `/root/mjolnir-stage/`            | staged payload, prefetched packages, apply log + result |
 | `/usr/bin/mjolnir-hello`          | the front desk binary — OPTIONAL, only staged if built locally |
-| `/etc/init.d/mjolnir-hello`       | procd service for the front desk (START=97, always staged; stays disabled unless opted in) |
+| `/etc/init.d/mjolnir-hello`       | procd service for the front desk (START=97, always staged; runs when the binary is present and `hello.enabled` is `'1'`) |
 
 ### hello.mesh front desk (optional, S7 / mjolnir-mesh-eei)
 
 `mjolnir-hello` serves the static frontend + read-only mesh API at the node's
-**LAN gateway IP**, independent of `.mesh` name resolution (a separate track,
-`mjolnir-mesh-e21`). It is entirely optional: a node runs the mesh with or
-without it, and neither `install-node.sh` nor `mjolnir-apply` ever turns it on
-by themselves.
+**LAN gateway IP** (and, via the `.mesh` responder, at `hello.mesh`). It is
+optional: a node runs the mesh with or without it. **Staging the binary is the
+opt-in** — the UCI template ships `option enabled '1'`, and `mjolnir-apply`
+adds an enabled `hello` section to an already-provisioned node that lacks one
+whenever `/usr/bin/mjolnir-hello` is present. A node without the binary stays
+mesh-only.
 
 1. Build it: `deploy/openwrt/build-hello.sh` (see above) — its absence just
    means `install-node.sh` skips staging the binary; the init script and UCI
    template still land so a node is ready the moment a binary shows up.
-2. Opt in on a node: edit the `hello` section of `/etc/config/mjolnir` —
-   `option enabled '1'` (defaults to `'0'`) — then re-run `install-node.sh` (or
-   `service mjolnir-hello enable && service mjolnir-hello start` directly).
+2. Keep a node mesh-only even with the binary present: set
+   `option enabled '0'` in the `hello` section of `/etc/config/mjolnir` (the
+   template ships `'1'`; the init script treats a missing value as `'0'`),
+   then `service mjolnir-hello stop`. To turn it back on, set `'1'` and re-run
+   `install-node.sh` (or `service mjolnir-hello enable && service mjolnir-hello start`).
 3. The init script resolves the node's LAN gateway IP itself at start time via
    netifd (`network_get_ipaddr` on the logical interface named by
    `option lan_iface`, default `'lan'`) and binds

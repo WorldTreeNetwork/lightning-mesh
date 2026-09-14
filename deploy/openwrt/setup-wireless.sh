@@ -3,7 +3,7 @@
 # One radio carries the 802.11s mesh-point BACKHAUL (bridged into br-mesh) plus a
 # co-located, staged-disabled client AP on the same channel; the OTHER radio carries
 # the primary client AP on br-lan. Which BAND plays the backhaul role is the
-# BACKHAUL_BAND flag (default 2g). Band-detecting, so it's robust to radio0/radio1
+# BACKHAUL_BAND flag (default 5g). Band-detecting, so it's robust to radio0/radio1
 # ordering across units.
 #
 #   BACKHAUL_BAND=5g (default): 5 GHz backhaul (~6-8x single-hop throughput — field-

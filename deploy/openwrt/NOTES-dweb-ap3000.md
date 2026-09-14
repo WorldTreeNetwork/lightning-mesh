@@ -37,8 +37,10 @@ still has an empty root password from flash).
 ssh root@fe80::82af:caff:fef2:20f5%wlp191s0
 ```
 
-Do **not** run `mjolnir-meshd id` / `diag` on a live node — those subcommands
-start a second daemon. Use `uci get mjolnir.meshd.name` and
+Do **not** run `mjolnir-meshd id` on a live node — it builds an iroh endpoint
+alongside the running daemon. Read-only inspection is safe:
+`service mjolnir-meshd diag` (which runs `mjolnir-meshd status`) returns before
+any endpoint is built. For the name, use `uci get mjolnir.meshd.name` and
 `deploy/openwrt/fleet-nodes.conf`.
 
 BSSIDs (scan identifiers):

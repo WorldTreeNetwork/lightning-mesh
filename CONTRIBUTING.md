@@ -91,6 +91,6 @@ Please do **not** open a public issue for security vulnerabilities. Email
 ## License of contributions
 
 By contributing, you agree your contributions are licensed under
-AGPL-3.0-or-later and, per the [CLA](CLA.md), may also be licensed by Identikey
-Inc. under commercial terms. See [`LICENSE`](LICENSE) and
+AGPL-3.0-or-later and, per the [CLA](CLA.md), may also be licensed by World Tree
+Network Foundation under commercial terms. See [`LICENSE`](LICENSE) and
 [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md).

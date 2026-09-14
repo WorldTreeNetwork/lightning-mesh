@@ -19,13 +19,19 @@ implicit authority, ad hoc join/leave, scalable — one of the most powerful
 upgrades to the internet. Those aren't marketing adjectives; they're hard
 requirements the design is held to.
 
-**What's real today** (field-validated on a four-router fleet): each node owns
-its own routed client `/24`, claimed via CRDT and routed between nodes with
-babel over an 802.11s backhaul — client traffic flows to the internet and
-across LANs. Client L2 is deliberately *not* bridged across nodes (broadcast
-containment is what lets this scale), which means the roaming and
-service-discovery experience is the next phase, not a shipped feature. The
-current data plane is the stepping stone that phase builds on.
+**What's real today:** each node owns its own routed client `/24`, claimed via
+CRDT and routed between nodes with babel over an 802.11s backhaul — client
+traffic flows to the internet and across LANs (field-validated in July 2026 on
+a four-router fleet; the inventory in `deploy/openwrt/fleet-nodes.conf` now
+lists five). Service discovery is built on top of it: every node serves the
+`hello.mesh` front desk (a live directory of people, services and routers,
+plus a browser-held IdentiKey), and `.mesh` names — operator-published
+services, stationary devices and key-owned app names — resolve from any node.
+Client L2 is deliberately *not* bridged across nodes (broadcast containment is
+what lets this scale), so roaming works by routing instead: a client that
+keeps its address on another node gets a host route. That guest-roam path is
+built but **not yet field-validated** on physical clients.
+See [what works today](docs/join/index.md#what-works-today).
 
 See [docs/vision/why-decentralized-mesh.md](docs/vision/why-decentralized-mesh.md)
 for the full motivation, [docs/vision/mjolnir-integration.md](docs/vision/mjolnir-integration.md)
@@ -95,10 +101,6 @@ and AI agents all coexist on the same fabric.
 - [Why decentralized mesh networking](docs/vision/why-decentralized-mesh.md)
 - [Mjolnir + Lightning Mesh integration](docs/vision/mjolnir-integration.md)
 
-### Public / talk
-- [DWeb talk source material](docs/talk/dweb-2026-technical-arc.md) — the
-  public narrative; eventually the basis for website documentation
-
 ### Architecture
 - [Network architecture (CRDT, routing, subnet allocation)](docs/network-coordination/network-architecture.md)
 - [Radio backhaul & multi-hop discovery decisions](docs/network-coordination/radio-backhaul-and-discovery.md)
@@ -118,8 +120,8 @@ and AI agents all coexist on the same fabric.
 
 ## Status
 
-**The data plane is complete and field-validated** (July 2026) on a
-four-router OpenWrt fleet: `mjolnir-meshd` (`crates/mjolnir-mesh`) runs
+**The data plane is complete and field-validated** (July 2026, on what was
+then a four-router OpenWrt fleet): `mjolnir-meshd` (`crates/mjolnir-mesh`) runs
 natively over an 802.11s backhaul (`br-mesh`); each node claims a routed
 client `/24` out of `10.42.0.0/16` via CRDT (first-writer-wins,
 gossip-converged over iroh); supervised babeld routes between nodes; a
@@ -134,12 +136,19 @@ A key lesson from deployment: a local mesh routes most efficiently over
 its own L2 island; the iroh L3 overlay earns its keep on internet hops
 and as a first-hop security gateway, not as the local fast path.
 
-Next up (tracked in beads): the gossip address book / multi-hop discovery
-(`0yb` — derived-address seeding is the first stone laid), the
-service-mesh architecture pass (`e21` — broadcast peer/service discovery
-plus conflict resolution), and the IPv6-vs-IPv4 addressing question
-(`bsa` — IPv4 `/24` claims hand out a limited resource). Known gaps:
-babeld SIGHUP respawn (`2zz`) and the validation matrices (`b9a`, `0pv`).
+Built since (September 2026): the `hello.mesh` front desk and directory, a
+browser-held IdentiKey with a recovery phrase and cross-origin sign-in
+(`/assert`), the `.mesh` name layer (`e21` first stone: embedded DNS responder,
+operator-published services, stationary device names, key-owned leased names),
+captive-portal welcome sheet, automatic internet sharing, and guest-client
+roam (`sz9`, awaiting field validation in `0pv`). Mini-app cards inside
+hello.mesh are designed and partly merged, not deployed (`ncy`). The
+user-facing picture of what works is [docs/join](docs/join/index.md).
+
+Open (tracked in beads): the IPv6-vs-IPv4 addressing question (`bsa` — IPv4
+`/24` claims hand out a limited resource), name/service staleness (`e21.9`),
+membership gating for who may add routers, and the validation matrices
+(`b9a`, `0pv`).
 
 ## Building
 

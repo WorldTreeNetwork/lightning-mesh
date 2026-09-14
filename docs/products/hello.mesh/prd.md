@@ -6,6 +6,21 @@ scope_tier: mvp
 ---
 # PRD: hello.mesh — The Mesh Front Desk
 
+> **As built (2026-09-13).** This is the July 2026 MVP plan, kept as written.
+> Where it differs from the built product:
+> - There is **no "just browse" button** (Journey 1). Anonymous use of
+>   hello.mesh needs no action at all (FR5). The closest built control is on
+>   the captive-portal welcome sheet, which offers **Just the internet,
+>   please** and **Create your IdentiKey**.
+> - `.mesh` name resolution, out of scope here, shipped on its own track, so
+>   the page is reached at `http://hello.mesh` as well as by LAN IP.
+> - FR23 (RFC 8910 option 114, now pointing at `/api/captive-portal`) and FR26
+>   (cross-origin tokens, the `/assert` flow in
+>   [`identity-assertion.md`](../../network-coordination/identity-assertion.md))
+>   are built.
+>
+> Current behavior, step by step: [`docs/join/person/`](../../join/person/02-hello-mesh.md).
+
 ## Problem Statement
 
 A key-based mesh is invisible and unusable to the one device that shows up most at a venue: a random phone with a browser and no app. Such a device cannot speak the mesh (no iroh, no gossip), cannot see what nodes or services are present, and has no way to acquire an identity without installing software or surrendering an account to a vendor. `hello.mesh` is the node-hosted **front desk** that bridges that gap: a static web page, served by every node for its own segment, that shows a live directory of who and what is on the mesh and lets a visitor optionally acquire a lightweight cryptographic identity — with no app, no account, and no internet. It is the legacy-device on-ramp that makes "the network is a projection of a set of keys" something a person can watch happen. It matters now because the data plane is field-validated and the DWeb demo (week of 2026-07-06) needs a visible, human-facing surface on top of it.

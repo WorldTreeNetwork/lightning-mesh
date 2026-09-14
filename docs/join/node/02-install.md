@@ -121,8 +121,8 @@ node only)" hints.
 ssh root@192.168.1.1 'cat /root/mjolnir-stage/apply.log'
 ```
 
-The installer's closing hint mentions `backhaul_iface 'br-lan'` for a wired
-bench. For a real 802.11s node, keep the template default, `br-mesh`.
+The installer's closing hint says to keep `backhaul_iface 'br-mesh'`, the
+template default. `br-lan` is only for a wired test bench.
 
 ## Step 6: Check the install
 

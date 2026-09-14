@@ -1,10 +1,19 @@
 # `.mesh` Naming — the service-mesh name layer
 
-**Status 2026-07-03:** DESIGN (bead `e21`, item 2). Decided in the e21 architecture
-pass: daemon-embedded DNS responder behind dnsmasq, flat namespace, first stone =
-services + well-known names. Nothing below is shipped yet; the CRDT schemas
-(`crdt/dns.rs`, `crdt/service.rs`) and gossip wire format already carry these lanes
-but the apply loop does not.
+**Status 2026-09-13:** the first stone is **BUILT** and deployed; some sections
+below are still design. (Originally DESIGN, 2026-07-03, bead `e21` item 2:
+daemon-embedded DNS responder behind dnsmasq, flat namespace, first stone =
+services + well-known names.)
+
+| Built | Still design / not built |
+|---|---|
+| Embedded `.mesh` responder on `127.0.0.1:5335` (`dns_responder.rs`) with the dnsmasq UCI reconcile: forward line, `.mesh` rebind whitelist, DoH canary, DHCP option 114 | Auto, identity-scoped device names (`laptop.duke.mesh`, "Device names" step 2) |
+| Reserved well-known names `hello`, `id` (`RESERVED_SERVICE_NAMES`) | Service/name staleness expiry and tombstone GC (`e21.9`, in progress) |
+| `/services` v2 lane, owner-bound first-writer-wins (`ServiceEntryV2`), `mjolnir-meshd publish`/`unpublish` | Web-of-trust name arbitration |
+| Stationary device names `<host>.<scope>.mesh` (`e21.3`) | mDNS interop (reflecting services into per-/24 mDNS) |
+| Key-owned leased names (`crdt/leased_name.rs`), claimed via hello.mesh `/api/name-claim`; added after this doc was written, see [`mesh-app-publishing.md`](../deploy/mesh-app-publishing.md) Lane 2 | Mesh-wide re-verification of leased-name signatures on gossip apply |
+
+The on-node CLI is `mjolnir-meshd`; this doc's older examples said `meshd`.
 
 **Read first:** `gossip-and-crdt.md` (how facts converge), `network-architecture.md`
 (routed /24s + babel + `mjolnir0`). Identity interactions: `user-identity.md` (rp9).
@@ -34,10 +43,14 @@ uci add_list dhcp.@dnsmasq[0].server='/mesh/127.0.0.1#5335'
 ```
 
 dnsmasq forwards every `*.mesh` query to the daemon and handles everything else
-normally. The same UCI reconcile also sets **DHCP option 114** (RFC 8910
-captive-portal API, used non-blockingly per rp9) to `http://hello.mesh` so
-client OSes surface the front-desk affordance — the contract
-`hello-mesh-service.md` §5 asks of this track. This preserves the existing discipline (**the daemon never edits dnsmasq
+normally. The same UCI reconcile also sets **DHCP option 114** (RFC 8910,
+used non-blockingly per rp9) to `http://hello.mesh/api/captive-portal`, the
+RFC 8908 CAPPORT API endpoint, so client OSes surface the front-desk
+affordance — the contract `hello-mesh-service.md` §5 asks of this track.
+(Originally designed as the page URL `http://hello.mesh`; the option must name
+the `captive+json` API, which answers `captive:false` and points
+`user-portal-url`/`venue-info-url` at the front desk. See `DHCP_OPTION_114` in
+`mjolnir-meshd.rs`.) This preserves the existing discipline (**the daemon never edits dnsmasq
 files and never SIGHUPs it** — UCI + init.d restart only, same as
 `reconcile_client_uci`), avoids file-render/reload races, and gives us SRV/TXT
 records, which a hosts file cannot express. The responder is a **pure projection
@@ -78,8 +91,9 @@ The name classes, resolved in this order:
 
 | Class | Source | Answer | Status |
 |---|---|---|---|
-| **Well-known node-local** (`hello.mesh`, `id.mesh`) | compiled-in reserved list — **never in the CRDT, unclaimable** | this node's own client gateway IP (`10.42.x.1`) | first stone |
-| **Services** (`wiki.mesh`) | `/services/{name}` CRDT lane, gossiped | the published `ip` (+ SRV port, TXT) | first stone |
+| **Well-known node-local** (`hello.mesh`, `id.mesh`) | compiled-in reserved list — **never in the CRDT, unclaimable** | this node's own client gateway IP (`10.42.x.1`) | **shipped** (first stone) |
+| **Services** (`wiki.mesh`) | `/services/{name}` CRDT lane, gossiped | the published `ip` (+ SRV port, TXT) | **shipped** (first stone) |
+| **Key-owned names** (`walkie-talkie.mesh`) | leased-name CRDT lane, owned by a client Ed25519 key, renewable lease (added after this doc) | the claimed `ip` (+ SRV port) | **shipped** |
 | **Devices, stationary** (`nas.n7x3.mesh`) | explicit opt-in publish, **scoped** (a device-published service) | the device's IP | **shipped (e21.3)** |
 | **Devices, auto** (`laptop.duke.mesh`) | DHCP lease lane, **identity-scoped**, gossiped + location-tracked | current lease IP | deferred (`e21.5`) |
 
@@ -140,7 +154,7 @@ So device naming is staged on identity:
    and `e21.9` handles staleness. Auto names for phones/laptops are **not** shipped
    here.
 
-   *Shipped (e21.3):* `meshd publish <host> --ip <addr> [--port <p>] [--mac <m>]
+   *Shipped (e21.3):* `mjolnir-meshd publish <host> --ip <addr> [--port <p>] [--mac <m>]
    [--txt k=v]`. The `--ip` flag is what distinguishes a device from a
    node-hosted service: the daemon derives the scope from **its own** node id
    (`node_scope_label` = first 4 base32 chars of `blake3(node_id)`), keys the
@@ -149,7 +163,7 @@ So device naming is staged on identity:
    A-record only — DNS answers A, and SRV is NODATA (port 0 is the sentinel).
    The host must be a single DNS label (`[a-z0-9-]`, no dot — the daemon appends
    the scope, not the operator), so a device can never occupy the bare flat
-   form. Release with `meshd unpublish <host> --device` (re-derives the same
+   form. Release with `mjolnir-meshd unpublish <host> --device` (re-derives the same
    scoped key) or by naming the full `<host>.<scope>` key. Because the scope is
    derived from the publisher's key, a node can only publish under its own
    scope; cross-node scope collision is possible but bounded by FWW-on-HLC,
@@ -183,7 +197,10 @@ and future off-mesh access by dial-by-node-id; it is *not* used for resolution.
 
 ## Record changes: `ServiceEntry` v2
 
-The current `ServiceEntry` (crdt/service.rs) is device-lease-coupled (`host_mac`,
+*Built:* `ServiceEntryV2` and its tombstone in `crdt/service.rs`, gossiped as
+its own variant. The design as written:
+
+The v1 `ServiceEntry` (crdt/service.rs) is device-lease-coupled (`host_mac`,
 expiry tied to lease). Services in the first stone are **node-hosted** (the wiki
 on the router, the front-desk directory), so the record needs:
 
@@ -203,14 +220,16 @@ per-lane ad-hockery.
 
 ## Publishing
 
-`mjolnir-meshd` gains a publish surface (same control path as `status`):
+*Built.* `mjolnir-meshd` has a publish surface, a thin client of the daemon's
+loopback control API on `127.0.0.1:5380`:
 
 ```
-meshd publish wiki --port 8080            # → /services/wiki, ip = node gateway, SRV port 8080
-meshd unpublish wiki                      # tombstone
+mjolnir-meshd publish wiki --port 8080    # → /services/wiki, ip = node gateway, SRV port 8080
+mjolnir-meshd unpublish wiki              # tombstone
 ```
 
-The hello.mesh front desk (rp9) later renders the live `/services/` map as the
+Operator how-to: [`mesh-app-publishing.md`](../deploy/mesh-app-publishing.md).
+The hello.mesh front desk (rp9) renders the live `/services/` map as the
 neighbor/service directory — the directory is a *projection* of this lane plus the
 0yb address book, not a separate registry.
 

@@ -65,6 +65,10 @@ name. The router-specific part stops two routers' devices from colliding.
 **Do:** add repeatable `--txt` key/value pairs, for example
 `--txt path=/app --txt proto=http`.
 
+For a web app, include `--txt proto=http` (or `proto=https`). That's what
+makes hello.mesh show it as a clickable link; without it the entry shows as a
+bare address.
+
 ### Step 4: Check it from anywhere on the mesh
 
 **Do:** from any device on any router's Wi-Fi, open `http://hello.mesh` and
@@ -121,10 +125,12 @@ normalize anything. Use port `0` for a plain address record.
 POST /api/name-claim
 Content-Type: application/json
 
-{"pubkey":"<64 hex>","sig":"<128 hex>","challenge":"<hex>","name":"keyed","port":3000,"ip":"10.42.7.42"}
+{"pubkey":"<64 hex>","sig":"<128 hex>","challenge":"<hex>","name":"keyed","port":3000,"ip":"10.42.7.42","scheme":"https"}
 ```
-`ip` is optional and isn't covered by the signature. Without it, the router
-uses your request's source address.
+`ip` and `scheme` are optional and aren't covered by the signature. Without
+`ip`, the router uses your request's source address. Set `scheme` to `http`
+or `https` so hello.mesh lists your name as a clickable link; without it the
+name shows as a bare address.
 
 **Expect:** accepted. Within about 5 seconds the router publishes the name,
 and it resolves mesh-wide.

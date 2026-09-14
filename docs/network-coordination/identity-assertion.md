@@ -127,6 +127,15 @@ client JS.
 - No key yet + `prompt=consent`: the IdP shows a "create your identity first"
   panel linking to the front desk (`/`); the visitor makes a key and returns.
 
+> **Known gap today: framed `prompt=none`.** The built `/assert` page does not
+> check whether it is running inside a frame, and hello.mesh HTML is not yet
+> served with `frame-ancestors`. So a previously approved audience's
+> `prompt=none` request signs and redirects even when `/assert` is framed,
+> before anything renders. The fix (a fail-closed `window.top !== window`
+> check before identity load, approval lookup or signing, plus
+> `Content-Security-Policy: frame-ancestors 'self'` on application HTML) is
+> part of the accepted `add-embedded-assert` change, §8, which is not built.
+
 ## 5. RP-side verification (offline)
 
 Reference implementation: `verifyAssertion` in `assert.ts`, exported so RP authors
@@ -207,3 +216,68 @@ export function verify(encoded: string, myOrigin: string, expectedNonce: string)
 - **Not a higher trust rung.** This is rung-1 soft custody: the serving node could
   extract the key. The assertion honestly conveys that tier; custodial attestation
   (rung 3) is a separate protocol (open item #2).
+
+## 8. Planned: embedded transport (not built)
+
+> **Status: accepted design, not built.** Source of truth:
+> [`openspec/changes/add-embedded-assert`](../../openspec/changes/add-embedded-assert/)
+> (bead `mjolnir-mesh-ncy.4`, depends on `add-mini-app-contract`). Nothing in
+> this section runs on the mesh today. Everything in §1–§7 is unchanged by it.
+
+**Why.** A mini-app shown as a card inside hello.mesh (a sandboxed
+cross-origin iframe, see
+[mesh-app-publishing.md, "Mini-apps"](../deploy/mesh-app-publishing.md#mini-apps-coming-soon))
+can't use the `/assert` redirect: a redirect would navigate the frame, and the
+sandbox denies top navigation. The embedded transport carries the **same v1
+assertion** over the mini-app `postMessage` bridge instead.
+
+**Wire.**
+
+```js
+// app → host: window.parent.postMessage(msg, hostOrigin, [channel.port2])
+{ "mesh": "mini-app/v1", "type": "identity.request", "nonce": "<16–128 hex>", "prompt": "consent" }
+
+// host → app, only on the transferred port, then the port is closed
+{ "mesh": "mini-app/v1", "type": "identity.response", "nonce": "<echo>", "token": "<base64url>" }
+{ "mesh": "mini-app/v1", "type": "identity.response", "nonce": "<echo>", "error": "access_denied" }
+```
+
+- **One transferred `MessagePort`.** An `identity.request` must carry exactly
+  one port. Requests with no port, several ports, or a duplicate while one is
+  pending are dropped silently.
+- **One-shot, one-way response.** The host sends exactly one
+  `identity.response` on that port and closes it. It never listens on the
+  port, and identity tokens or errors are never sent via `window.postMessage`.
+  The port is a capability designated by the authenticated window request (its
+  `event.source` is the card's frame and its `event.origin` the entry origin);
+  a document that later replaces the requester in the frame doesn't inherit
+  it.
+- **Audience = the frame's entry origin**, taken from `event.origin`. The
+  message has no `audience` field and no `return_to`, so an app can't name
+  another audience.
+- **Same token.** Same payload (§3.2), same `mjolnir-identity-assert:v1`
+  signature, same 300 s expiry, verified with the same `verifyAssertion`
+  (`audience` = the app's own origin). Same error codes: `access_denied`,
+  `interaction_required`, `invalid_request`.
+- **Host-rendered consent.** The consent sheet is drawn by hello.mesh outside
+  the iframe. It leads with the requesting **origin** and shows the manifest
+  name only as what the app calls itself. A fake "Allow" drawn inside the card
+  does nothing.
+- **Shared approvals.** Approvals use the same `hello-mesh-assert-approvals`
+  store as `/assert`, so `prompt: "none"` can go silent for an
+  already-approved origin. Every silent issuance shows "Identity shared with
+  `<origin>`" in hello.mesh chrome on that card.
+- **Fail closed when framed.** If hello.mesh itself is framed
+  (`window.top !== window`, any parent, including another hello.mesh page),
+  both the bridge and `/assert` stop before identity load, approval lookup,
+  listener registration or signing. hello.mesh application HTML gets
+  `Content-Security-Policy: frame-ancestors 'self'` (not the captive-portal
+  probe responses). This also closes today's framed `prompt=none` gap (§4).
+- **Bounded consent.** One pending request across all cards, with an absolute
+  **60 s** host-owned deadline. After Deny, dismiss, expiry or an app-driven
+  reload, that app enters a **cooldown keyed by service name** (30 s, doubling
+  to 10 min) that survives card re-creation and republishing at a new ip,
+  port or protocol. Only visitor approval or a trusted tap on that app's shelf
+  control resets it.
+- **Link-out apps are unchanged.** An app opened in its own tab keeps using
+  the `/assert` redirect.

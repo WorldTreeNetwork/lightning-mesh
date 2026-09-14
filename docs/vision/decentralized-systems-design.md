@@ -4,8 +4,7 @@
 
 > Companion doc: [Philosophical outcomes of the architecture](philosophical-outcomes.md)
 > — what the design *means*. This one is what it *is*: the distributed-systems
-> engineering that has to be real for those outcomes to hold. The public talk
-> narrative lives in [the DWeb talk source](../talk/dweb-2026-technical-arc.md).
+> engineering that has to be real for those outcomes to hold.
 
 Most of the decentralized-web conversation happens at the application layer —
 storage, identity wallets, tokens, protocols for moving content around. Under all

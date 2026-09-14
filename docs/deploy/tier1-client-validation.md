@@ -25,10 +25,14 @@ already deployed.
 | m3000-b   | `10.254.12.214` | Cudy M3000    | wired/jump node (`192.168.1.1` on ethernet)      |
 | m3000     | `10.254.242.172`| Cudy M3000    | radio-only                                       |
 | tr3000    | `10.254.61.115` | Cudy TR3000   | 2.5GbE eth0 + USB3                                |
+| ap3000-outdoor | `10.254.166.226` | Cudy AP3000 Outdoor | added after this runbook's July pass       |
 
-- Client AP: SSID **`Lightning Mesh`**, key **`lightning!`** (unless rotated in
-  `fleet-secrets/wireless.env`). Same SSID on every node — which node you land
-  on is the radio's choice; your gateway IP tells you which (see 1.0).
+- Client AP: SSID **`Lightning Mesh`**, **open** (no key; `CLIENT_ENC='none'`
+  in `fleet-secrets/wireless.env`, see `wireless.env.example` and
+  `fleet.yml`). This runbook originally said key `lightning!`; the last box
+  still on `psk2` (AP3000) was opened on 2026-08-30. Same SSID on
+  every node — which node you land on is the radio's choice; your gateway IP
+  tells you which (see 1.0).
 - Client subnets are hash-claimed per node (`10.42.<x>.0/24`, not listed here —
   discover live in step 1.0). Each node's `.1` lives on its `br-lan`.
 - Ground truth on any node: `ssh root@<mgmt> 'service mjolnir-meshd diag'`
@@ -39,7 +43,7 @@ already deployed.
 From the laptop (any network that reaches the nodes — mesh AP works):
 
 ```sh
-for n in 10.254.242.84 10.254.12.214 10.254.242.172 10.254.61.115; do
+for n in 10.254.242.84 10.254.12.214 10.254.242.172 10.254.61.115 10.254.166.226; do
   echo "== $n"; ssh root@$n "ip -4 addr show br-lan | grep 10.42; ip route | grep -c 'proto babel'"
 done
 ```
@@ -52,7 +56,7 @@ is live).
 Optional but recommended while still online: install iperf3 for step 1.4:
 
 ```sh
-for n in 10.254.242.84 10.254.12.214 10.254.242.172 10.254.61.115; do
+for n in 10.254.242.84 10.254.12.214 10.254.242.172 10.254.61.115 10.254.166.226; do
   ssh root@$n "opkg update && opkg install iperf3"
 done
 ```
@@ -93,7 +97,7 @@ From the laptop on the client AP:
 ssh root@10.254.61.115 'service mjolnir-meshd diag'   # tr3000, or any node
 ```
 
-**Pass:** SSH works to all four mgmt addrs from the client network — the
+**Pass:** SSH works to every mgmt addr from the client network — the
 management plane is reachable from the client plane via routing.
 
 ## 1.4 Throughput baselines (record these — baseline for the RTT-metric work)
@@ -121,7 +125,9 @@ ssh root@10.254.242.84 "iperf3 -c 10.254.61.115"    # 1 hop
 ```
 
 Record: pair, hop count, Mbps, retransmits. Expect roughly **half per extra
-hop** — same-channel (ch 6) airtime is shared between receive and re-transmit.
+hop** — same-channel backhaul airtime (5 GHz ch 36 on the live fleet; this
+runbook's July pass ran a 2.4 GHz ch 6 backhaul) is shared between receive and
+re-transmit.
 
 ## 1.5 Resilience — kill a transit node
 
@@ -143,14 +149,24 @@ Record: seconds to reroute, seconds to full rejoin, any stuck state
 1. `ping -i 1 10.254.61.115` from the laptop, leave running.
 2. Walk between nodes until the laptop reassociates (watch the BSSID:
    `sudo wdutil info | grep -i bssid` on macOS).
-3. **Expected**: reassociation succeeds, but the laptop gets a **new IP** from
-   the new node's /24 → the running ping/sessions break, then resume with the
-   new source.
+3. Check which of two outcomes you got (`ipconfig getifaddr en0`):
+   - **Kept its IP** (the client held on to the lease the first node vended).
+     Guest roam (bead `sz9`, `crates/mjolnir-mesh/src/roam.rs`, meshd
+     `roam_loop`) is built and runs on every node: the node the laptop just
+     joined should install a host `/32` for it on the client bridge
+     (`ssh root@<new-node> "ip -4 route | grep 'proto 158'"`), so the ping
+     should resume with the **same** source after a short blackout. Record the
+     blackout seconds.
+   - **New IP** from the new node's `/24` (the client re-DHCPed). The running
+     ping/sessions break, then resume with the new source. Guest roam doesn't
+     apply.
 
-That IP change is by design (no L2 bridging across nodes; broadcast
-containment). Document it honestly: FT/`bnd` would speed up *auth* only — it
-cannot preserve the IP. Session survival across roams needs a client-side
-overlay (future work), not L2 tricks.
+> **Not field-validated yet.** Guest roam was written after this runbook's
+> July pass and has not been validated on physical clients (bead `0pv`), so
+> treat this step as the test for it, not as a known-good. Client L2 is still
+> never bridged across nodes (broadcast containment); the `/32` is a routed
+> host route. FT (802.11r) only speeds up *authentication*; it doesn't carry
+> the IP.
 
 ## Tier-2 spoiler — egress over the mesh may already work
 

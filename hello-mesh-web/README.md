@@ -1,42 +1,40 @@
-# sv
+# hello-mesh-web
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+The **hello.mesh front desk** web app: the page every Lightning Mesh router
+serves at `http://hello.mesh` (and at its LAN gateway `http://10.42.<x>.1`).
+It shows the People / Services / Routers directory, creates and restores the
+browser-held IdentiKey, and hosts the cross-origin sign-in page (`/assert`).
 
-## Creating a project
+SvelteKit + TypeScript, built as a static site (`@sveltejs/adapter-static`)
+and embedded into the `mjolnir-hello` router binary. The page is served over
+plain HTTP, so it can't rely on WebCrypto or other secure-context APIs.
 
-If you're seeing this, you've probably already done this step. Congrats!
+User-facing guide: [`docs/join/person/`](../docs/join/person/02-hello-mesh.md).
+Server and daemon seams: `crates/mjolnir-hello`,
+[`docs/network-coordination/hello-mesh-service.md`](../docs/network-coordination/hello-mesh-service.md).
 
-```sh
-# create a new project
-npx sv create my-app
-```
+## Develop
 
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-bun x sv@0.16.1 create --template minimal --types ts --add prettier eslint vitest="usages:unit,component" tailwindcss="plugins:typography" mdsvex mcp="ide:claude-code+setup:remote" --install bun hello-mesh-web
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Package manager is **bun**.
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+bun install
+bun run dev          # vite dev server
+bun run check        # svelte-check
+bun run test         # vitest, once
+bun run test:smoke   # Playwright smoke tests (e2e/)
+bun run lint
 ```
 
-## Building
-
-To create a production version of your app:
+## Build and ship
 
 ```sh
-npm run build
+bun run build:embed  # vite build, then scripts/sync-embed.js copies build/
+                     # into crates/mjolnir-hello/static/
 ```
 
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+`mjolnir-hello` bakes `crates/mjolnir-hello/static/` into the binary at compile
+time (rust-embed), so the web build must run **before** the Rust build or a
+stale page ships. For routers, don't run these steps by hand; use
+`deploy/openwrt/build-hello.sh`, which runs `build:embed` and then
+cross-compiles the aarch64 binary. See `deploy/openwrt/README.md`.
