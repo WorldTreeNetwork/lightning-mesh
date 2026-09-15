@@ -89,3 +89,27 @@ or flash-filesystem guarantee. Unit tests for a pure model do not close ai0.5. T
 OpenWrt adapter, shared-lock participation, boot ordering and recovery probes must
 land and pass focused integration tests before dependents claim durable apply.
 
+## Review refinements and implementation admission
+
+The independent review's residuals are recorded on ai0.5. Make the following
+ordering explicit in the implementation packet:
+
+- Recovery-first runs on service restart and before admitting a new apply, not
+  only at boot. It obtains the node-wide process lock and inspects durable state;
+  a dead PID or leftover directory alone is not proof that takeover is safe.
+  The lock must be released by process death, and the durable transaction fences
+  the next process from taking a partial configuration as its baseline.
+- Health checks passing do not commit. Only a successfully persisted terminal
+  commit does. A crash between health-pass and durable commit restores the old
+  snapshot; losing a good apply is preferable to an ambiguous commit claim.
+- Legacy participation is mandatory even while its UI/launcher is preserved.
+  Snapshot coverage must be checked against every allowed side effect. The
+  existing firmware/package/key/init-file updater cannot be wrapped and called
+  recoverable on the strength of four UCI backups. Either include and verify its
+  whole mutation set or reject those operations from the transaction path.
+
+The engine language, on-disk encoding, storage/write bounds and concrete locking
+mechanism remain explicit pin-before-code obligations, not permission for a worker
+to guess them inside an unreviewed runtime patch. These refinements and those pins
+must be included in the next implementation-readiness review. No human policy
+question is reopened and no OpenWrt implementation is claimed by this amendment.
