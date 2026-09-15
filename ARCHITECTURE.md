@@ -64,7 +64,9 @@ heatmaps.
 Mini-apps (`add-mini-app-contract`, bead `mjolnir-mesh-ncy.1`): a
 published service is an app when TXT carries `app=v1`. Insertion is a
 tap-to-load sandboxed iframe on the **app's own origin**; app script,
-markup and style never enter a hello.mesh document. The visitor's
+markup and style never enter a hello.mesh document. hello.mesh presents
+them in an Apps shelf above Services (`add-app-shelf`, `ncy.3`); the
+shelf consumes that living insertion. The visitor's
 rung-1 key lives in IndexedDB of hello origins (`http://hello.mesh`
 and every LAN gateway `http://10.42.<x>.1`), so `canEmbed` refuses
 every key-bearing origin structurally: IP-literal hosts, reserved
@@ -93,6 +95,6 @@ host until they open one. Identity over the bridge is
   `10.254` stays mesh-wide): `openspec/specs/link-local-mgmt/spec.md`
 - Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
   candidate): `openspec/specs/identity-derived-ula/spec.md`
-- Mini-apps (TXT `app=v1`, node-side manifest fetch, sandboxed
-  cross-origin card; key origin ≠ app origin):
+- Mini-apps (TXT `app=v1`, node-side manifest fetch, Apps shelf,
+  sandboxed cross-origin card; key origin ≠ app origin):
   `openspec/specs/mesh-mini-apps/spec.md`
