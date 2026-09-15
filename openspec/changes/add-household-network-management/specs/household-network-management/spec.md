@@ -4,6 +4,26 @@
 
 ## ADDED Requirements
 
+### Requirement: Private resident Wi-Fi with optional isolated guests
+
+The household setup profile SHALL default to private resident Wi-Fi and SHALL
+offer an optional isolated guest network. Creating an identity SHALL NOT be
+required for internet access. Guest isolation SHALL satisfy the cross-node and
+address-family requirements below before being offered as supported.
+
+#### Scenario: Owner sets up household Wi-Fi
+
+- GIVEN a new household setup
+- WHEN the owner reviews the default Wi-Fi profile
+- THEN resident Wi-Fi requires network credentials and guest Wi-Fi is optional
+- AND neither internet access nor anonymous hub browsing requires identity creation
+
+#### Scenario: Existing open deployment is reviewed
+
+- GIVEN deployed nodes currently broadcast an open SSID
+- WHEN this design decision is recorded or displayed
+- THEN no live radio settings change without an explicit reviewed apply
+
 ### Requirement: Visible authenticated administration entry
 
 The public hub SHALL provide a visible “Manage network” entry. Privileged actions

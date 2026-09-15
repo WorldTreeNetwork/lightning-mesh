@@ -78,7 +78,7 @@ that contradicts the current per-node L3 architecture and risks DHCP conflicts.
 | NodeConnection | Peer/segment, Ethernet or mesh, band/channel, measured state | Prefer validated wire; retain required relay links |
 | RadioAssignment | Physical radio ID, supported roles/combinations, active role, band/channel/width/power | Capability-gated; unsupported sharing unavailable |
 | PortAssignment | Physical label, WAN / node link / client / disabled / advanced trunk | Per-model defaults; ambiguous ports require confirmation |
-| WiFiProfile | SSID, resident/guest/device purpose, security reference, bands, schedule | Proposed private residents; guests optional |
+| WiFiProfile | SSID, resident/guest/device purpose, security reference, bands, schedule | Confirmed target: private residents; isolated guests optional |
 | AccessPolicy | Client isolation, cross-node policy, local service exceptions, internet permission | Enforced on all paths, not just within one AP |
 | OptimizationPolicy | Balanced / Coverage / Local performance / Custom; min service bands, fallback reserve | Balanced and stability-first; explain custom constraints |
 | Authorization | Principal, role, node/house/service scope, credential bindings, expiry, version | Least scope needed; owner separate from network admin |

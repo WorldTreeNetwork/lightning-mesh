@@ -49,7 +49,7 @@ connectivity and offers the next relevant action.
 Owners manage delegated access. Residents and guests use the public front desk;
 an IdentiKey or `.mesh` name does not confer router administration.
 
-## Decisions awaiting review
+## Confirmed decisions and remaining design work
 
 Confirmed 2026-09-14: one initial owner, delegating to admins, members, and guests;
 everyone is invited to hello.mesh and optional identity creation. The
@@ -59,8 +59,11 @@ evidence, Biscuit attenuation, FOKS-style keyspaces, and secure-context boundari
 Also confirmed: house-owned network and visible authenticated **Manage network**
 entry, with physical proof for claiming nodes. Secret-knock entry is superseded.
 
-Still open: private resident Wi-Fi versus current open default. Recommended choices
-are explicitly marked in the brief. Standalone phone-browser ownership also needs
+Also confirmed: private resident Wi-Fi by default, with optional isolated guest
+Wi-Fi. Identity remains optional for internet access. This changes the target
+household profile; it does not change the currently deployed open SSID.
+
+Standalone phone-browser ownership still needs
 a trusted-origin/bootstrap decision before it can be promised as supported.
 
 ## Activation

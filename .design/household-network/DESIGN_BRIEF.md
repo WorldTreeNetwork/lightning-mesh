@@ -76,7 +76,7 @@ plain explanation; it is not the landing-page prerequisite.
 - Confirmed: visible **Manage network** entry protected by authentication and
   authorization, with physical proof when claiming a node. This supersedes the
   secret-knock entry in the [older IA](../fleet-admin/INFORMATION_ARCHITECTURE.md).
-- Private resident Wi-Fi with optional isolated guests; optional identity for
+- Confirmed: private resident Wi-Fi with optional isolated guests; optional identity for
   internet. Current open SSID remains current behavior until separately changed.
 - A wired-first **Balanced** policy. Reassigning a radio that removes coverage
   requires an impact preview and confirmation unless that exact tradeoff was
