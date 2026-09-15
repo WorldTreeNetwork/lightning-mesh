@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-capabilities-review-r2",
+  "node_id": "mjolnir-mesh-ai0.1",
+  "capability": "mesh-admin-capabilities",
+  "change_id": "add-mesh-admin-capabilities",
+  "requester": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-4-8-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-4.8",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-4-8-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Fresh independent advise of the NEW concrete codec-profile.md pin for add-mesh-admin-capabilities and its first codec-only slice ai0.1.1. Before reading design/pin/delta, read Why, existing-code and IdentiKey source anchors and write ten-line independent take. Then inspect codec-profile.md plus design/delta and write reviews/2026-09-15-advise-2.md with accept/send-back, READER and SPAWN. Decide whether the byte-level profile and narrow codec/holder-proof slice are ready to implement, with emphasis on domain/field binding, fingerprint namespace, raw token identity, parse ambiguity, crypto APIs, algorithm allowlist and not confusing possession with authorization. B1-B4 original review and future authorization-engine obligations remain separate. This review must not allow fake trusted-time/replay to claim full runtime. Concrete blockers only, no repetitive human policy questions. Record findings in review for beads, no markdown task boxes. Edit only this review and return for conductor persistence.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/proposal.md",
+      "invariant": "Read Why before design."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Built truth differs from proposals."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/portal.rs",
+      "invariant": "Public identity is not administration."
+    },
+    {
+      "symbol": "/home/dorje/work/IdentiKey/identikey-protocol/docs/standards/identikey-capability-v1.md",
+      "invariant": "Adopted Biscuit format, draft profile and missing upstream vectors must be represented honestly."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Contract cleanly distinguishes a valid narrower owner-authorized operation from membership, altered-holder, untrusted-issuer, stale-authority and replay attempts, with honest implementation boundaries.",
+    "if_false": "Review identifies concrete missing constraints or contradictions that prevent using this as the downstream trust contract."
+  },
+  "out_of_scope": [
+    {
+      "item": "runtime implementation and live node access",
+      "tracked_as": "mjolnir-mesh-bf7.1 / ai0.1 / ai0.9 / b6j.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise-2.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "change router configuration",
+      "edit product code",
+      "edit other agents files"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}

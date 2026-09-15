@@ -1,5 +1,9 @@
 # ADR proposal: explicit verifier context, no ambient authorization
 
+The local implementation pins and first codec/proof slice are in
+[codec-profile.md](codec-profile.md). Its new byte-level choices need independent
+review; the earlier abstract-contract acceptance does not accept those choices.
+
 The library implements a mesh application profile of the adopted IdentiKey Biscuit
 format, not a replacement token format. Source dossier:
 `openspec/changes/add-household-network-management/identity-and-welcome.md` and the

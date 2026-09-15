@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "id": "res-ai0-inventory-r2",
+  "packet_id": "pkt-ai0-inventory-r2",
+  "signer": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "deploy/openwrt/household-inventory.md",
+      "role": "evidence inventory"
+    }
+  ],
+  "evidence": {
+    "kind": "journey",
+    "observed": "Inventory journey verified against fleet files, setup-wireless and rple. Initial draft was task-red; repair plus conductor corrections distinguish observations/defaults/unknowns, last matching radio selection, and SSH host-key requirements. No live access or qualification.",
+    "note": "Conductor attests focused verification and persistence, not independent review authorship or hardware qualification.",
+    "journey": "Installer identifies receiver choices, management paths and qualification gaps."
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "fc430b0",
+    "paths": [
+      "deploy/openwrt/household-inventory.md"
+    ]
+  },
+  "summary": "Inventory journey verified against fleet files, setup-wireless and rple. Initial draft was task-red; repair plus conductor corrections distinguish observations/defaults/unknowns, last matching radio selection, and SSH host-key requirements. No live access or qualification.",
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "codex-conductor",
+    "content_hash": "sha256:a6921c650da7029729bcb9600319f4d90bc46ef771ffa7e90bb7e68aa7696fe8",
+    "signed_at": "2026-09-15T04:13:49.187Z"
+  },
+  "raw_ref": ".spawns/mjolnir-mesh-ai0.4-1789445199-168231-eba006e6/raw.txt"
+}
