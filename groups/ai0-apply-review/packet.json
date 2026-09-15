@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-apply-review-r1",
+  "node_id": "mjolnir-mesh-ai0.5",
+  "capability": "network-change-transactions",
+  "change_id": "add-durable-network-apply",
+  "requester": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-4-8-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-4.8",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-4-8-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Fresh independent instrument advise of add-durable-network-apply. Read proposal Why, living spec and cited existing code BEFORE design/tasks; write ten-line independent take, then compare proposed contract. Write reviews/2026-09-15-advise.md with ADVISE accept or send-back and READER/SPAWN provenance. Review crash durability, recovery verification, multi-writer locking, idempotency/retention, no false downstream internet evidence, real integration obligations and whether design choices suffice to implement safely. Do not equate a unit-tested model with OpenWrt runtime completion. Blockers go in review for conductor to record in beads, no markdown task boxes. No code edits, commits, network access or deployment.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/proposal.md",
+      "invariant": "Why first."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Not built until verified/folded."
+    },
+    {
+      "symbol": "deploy/openwrt/files/usr/sbin/mjolnir-apply:33",
+      "invariant": "Existing snapshot/result paths and mkdir lock; restoration not independently verified."
+    },
+    {
+      "symbol": "deploy/openwrt/install-node.sh:163",
+      "invariant": "Detached launcher survives session loss, not boot recovery."
+    },
+    {
+      "symbol": "deploy/openwrt/household-inventory.md",
+      "invariant": "Observed pilot differs from unqualified reboot/reapply behavior."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Controller loss and restart cannot create false committed/restored claims or local-only client-internet claims.",
+    "if_false": "A concrete crash/race/failure path can bypass snapshot/revision/verification guarantees."
+  },
+  "out_of_scope": [
+    {
+      "item": "Live hardware qualification or implementation",
+      "tracked_as": "mjolnir-mesh-ai0.5 / lpv / z3th"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "change router configuration",
+      "edit product code",
+      "edit other agents files"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}
