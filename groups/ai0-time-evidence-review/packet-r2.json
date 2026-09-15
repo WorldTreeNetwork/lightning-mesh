@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-1-2-time-evidence-r2",
+  "node_id": "mjolnir-mesh-ai0.1.2",
+  "capability": "mesh-admin-capabilities",
+  "change_id": "add-mesh-admin-capabilities",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "fable-5.1-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Targeted re-review of add-mesh-admin-capabilities/time-evidence.md after send-back 2026-09-15-advise-time-evidence.md. First write a short independent take from Why + living spec + codec-profile time warning + verify_holder_proof, then open the previous send-back and the amended pin. Verdict whether T-1 through T-5 are closed as constraint text. Write reviews/2026-09-15-advise-time-evidence-r2.md with ADVISE accept or send-back, READER and SPAWN. Do not reopen DECIDED v2 profiles. No engine implementation. Keep concise.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/proposal.md:7",
+      "invariant": "Read Why first."
+    },
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise-time-evidence.md:58",
+      "invariant": "T-1 and T-2 were blocking; T-3..T-5 same-edit clarifications."
+    },
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/time-evidence.md",
+      "invariant": "Amended pin after send-back."
+    },
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/codec-profile.md:97",
+      "invariant": "AuthorizerBuilder::time is not trusted evidence."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "T-1..T-5 are closed in the pin; wall-clock cannot masquerade as freshness; cap arithmetic has issued_at.",
+    "if_false": "A named T-n remains open as a concrete missing constraint."
+  },
+  "out_of_scope": [
+    {
+      "item": "authorization engine implementation",
+      "tracked_as": "mjolnir-mesh-ai0.1"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise-time-evidence-r2.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement engine",
+      "edit product code",
+      "edit the pin in this review pass"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}
