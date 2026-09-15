@@ -21,8 +21,8 @@
     "kind": "contrast",
     "observed": "Independent Opus4.8 reader accepted the durable-apply design, with concrete implementation gates recorded on ai0.5. Subsequent design refinements and exact storage/locking pins must be included in implementation-readiness review. No runtime built.",
     "note": "Conductor attests focused verification and persistence, not independent review authorship or hardware qualification.",
-    "if_true": "Narrow valid-holder operation distinct from forged, stale and untrusted requests.",
-    "if_false": "Contract fails a named trust boundary."
+    "if_true": "Controller loss and restart cannot create false committed/restored claims or local-only client-internet claims.",
+    "if_false": "A concrete crash/race/failure path can bypass snapshot/revision/verification guarantees."
   },
   "disposition": "pass",
   "promoted": false,
@@ -36,7 +36,7 @@
   "signature": {
     "mode": "stand-in",
     "stand_in_id": "codex-conductor",
-    "content_hash": "sha256:e4847c18fe3f52d37874ad1a791abed4f53aa5abe66f0268c7083debcb01dc2e",
+    "content_hash": "sha256:75d0043bd9d310613c3e07b1b9df5c76b0b29de80acc3a092867c9d8f620f714",
     "signed_at": "2026-09-15T19:33:28.818Z"
   },
   "raw_ref": ".spawns/mjolnir-mesh-ai0.5-1789445580-185063-98a38b12/raw.txt"
