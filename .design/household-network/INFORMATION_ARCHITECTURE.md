@@ -1,14 +1,15 @@
 # Information Architecture: Household network management
 
 > Proposed extension of the [brief](DESIGN_BRIEF.md), 2026-09-14.
-> Does not supersede the older fleet-admin IA until reviewed.
+> Visible authenticated admin entry is confirmed and supersedes the older
+> secret-knock entry. Other unconfirmed proposals remain under review.
 
 ## Site map
 
 ```text
 Public front desk /
   Connect / local services / community identity (existing)
-  Manage network /admin (proposed discoverable entry)
+  Manage network /admin (confirmed visible, authenticated entry)
   Set up a node /setup (only offers eligible physical pairing)
 
 Authenticated house /admin/houses/:houseId

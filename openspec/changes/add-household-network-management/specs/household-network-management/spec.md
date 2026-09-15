@@ -4,6 +4,19 @@
 
 ## ADDED Requirements
 
+### Requirement: Visible authenticated administration entry
+
+The public hub SHALL provide a visible “Manage network” entry. Privileged actions
+SHALL require authentication and scoped destination authorization. Claiming a new
+node SHALL require physical proof; discovering the entry SHALL NOT grant access.
+
+#### Scenario: Visitor opens Manage network
+
+- GIVEN a visitor without an administrative grant
+- WHEN they follow the visible Manage network link
+- THEN they can reach the authentication/access guidance
+- AND cannot perform privileged operations or claim a node without required proof
+
 ### Requirement: One initial owner delegates scoped capabilities
 
 The product SHALL begin with one owner and offer Admin, Member, and Guest presets

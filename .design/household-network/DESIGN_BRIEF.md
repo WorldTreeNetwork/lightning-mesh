@@ -73,8 +73,9 @@ plain explanation; it is not the landing-page prerequisite.
 - Proposed implementation: Biscuit agency capabilities and the existing IdentiKey
   shared-keyspace model, with its runtime gaps explicitly tracked. See the
   [identity and welcome refinement](../../openspec/changes/add-household-network-management/identity-and-welcome.md).
-- Discoverable **Manage network** entry protected by authorization. This proposes
-  changing the secret-knock requirement in the [older IA](../fleet-admin/INFORMATION_ARCHITECTURE.md).
+- Confirmed: visible **Manage network** entry protected by authentication and
+  authorization, with physical proof when claiming a node. This supersedes the
+  secret-knock entry in the [older IA](../fleet-admin/INFORMATION_ARCHITECTURE.md).
 - Private resident Wi-Fi with optional isolated guests; optional identity for
   internet. Current open SSID remains current behavior until separately changed.
 - A wired-first **Balanced** policy. Reassigning a radio that removes coverage

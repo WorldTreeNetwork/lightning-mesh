@@ -1,5 +1,11 @@
 # Information Architecture: Mjolnir Fleet Admin
 
+> Historical design. The user confirmed a visible authenticated **Manage network**
+> entry for shipped nodes; the secret-knock requirement below is superseded by
+> [household network IA](../household-network/INFORMATION_ARCHITECTURE.md).
+> Physical proof remains required for node claiming. This records a design
+> decision, not shipped UI behavior.
+
 > Structural layer for the hidden operator console layered on the public
 > `hello.mesh` front desk. Produced via the information-architecture skill.
 > No prior `DESIGN_BRIEF.md` existed; the framing below is derived from the

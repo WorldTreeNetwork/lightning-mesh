@@ -24,7 +24,8 @@ Requirements: [draft delta](specs/household-network-management/spec.md).
 
 - `mjolnir-mesh-bf7`: earlier fleet admin epic. Retain symmetric target-node
   authorization, fleet navigation, and reversible uplink configuration. Propose
-  revisiting hidden entry and raw owner-list mutation; do not silently supersede it.
+  replacing hidden entry with the user-confirmed visible authenticated entry;
+  raw owner-list mutation is addressed by the delegated authority proposal.
 - `mjolnir-mesh-b6j.2`: reuse the proposed signed control envelope, installed signer,
   physical pairing, destination verification, and receipts. The newer
   [secure-context proposal](../../../docs/network-coordination/secure-context-and-control-plane.md)
@@ -55,8 +56,10 @@ everyone is invited to hello.mesh and optional identity creation. The
 [identity and welcome refinement](identity-and-welcome.md) records latest IdentiKey
 evidence, Biscuit attenuation, FOKS-style keyspaces, and secure-context boundaries.
 
-Still open: visible admin entry versus previous secret
-knock; private resident Wi-Fi versus current open default. Recommended choices
+Also confirmed: house-owned network and visible authenticated **Manage network**
+entry, with physical proof for claiming nodes. Secret-knock entry is superseded.
+
+Still open: private resident Wi-Fi versus current open default. Recommended choices
 are explicitly marked in the brief. Standalone phone-browser ownership also needs
 a trusted-origin/bootstrap decision before it can be promised as supported.
 
