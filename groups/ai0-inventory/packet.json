@@ -1,0 +1,23 @@
+{
+  "schema_version":"1.0",
+  "id":"pkt-ai0-inventory-r1",
+  "node_id":"mjolnir-mesh-ai0.4",
+  "requester":{"id":"codex-conductor","kind":"model","harness":"codex","signing":{"mode":"stand-in","stand_in_id":"codex-conductor"}},
+  "assignee":{"id":"opus-5","kind":"model","harness":"claude","interface":"opus-5","signing":{"mode":"stand-in","stand_in_id":"opus-5"}},
+  "role":"worker",
+  "goal":"Write a concise evidence-backed household hardware inventory at deploy/openwrt/household-inventory.md. Read repo fleet sources, setup-wireless.sh, node scripts and bd show mjolnir-mesh-rple for dated live evidence of the Symbio gateway pilot. Distinguish observed hardware from stale fleet entries and unknown capability. Include SKU/firmware/radio bands/known port roles/management paths, current three-node pilot topology, candidate upstream receiver constraints, a safe temporary Ethernet management topology, and next-hardware requirements. Never equate advertised driver combinations with qualified concurrent operation. This is a documentation-only inventory using existing evidence: no SSH, network joins, new scans, deployment or config mutation. Point future qualification to lpv and z3th; no duplicate markdown TODO list. Work within conductor-workers boundary: edit only declared path and return for conductor persistence. Do not expand into UX or runtime implementation.",
+  "anchors":[
+    {"symbol":"deploy/openwrt/fleet-nodes.conf","invariant":"Historical bootstrap inventory, not proof every listed node is currently present."},
+    {"symbol":"deploy/openwrt/fleet.yml","invariant":"Retain observation date; do not relabel old snapshot live."},
+    {"symbol":"deploy/openwrt/setup-wireless.sh","invariant":"Radio roles are band-derived; mt76 concurrency assumptions need actual qualification."},
+    {"symbol":"bd show mjolnir-mesh-rple","invariant":"Dated observed Symbio2.4GHz station on m3000-b,5GHz mesh to m3000/tr3000, actual verification and limitations."},
+    {"symbol":"AGENTS.md","invariant":"One laptop WiFi radio; protect its internet default and preserve existing user edits."}
+  ],
+  "acceptance":{"kind":"journey","journey":"An installer can identify a feasible upstream receiver and safe wired management arrangement from the inventory, with each observation dated and unknowns explicitly marked rather than inferred.","criteria":["Pilot topology matches rple without claiming reboot qualification","Historical AP3000/WR3000S entries are distinct from observed pilot nodes","Ports and management paths cite concrete repo evidence or say unknown","Dual-radio and additional-radio/ethernet hardware limits are explicit"]},
+  "out_of_scope":[{"item":"Live qualification and production network profiles","tracked_as":"mjolnir-mesh-lpv / mjolnir-mesh-z3th / mjolnir-mesh-ai0.5"}],
+  "constraints":{"permission":"write","paths":["deploy/openwrt/household-inventory.md"],"do_not":["deploy","push","fold","SSH to nodes","join WiFi","edit product code","edit unrelated files"]},
+  "load_class":"structure-clear",
+  "rigor":"brief",
+  "density":"standard",
+  "surface":"packet-only"
+}
