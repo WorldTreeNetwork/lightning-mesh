@@ -180,6 +180,10 @@ success interpretations. Test web and desktop against identical fixture states.
 
 ## Out of scope
 
+Future exploration: [open backhaul with an optional paid right to pass](../../openspec/changes/add-household-network-management/future-transit.md),
+potentially using local-EVM settlement. Private resident/optional guest Wi-Fi
+remains confirmed; open backhaul and payment mechanics are not selected for v1.
+
 This deliverable does not implement or deploy firmware, change the live SSID,
 choose a new hardware SKU, promise seamless roaming, implement collective voting,
 or provide cloud management. Hardware qualification and browser trust are explicit

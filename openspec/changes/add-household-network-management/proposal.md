@@ -68,5 +68,9 @@ a trusted-origin/bootstrap decision before it can be promised as supported.
 
 ## Activation
 
+Future scope: [open backhaul and a paid right to pass](future-transit.md), potentially
+settled through local-EVM token transfers. This is parked exploration, not an
+initial requirement or a decision to open deployed backhaul.
+
 This is a planning proposal. Implementation remains pending review and activation.
 Work state and implementation follow-ups are tracked in beads, not checkboxes here.
