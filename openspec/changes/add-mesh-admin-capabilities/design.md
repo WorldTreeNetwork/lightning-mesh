@@ -4,6 +4,7 @@
 > [steering](../add-household-trust-contract/steer.md) and the
 > [trust design timing section](../add-household-trust-contract/design.md)).**
 > This supersedes every earlier same-day 900 s / 3600 s reading.
+> Engine pin: [time-evidence.md](time-evidence.md).
 >
 > | Profile | Token default | Token ceiling | Stale-authority maximum |
 > |---|---:|---:|---:|
@@ -77,7 +78,7 @@ revocation lineage. Do not mint grants for unsupported operations.
 
 Configuration grants take their token default and ceiling from the household
 security profile. Standard (the default) is 24 h / 7 d. Strict is 15 min / 1 h.
-Relaxed is 7 d / 30 d.
+Relaxed is 7 d / 30 d. Exact engine input is [time-evidence.md](time-evidence.md).
 
 The verifier takes the profile and grant-class caps as trusted verifier input,
 never from the token, and applies the shortest applicable cap. It separately

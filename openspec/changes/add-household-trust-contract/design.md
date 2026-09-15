@@ -97,8 +97,9 @@ Never put keys, tokens or secret-bearing operation arguments in URLs/public logs
 > [Sol consult](notes/2026-09-15-sol-grant-profiles-consult.md); see
 > [steer.md](steer.md)).** This supersedes every earlier same-day timing
 > reading (900 s / 3600 s). The recovery window below is unchanged. `ai0.1.2`
-> owns the authenticated time-evidence mechanism. The profile values need a
-> targeted timing re-review.
+> owns the authenticated time-evidence mechanism
+> ([engine pin](../add-mesh-admin-capabilities/time-evidence.md)). The profile
+> values need a targeted timing re-review.
 
 Duke delegated this choice with "decide for me" and resumed the campaign.
 The physical recovery window defaults to 120 seconds, is configurable by an
