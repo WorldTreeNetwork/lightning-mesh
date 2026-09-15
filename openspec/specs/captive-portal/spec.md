@@ -8,23 +8,24 @@ Code: `crates/mjolnir-hello/src/portal.rs`.
 
 ## ADDED Requirements
 
-### Requirement: Offer IdentiKey, or just the internet
+### Requirement: Offer IdentiKey without gating internet
 
-The portal page SHALL offer two actions only: create an IdentiKey (link
-to `http://hello.mesh/`) and a pass-through labeled “Just the internet,
-please”. The page SHALL NOT show a separate “No thanks” control. The
-pass-through SHALL POST `/api/portal/pass` and then re-trigger the OS
-probe so the sheet can close.
+The network SHALL allow internet use as soon as a client receives network configuration, without requiring a portal action. The CAPPORT API SHALL report `captive:false`, and intercepted operating-system connectivity probes SHALL receive their expected open-network success response by default. The voluntary front desk SHALL remain available at `http://hello.mesh/` for creating an IdentiKey and discovering local services.
 
-#### Scenario: Phone joins the mesh SSID
+#### Scenario: Phone joins a mesh with an uplink
 
-- GIVEN a client OS opens its captive-portal sheet on this node
-- WHEN the stranger sees the page
-- THEN they can create an IdentiKey or take “Just the internet, please”,
-  and nothing is blocked either way
+- GIVEN a client joins the mesh SSID and receives network configuration
+- WHEN its operating system checks whether the network is captive
+- THEN the check succeeds without user interaction and ordinary internet use is available
 
-#### Scenario: Decline is one button
+#### Scenario: Person chooses to visit the front desk
 
-- GIVEN the portal HTML
-- WHEN a reader searches for decline copy
-- THEN “Just the internet, please” is present and “No thanks” is absent
+- GIVEN a connected client whose operating system considers the network open
+- WHEN the person opens `http://hello.mesh/`
+- THEN the front desk remains available without making identity creation or dismissal a prerequisite for internet use
+
+#### Scenario: Mesh has no upstream internet
+
+- GIVEN a client joins a mesh that currently has no usable uplink
+- WHEN the person opens `http://hello.mesh/`
+- THEN the mesh-local front desk remains reachable even though external internet destinations are unavailable
