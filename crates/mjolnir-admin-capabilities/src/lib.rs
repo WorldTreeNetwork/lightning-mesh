@@ -4,14 +4,17 @@
 //! `openspec/changes/add-mesh-admin-capabilities/codec-profile.md`. This is a
 //! local pin, not upstream IdentiKey conformance.
 //!
-//! This crate establishes **possession only**. A [`VerifiedHolderProof`] proves
-//! that the holder of a key signed those exact canonical bytes and that the
-//! presented raw token hashes to the identity named inside them. It is not
-//! authorization: issuer/rights binding, trusted time, expiry, revocation,
-//! target-challenge matching and durable one-use replay reservation are separate
-//! mandatory checks that this crate deliberately does not implement or expose.
+//! Codec layer: [`verify_holder_proof`] establishes **possession only**.
+//! Engine layer: [`authorize`] is a bounded authorization decision, not
+//! permission to execute. `b6j.2` must reserve [`ReplayObligation`] first.
 
 #![forbid(unsafe_code)]
+
+mod engine;
+pub use engine::{
+    AuthorizedGrant, AuthzError, GrantClass, HighWaterFloor, ReplayObligation, SecurityProfile,
+    TimeEvidence, VerifiedAuthority, authorize, verify_and_authorize,
+};
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use minicbor::{Decoder, Encoder};
