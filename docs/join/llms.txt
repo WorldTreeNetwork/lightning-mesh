@@ -11,7 +11,7 @@ Verified against commit 503cd17 (2026-09-13).
 ## Join with a phone or laptop (read in order)
 
 - [Connect to the Wi-Fi](person/01-connect.md): open SSID (factory "⚡", home fleet "Lightning Mesh"); confirm a 10.42.x.n address; roaming and DNS caveats
-- [Say hello](person/02-hello-mesh.md): immediate default-open connection; open http://hello.mesh voluntarily (http only); page tour
+- [Say hello](person/02-hello-mesh.md): immediate connection when online; local portal when offline; open http://hello.mesh (http only); page tour
 - [Create your identity](person/03-identity.md): IdentiKey (browser-held Ed25519, soft custody); 24-word recovery phrase (BIP39 word list encoding the raw 32-byte key, not wallet seed derivation); what is shared mesh-wide
 - [Sign in to mesh apps](person/04-sign-in.md): /assert consent flow; what apps learn; remembered approvals
 - [Find services](person/05-services.md): Services panel; self-signed https warnings; internet vs offline behavior

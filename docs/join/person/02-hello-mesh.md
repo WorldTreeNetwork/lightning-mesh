@@ -1,7 +1,7 @@
 ---
 id: person.hello
 title: Say hello
-description: Connect without a portal gate and open hello.mesh, the front desk every router serves.
+description: Connect immediately when online, or use the offline portal to reach the local hello.mesh front desk.
 path: person
 order: 2
 audience: [person, agent]
@@ -9,7 +9,7 @@ status: built
 time: 2 min
 requires: [person.connect]
 next_step: person.identity
-verified_against: a402557 (2026-09-14)
+verified_against: 3b862d5 (2026-09-14)
 ---
 
 # Say hello
@@ -18,19 +18,22 @@ Every router runs a small front desk at **hello.mesh**. It shows who's
 around, what you can open, and how the routers connect, and it's where you
 make your identity.
 
-> **Status: built.** Connectivity checks report an open connection immediately.
-> Opening hello.mesh is voluntary and does not control internet access.
+> **Status: built.** An online mesh reports an open connection immediately. An
+> offline mesh opens a local explanation and hello.mesh link. No button controls
+> internet access.
 
 ## Step 1: Confirm the connection
 
-Right after you join, your phone or laptop should mark the Wi-Fi as connected.
-There is no welcome-sheet button, login, or account step required for internet
-access.
+Right after you join, your phone or laptop checks whether the mesh currently has
+an internet route. With one, it marks the Wi-Fi connected without a sheet. With
+no route, it may open a sheet explaining that the local mesh is still available.
 
 **Do:** wait for the Wi-Fi indicator to show connected.
 
-**Expect:** normal internet access when any mesh router has an uplink. Local
-`.mesh` services still work when the mesh has no internet uplink.
+**Expect:** normal internet access without a button when any mesh router has an
+uplink. With no uplink, use **Open hello.mesh** in the sheet for local people and
+services. The sheet clears automatically after routing returns and the device
+checks again.
 
 **If not:** forget the network and rejoin it, then see
 [Troubleshooting](troubleshooting.md).

@@ -9,7 +9,7 @@ status: built
 time: reference
 requires: []
 next_step: null
-verified_against: a402557 (2026-09-14)
+verified_against: 3b862d5 (2026-09-14)
 ---
 
 # Troubleshooting
@@ -42,14 +42,14 @@ You got an address, but the router at `10.42.x.1` doesn't answer.
 | Cause | Fix |
 |---|---|
 | No router in the mesh has an uplink right now | Nothing to fix on your device. `.mesh` services still work |
-| Your phone says "Connected" anyway | Expected. The mesh is available even when no router currently has an internet uplink |
+| A sheet says the local mesh is available | Expected when the router has no internet route. Use its hello.mesh link for local services |
 
 ## A captive welcome sheet appeared
 
-Updated routers report the network as open, so a welcome sheet is unexpected.
-Close it with the device's Done or Cancel control and rejoin. If it returns,
-tell the operator that `/api/captive-portal` should report `"captive":false`.
-You can open `http://hello.mesh` voluntarily in your normal browser.
+This is expected when the mesh has no internet route. It explains the offline
+state and links to `http://hello.mesh`; no login or dismissal unlocks internet.
+If a real internet site already loads while the sheet remains, close it and
+rejoin. Tell the operator that CAPPORT and the router's default route disagree.
 
 ## My identity disappeared
 

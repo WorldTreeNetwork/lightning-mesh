@@ -9,7 +9,7 @@ status: built
 time: reference
 requires: []
 next_step: person.connect
-verified_against: a402557 (2026-09-14)
+verified_against: 3b862d5 (2026-09-14)
 ---
 
 # Join Lightning Mesh
@@ -49,7 +49,7 @@ planned.
 
 | Built | Not yet |
 |---|---|
-| Open Wi-Fi, immediate internet, hello.mesh front desk | Seamless roaming between routers (being field-tested) |
+| Open Wi-Fi, immediate internet when available, offline hello.mesh portal | Seamless roaming between routers (being field-tested) |
 | IdentiKey with a 24-word recovery phrase | Deleting your identity from a mesh |
 | Signing in to mesh apps | Claiming your own `.mesh` name from hello.mesh |
 | `.mesh` services, published by operators and apps | App cards inside hello.mesh ([mini-apps](publish/02-mini-apps.md)) |

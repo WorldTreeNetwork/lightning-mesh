@@ -9,7 +9,7 @@ status: built
 time: 2 min
 requires: [person.hello]
 next_step: person.leave
-verified_against: a402557 (2026-09-14)
+verified_against: 3b862d5 (2026-09-14)
 ---
 
 # Find services
@@ -62,9 +62,9 @@ router, for example `http://walkie-talkie.mesh`. Type the `http://` or
 | A router in the mesh has an internet uplink | Everything: mesh services **and** the internet |
 | No router has internet | hello.mesh, `.mesh` services, People and your identity. Internet sites and apps that need them don't load |
 
-Your phone may say "Connected" even when the mesh has no uplink because local
-mesh services remain available. If websites don't load but `http://hello.mesh`
-does, there is no internet uplink right now. That isn't your phone's fault.
+Your phone may open a local mesh sheet when no internet route is available.
+If websites don't load but `http://hello.mesh` does, there is no internet uplink
+right now. That isn't your phone's fault.
 
 You can't claim your own `.mesh` name from hello.mesh yet. Names are
 published by apps and router operators.

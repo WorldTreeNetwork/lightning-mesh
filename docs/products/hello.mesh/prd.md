@@ -9,9 +9,9 @@ scope_tier: mvp
 > **As built (2026-09-14).** This is the July 2026 MVP plan, kept as written.
 > Where it differs from the built product:
 > - There is **no "just browse" button** (Journey 1). Anonymous use of
->   hello.mesh and the internet needs no action at all (FR5). Connectivity
->   checks report an open network immediately; people open hello.mesh
->   voluntarily when they want the front desk or an IdentiKey.
+>   hello.mesh and the internet needs no action at all (FR5). With an internet
+>   route, connectivity checks report an open network immediately. Without one,
+>   the OS sheet explains the offline state and links to hello.mesh.
 > - `.mesh` name resolution, out of scope here, shipped on its own track, so
 >   the page is reached at `http://hello.mesh` as well as by LAN IP.
 > - FR23 (RFC 8910 option 114, now pointing at `/api/captive-portal`) and FR26

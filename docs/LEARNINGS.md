@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-09-14 — Uplink-aware portal behavior supersedes the earlier default-open rule: the kernel default route is the local data-plane truth. Route present means `captive:false` plus exact OS success; no route means an informational offline portal. User action never changes either state. (`crates/mjolnir-hello/src/portal.rs`, `openspec/specs/captive-portal/spec.md`)
 - 2026-09-14 — Default-open client behavior supersedes the 2026-08-31 captive-sheet buttons: CAPPORT always reports `captive:false`, intercepted OS probes receive their byte-exact success payload immediately, and `/api/portal/pass` is compatibility-only. (`crates/mjolnir-hello/src/routes.rs`, `openspec/specs/captive-portal/spec.md`)
 - 2026-08-31 — This repo had no `openspec/`; `ready.py` / `run.py --until fold` stop empty until a change is actually scaffolded. (`openspec/`, `/Users/dukejones/.agents/skills/ready/scripts/ready.py`)
 - 2026-08-31 — Captive portal copy is two buttons: IdentiKey CTA + “Just the internet, please”. There is no “No thanks” — that was the same pass-through. Direct fix, not a foldable change. (`crates/mjolnir-hello/src/portal.rs`)
