@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-1-2-time-evidence-r1",
+  "node_id": "mjolnir-mesh-ai0.1.2",
+  "capability": "mesh-admin-capabilities",
+  "change_id": "add-mesh-admin-capabilities",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "fable-5.1-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Fresh independent instrument/architecture advise of the NEW ai0.1.2 time-evidence pin. First read only add-mesh-admin-capabilities/proposal.md Why, living-specs/spec.md, codec-profile.md (no time API), crates/mjolnir-admin-capabilities/src/lib.rs verify_holder_proof, and portal.rs internet_available. Write a ten-line independent take before opening time-evidence.md, design.md, tasks.md or the household-authority delta. Then compare and write reviews/2026-09-15-advise-time-evidence.md with ADVISE accept or send-back, READER and SPAWN provenance. Scope is trusted-time/stale-authority/profile-parameterization only, not codec bytes and not a runtime engine. Be rigorous that AuthorizerBuilder::time is not trusted evidence, token expiry is independent of stale-authority, unlimited is not a config grant, grant-class caps cannot loosen, fail-closed on missing/regressed time, and F-D issuer-revocation-under-partition is covered. Do not require another human policy decision; DECIDED v2 profiles are already recorded. Distinguish specification pin from runtime. Keep the review concise. Beads: put blocking findings in the review, not new markdown task sprawl.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/proposal.md:7",
+      "invariant": "Read Why first, before proposed design."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Proposed requirements are not evidence of built runtime."
+    },
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/codec-profile.md:97",
+      "invariant": "Do not use AuthorizerBuilder::time() as trusted time evidence; it reads the clock."
+    },
+    {
+      "symbol": "crates/mjolnir-admin-capabilities/src/lib.rs:492",
+      "invariant": "VerifiedHolderProof is possession only, not authorization or time."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/portal.rs:55",
+      "invariant": "Kernel default route is data-plane truth; admin grants must not gate ordinary connectivity."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Pin distinguishes expired-but-fresh-authority, unexpired-but-stale-authority, class-cap, unlimited-as-config, and clock-rollback refusals, with honest engine-API boundaries.",
+    "if_false": "Review identifies concrete missing constraints that would let a destination treat wall-clock or token assertions as freshness."
+  },
+  "out_of_scope": [
+    {
+      "item": "authorization engine implementation and live nodes",
+      "tracked_as": "mjolnir-mesh-ai0.1"
+    },
+    {
+      "item": "codec/holder-proof slice",
+      "tracked_as": "mjolnir-mesh-ai0.1.1"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise-time-evidence.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement engine",
+      "edit product code",
+      "edit other agents files",
+      "accept in the conductor tab"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}
