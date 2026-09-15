@@ -91,6 +91,31 @@ Never put keys, tokens or secret-bearing operation arguments in URLs/public logs
 
 ## Qualification owed downstream
 
+## Delegated v1 timing policy
+
+Duke delegated this choice with "decide for me" and resumed the campaign.
+The physical recovery window defaults to 120 seconds, is configurable by an
+authorized owner, and closes after one successful recovery. This is a WPS-like
+interaction, not use of the WPS authentication protocol. Enrollment proof and
+fresh physical confirmation are still both required. Reboot or loss of the
+window's monotonic timing state closes it; retry cannot silently extend it.
+
+Configuration-changing admin grants default to 900 seconds. Owner policy may
+configure a positive lifetime up to 3600 seconds for v1. Renewal requires fresh
+authorization checks, including verified current authority/revocation state;
+it is not a sliding lease extended by activity. Policy changes cannot lengthen
+an already-issued grant or exceed its issuer/delegation ceiling. Internet access
+and ordinary public hub use have no such administrative expiry requirement.
+Unreliable expiry evidence refuses privileged changes, not ordinary connectivity.
+
+The finite recovery-window configuration limits and concrete timing mechanism
+remain part of the bf7.1 ceremony design, not a new human gate. They must exclude
+an unlimited window. The 15-minute default and one-hour admin ceiling resolve
+the offline-validity decision g3y3; internet connectivity alone is not evidence
+that authority information is fresh.
+
+## Qualification owed downstream (continued)
+
 Owner binding races/crash recovery (bf7.1), token origin/holder/attenuation vectors
 (ai0.1), non-ingesting consumer forgery/replay rejection (ai0.9) and exactly-once
 acceptance/unknown outcomes (b6j.2) must be implemented and tested independently.

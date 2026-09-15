@@ -1,5 +1,23 @@
 ## ADDED Requirements
 
+### Requirement: Separate bounded recovery and administrative lifetimes
+The recovery ceremony SHALL default to a configurable 120-second physical window
+and close on successful recovery, reboot or loss of trustworthy window timing.
+Configuration-changing admin grants SHALL default to 900 seconds, be configurable
+by owner policy up to 3600 seconds in v1, and require fresh authorization checks
+for renewal. Configuration changes SHALL NOT lengthen issued grants. Neither
+window SHALL replace required credential proof or gate ordinary internet access.
+
+#### Scenario: Activity does not renew a grant
+- GIVEN a 900-second configuration grant
+- WHEN the holder continues using it beyond expiry without fresh authorization
+- THEN privileged changes are refused while ordinary connectivity remains available
+
+#### Scenario: Recovery window is consumed
+- GIVEN a valid enrolled credential and a fresh physically opened recovery window
+- WHEN recovery succeeds or the node reboots
+- THEN the window closes and cannot authorize another recovery
+
 ### Requirement: Physical claim anchors authority
 The system SHALL bind one initial owner to an unclaimed node only through verified
 device-specific proof and a fresh physical ceremony, atomically persisted against
