@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-codec-r1",
+  "node_id": "mjolnir-mesh-ai0.1.1",
+  "requester": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-5"
+    }
+  },
+  "role": "worker",
+  "goal": "Implement ONLY the first codec/holder-proof slice of add-mesh-admin-capabilities exactly per codec-profile.md and latest independent review. New workspace crate mjolnir-admin-capabilities (members glob discovers it), no changes to existing product crates. Pin minicbor0.26.5/std and ed25519-dalek2.2.0, use workspace blake3/thiserror as useful. API typed request/closed operation enum, strict canonical encode/decode, exact raw-token digest, algorithm-committing holder fingerprint, strict Ed25519 proof verification returning an unforgeable verified-possession type with readonly accessors. Require explicit algorithm enum/tag so unsupported algorithms/aliases reject, and rehash exact provided token. No authorize/execute/mint/time/replay implementation and no pass implying those. Before implementation, write focused tests, run to observe red (prefer behavioral stubs over compile-only failure), record exact command/output in groups/ai0-codec/red-first.md, then implement and run focused test. Tests: literal golden hex for both operations/fingerprint preimage; integer boundaries; malformed arity/types/length/trailing/nonminimal/indefinite/unknown/oversize; mutate each signed field and token, wrong holder, weak key, bad signature, valid proof positive control. Fingerprint not raw-key namespace. No unchecked parser indexing/large allocations from untrusted lengths. Preserve Cargo.lock unrelated content; do not regenerate whole workspace versions. Format only owned Rust files. Return concise summary and test evidence for conductor persistence. No downstream imports, live endpoint or router access.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/codec-profile.md",
+      "invariant": "Exact local pin, not upstream conformance; signatures prove possession, not authorization."
+    },
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise-2.md",
+      "invariant": "Must exist and accept this byte profile before implementation."
+    },
+    {
+      "symbol": "Cargo.toml:1",
+      "invariant": "Workspace members crates/*; new crate auto-discovered, no root manifest edit."
+    },
+    {
+      "symbol": "AGENTS.md",
+      "invariant": "Preserve unrelated concurrent edits; use CARGO_TARGET_DIR=/tmp/lm-target."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "CARGO_TARGET_DIR=/tmp/lm-target cargo test --locked -p mjolnir-admin-capabilities",
+    "criteria": [
+      "Literal canonical fixtures and all signed-field mutation cases pass",
+      "Unsupported encodings/algorithms and weak keys reject",
+      "No authorization, expiry, replay or deployment claim"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "Biscuit policy, authority/time/revocation and durable replay execution",
+      "tracked_as": "mjolnir-mesh-ai0.1 / ai0.9 / b6j.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "crates/mjolnir-admin-capabilities/Cargo.toml",
+      "crates/mjolnir-admin-capabilities/src/lib.rs",
+      "crates/mjolnir-admin-capabilities/tests/codec.rs",
+      "Cargo.lock",
+      "groups/ai0-codec/red-first.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "SSH to nodes",
+      "join WiFi",
+      "edit existing product crates",
+      "edit unrelated files"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only",
+  "capability": "mesh-admin-capabilities"
+}

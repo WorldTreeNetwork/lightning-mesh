@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "id": "res-ai0-apply-review-r1",
+  "packet_id": "pkt-ai0-apply-review-r1",
+  "signer": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise.md",
+      "role": "independent instrument design review"
+    }
+  ],
+  "evidence": {
+    "kind": "contrast",
+    "observed": "Independent Opus4.8 reader accepted the durable-apply design, with concrete implementation gates recorded on ai0.5. Subsequent design refinements and exact storage/locking pins must be included in implementation-readiness review. No runtime built.",
+    "note": "Conductor attests focused verification and persistence, not independent review authorship or hardware qualification.",
+    "if_true": "Narrow valid-holder operation distinct from forged, stale and untrusted requests.",
+    "if_false": "Contract fails a named trust boundary."
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "242de45",
+    "paths": [
+      "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise.md"
+    ]
+  },
+  "summary": "Independent Opus4.8 reader accepted the durable-apply design, with concrete implementation gates recorded on ai0.5. Subsequent design refinements and exact storage/locking pins must be included in implementation-readiness review. No runtime built.",
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "codex-conductor",
+    "content_hash": "sha256:e4847c18fe3f52d37874ad1a791abed4f53aa5abe66f0268c7083debcb01dc2e",
+    "signed_at": "2026-09-15T19:33:28.818Z"
+  },
+  "raw_ref": ".spawns/mjolnir-mesh-ai0.5-1789445580-185063-98a38b12/raw.txt"
+}
