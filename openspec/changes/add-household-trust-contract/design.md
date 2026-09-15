@@ -93,12 +93,12 @@ Never put keys, tokens or secret-bearing operation arguments in URLs/public logs
 
 ## Delegated v1 timing policy
 
-> **Confirmed by latest steering:** [the corrected decision](steer.md) retains
-> the 900-second default and owner-configurable 3600-second v1 ceiling below.
-> The earlier same-day 15-minute hard-cap note is superseded. Renewal requires
-> fresh authorization; policy cannot lengthen issued grants. `ai0.1.2` tracks
-> the exact time-evidence mechanism and independent engine-readiness review,
-> not another human policy decision.
+> **Timing policy: security profiles (Duke, 2026-09-15, decided after the
+> [Sol consult](notes/2026-09-15-sol-grant-profiles-consult.md); see
+> [steer.md](steer.md)).** This supersedes every earlier same-day timing
+> reading (900 s / 3600 s). The recovery window below is unchanged. `ai0.1.2`
+> owns the authenticated time-evidence mechanism. The profile values need a
+> targeted timing re-review.
 
 Duke delegated this choice with "decide for me" and resumed the campaign.
 The physical recovery window defaults to 120 seconds, is configurable by an
@@ -107,19 +107,56 @@ interaction, not use of the WPS authentication protocol. Enrollment proof and
 fresh physical confirmation are still both required. Reboot or loss of the
 window's monotonic timing state closes it; retry cannot silently extend it.
 
-Configuration-changing admin grants default to 900 seconds. Owner policy may
-configure a positive lifetime up to 3600 seconds for v1. Renewal requires fresh
-authorization checks, including verified current authority/revocation state;
-it is not a sliding lease extended by activity. Policy changes cannot lengthen
-an already-issued grant or exceed its issuer/delegation ceiling. Internet access
-and ordinary public hub use have no such administrative expiry requirement.
-Unreliable expiry evidence refuses privileged changes, not ordinary connectivity.
+Configuration-changing admin grants carry **two timers**:
+- **token lifetime**: how long the grant exists
+- **stale-authority maximum**: how long a destination may act on it without
+  verifying fresh authority and revocation information
+
+The owner selects a security profile. **Standard is the default.**
+
+| Profile | Token default | Token ceiling | Stale-authority maximum |
+|---|---:|---:|---:|
+| Strict | 15 min | 1 h | 15 min |
+| **Standard (default)** | **24 h** | **7 d** | **24 h** |
+| Relaxed (opt-in, persistent risk warning) | 7 d | 30 d | 7 d |
+
+**Profile rules**
+- Owners may shorten either timer. Going beyond a profile requires switching
+  profile.
+- Profile and policy changes apply only to newly issued grants. They never
+  lengthen an issued grant or exceed its issuer or delegation ceiling.
+- An unlocked owner signer renews grants locally, with no internet needed.
+  Delegates need owner-authorized reissue.
+- Renewal is not a sliding lease extended by activity.
+- "Fresh" means locally verifiable signed authority state, not internet
+  connectivity.
+- Relaxed tells the owner plainly: "A removed administrator may retain control
+  of an isolated router for up to 7 days."
+
+**Grant-class caps** apply regardless of profile. A token spanning classes takes
+the shortest applicable cap.
+
+| Class | Cap |
+|---|---|
+| Public diagnostics | No grant needed |
+| Private read-only diagnostics | May have no wall-clock expiry on the owner's registered, holder-bound device, but still end on holder revocation or authority-epoch change. Exclude secret or personal logs, key export and any mutation. Delegates get at most 30 days |
+| Guest Wi-Fi and constrained device management | Follows the profile |
+| Primary Wi-Fi, backhaul, radio, routing, firewall, DNS, uplink | Never unlimited. At most 24 h (1 h under Strict); stale authority never exceeds 24 h |
+| Firmware or software installation | Single transaction, at most 15 min, bound to the artifact digest, owner approval by default |
+| Ownership, issuer, recovery-policy, protected-key changes | Owner-only, single-use, at most 5 min. Claim and recovery ceremonies still apply |
+
+No configuration-changing or delegated Admin grant is ever unlimited. A durable
+owner credential is an issuer identity, not a standing execution capability.
+
+Internet access and ordinary public hub use have no administrative expiry
+requirement. Unreliable expiry or freshness evidence refuses privileged changes,
+not ordinary connectivity.
 
 The finite recovery-window configuration limits and concrete timing mechanism
 remain part of the bf7.1 ceremony design, not a new human gate. They must exclude
-an unlimited window. The 15-minute default and one-hour admin ceiling resolve
-the offline-validity decision g3y3; internet connectivity alone is not evidence
-that authority information is fresh.
+an unlimited window. The security profiles, grant-class caps and read-only
+no-expiry boundary above resolve the offline-validity decision g3y3. Internet
+connectivity alone is not evidence that authority information is fresh.
 
 ## Qualification owed downstream (continued)
 

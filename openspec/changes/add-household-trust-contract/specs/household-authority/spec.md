@@ -3,13 +3,67 @@
 ### Requirement: Separate bounded recovery and administrative lifetimes
 The recovery ceremony SHALL default to a configurable 120-second physical window
 and close on successful recovery, reboot or loss of trustworthy window timing.
-Configuration-changing admin grants SHALL default to 900 seconds, be configurable
-by owner policy up to 3600 seconds in v1, and require fresh authorization checks
-for renewal. Configuration changes SHALL NOT lengthen issued grants. Neither
-window SHALL replace required credential proof or gate ordinary internet access.
+Configuration-changing admin grants SHALL follow the owner's selected security
+profile. The profiles SHALL be (token default / token ceiling / stale-authority
+maximum):
+- **Strict:** 15 minutes / 1 hour / 15 minutes
+- **Standard:** 24 hours / 7 days / 24 hours. Standard SHALL be the default.
+- **Relaxed:** 7 days / 30 days / 7 days. Relaxed SHALL be opt-in and SHALL
+  show a persistent risk warning.
+
+Owners MAY shorten either timer.
+
+Regardless of remaining token lifetime, a grant SHALL be usable only while the
+destination has verified fresh authority and revocation information within the
+profile's stale-authority maximum. Beyond that, privileged use SHALL require
+owner reauthorization. Freshness SHALL mean locally verifiable signed authority
+state, not internet connectivity. Profile and policy changes SHALL apply only to
+newly issued grants and SHALL NOT lengthen issued grants. Renewal SHALL require
+fresh authorization checks.
+
+Grant classes SHALL cap lifetimes regardless of profile:
+- Primary Wi-Fi, backhaul, radio, routing, firewall, DNS and uplink changes: at
+  most 24 hours (1 hour under Strict), with stale authority never exceeding
+  24 hours.
+- Firmware or software installation: a single transaction of at most 15
+  minutes, bound to the artifact digest.
+- Ownership, issuer, recovery-policy and protected-key changes: owner-only,
+  single-use, at most 5 minutes.
+
+A grant spanning classes SHALL take the shortest applicable cap. No
+configuration-changing or delegated Admin grant SHALL be unlimited. Only private
+read-only diagnostics on the owner's registered holder-bound device MAY have no
+wall-clock expiry, and such grants SHALL still end on holder revocation or
+authority-epoch change. Neither window SHALL replace required credential proof
+or gate ordinary internet access.
+
+#### Scenario: Standard default on an isolated router
+- GIVEN a new household on the default Standard profile and an Admin grant issued with a 7-day lifetime
+- WHEN a router has not verified fresh authority or revocation information for more than 24 hours
+- THEN privileged changes on that router are refused until the owner reauthorizes, even though the token has not expired
+
+#### Scenario: Relaxed profile warns about exposure
+- GIVEN an owner switching the household to Relaxed
+- WHEN the switch is confirmed
+- THEN the owner is warned that a removed administrator may retain control of an isolated router for up to 7 days, the risk indicator stays visible, and existing grants keep their original lifetimes
+
+#### Scenario: High-risk class ignores profile length
+- GIVEN a household on Relaxed
+- WHEN a firmware installation grant is requested with a 7-day lifetime
+- THEN it is issued, if at all, as a single-transaction grant of at most 15 minutes bound to the artifact digest
+
+#### Scenario: No-expiry diagnostics end on epoch change
+- GIVEN a no-expiry read-only diagnostics grant on the owner's registered device
+- WHEN the owner rotates the household authority epoch
+- THEN the grant stops authorizing on every router that has verified the new epoch
+
+#### Scenario: Unlimited mutation is refused
+- GIVEN any profile
+- WHEN an owner asks for a configuration-changing or delegated Admin grant with no expiry
+- THEN issuance is refused
 
 #### Scenario: Activity does not renew a grant
-- GIVEN a 900-second configuration grant
+- GIVEN a Strict-profile configuration grant with a 15-minute lifetime
 - WHEN the holder continues using it beyond expiry without fresh authorization
 - THEN privileged changes are refused while ordinary connectivity remains available
 

@@ -1,12 +1,27 @@
 # ADR proposal: explicit verifier context, no ambient authorization
 
-> **Timing confirmation from synced steering (2026-09-15):** privileged grants
-> default to **900 seconds**, with an owner-configurable **3600-second v1 ceiling**.
-> [Current steering](../add-household-trust-contract/steer.md) explicitly corrects
-> the earlier same-day 15-minute hard-cap note. Renewal needs fresh authorization;
-> policy cannot lengthen issued grants. `mjolnir-mesh-ai0.1.2` owns the remaining
-> exact time-evidence mechanism and independent engine-readiness review.
-> The codec/holder-proof slice has no timing or authorization API and is unaffected.
+> **Timing policy: security profiles (Duke, 2026-09-15; see
+> [steering](../add-household-trust-contract/steer.md) and the
+> [trust design timing section](../add-household-trust-contract/design.md)).**
+> This supersedes every earlier same-day 900 s / 3600 s reading.
+>
+> | Profile | Token default | Token ceiling | Stale-authority maximum |
+> |---|---:|---:|---:|
+> | Strict | 15 min | 1 h | 15 min |
+> | **Standard (default)** | **24 h** | **7 d** | **24 h** |
+> | Relaxed (opt-in, warning) | 7 d | 30 d | 7 d |
+>
+> - **Grant-class caps** bound grants too, and the shortest applicable cap wins:
+>   - network, radio, firewall, DNS and uplink changes: ≤ 24 h (≤ 1 h under
+>     Strict)
+>   - firmware install: ≤ 15 min, single transaction
+>   - ownership and issuer changes: owner-only, single-use, ≤ 5 min
+> - No configuration-changing or delegated Admin grant is ever unlimited.
+>   No-expiry applies only to epoch-bound, read-only owner diagnostics.
+> - `mjolnir-mesh-ai0.1.2` owns the authenticated time-evidence mechanism and a
+>   targeted timing/profile re-review.
+> - The codec/holder-proof slice has no timing or authorization API and is
+>   unaffected.
 
 The local implementation pins and first codec/proof slice are in
 [codec-profile.md](codec-profile.md). Its new byte-level choices need independent
@@ -60,7 +75,17 @@ revocation lineage. Do not mint grants for unsupported operations.
 
 ## Time and replay interface
 
-Configuration grants default to900s, with owner-configured positive TTL up to3600s.
+Configuration grants take their token default and ceiling from the household
+security profile. Standard (the default) is 24 h / 7 d. Strict is 15 min / 1 h.
+Relaxed is 7 d / 30 d.
+
+The verifier takes the profile and grant-class caps as trusted verifier input,
+never from the token, and applies the shortest applicable cap. It separately
+enforces the profile's stale-authority maximum (15 min / 24 h / 7 d) against the
+time of its last verified authority and revocation state. It refuses mutating or
+delegated Admin grants without an expiry, and allows no-expiry only for
+epoch-bound read-only diagnostics.
+
 Enforce issuer/delegation ceilings and reject arithmetic overflow. Activity does
 not extend expiry. Renewal requires fresh verified authority/revocation state.
 Verified time evidence must establish validity; missing or regressed evidence

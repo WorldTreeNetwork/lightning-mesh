@@ -30,8 +30,36 @@ token identity and challenge to its signer. Consumers SHALL reuse that encoder.
 - THEN verification fails
 
 ### Requirement: Bounded validity with explicit execution preconditions
-Configuration grants SHALL default to900 seconds and SHALL NOT exceed the v1
-3600-second policy ceiling. Missing trustworthy validity evidence SHALL deny.
+Configuration grants SHALL be bounded by the household security profile defined
+in the household-authority contract. The profiles are (token default / ceiling /
+stale-authority maximum):
+- Strict: 15 minutes / 1 hour / 15 minutes
+- Standard: 24 hours / 7 days / 24 hours. Standard is the default.
+- Relaxed: 7 days / 30 days / 7 days.
+
+Grant-class caps SHALL also bound them, with the shortest applicable cap winning.
+
+Independently of grant expiry, a configuration grant SHALL authorize only while
+the verifier holds authority and revocation information verified within the
+profile's stale-authority maximum. Otherwise the result SHALL deny and require
+owner reauthorization. The verifier SHALL refuse any configuration-changing or
+delegated Admin grant without an expiry. Missing trustworthy validity evidence
+SHALL deny.
+
+#### Scenario: Unexpired grant with stale authority
+- GIVEN an unexpired Standard-profile configuration grant with a 7-day lifetime
+- WHEN the verifier's last fresh authority and revocation verification is older than 24 hours
+- THEN authorization is denied with a reauthorization-required reason
+
+#### Scenario: Class cap beats profile
+- GIVEN a Relaxed-profile grant whose operations include a firewall change and guest Wi-Fi management
+- WHEN its token claims a 30-day lifetime
+- THEN the verifier treats it as valid for at most 24 hours
+
+#### Scenario: Grant without expiry for mutation
+- GIVEN a configuration-changing grant with no expiry
+- WHEN it is presented under any profile
+- THEN authorization is denied
 An authorization result SHALL explicitly require downstream durable freshness
 reservation before execution and SHALL NOT claim replay-safe execution itself.
 
