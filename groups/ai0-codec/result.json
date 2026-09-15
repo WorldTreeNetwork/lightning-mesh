@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "id": "res-ai0-codec-r2",
+  "packet_id": "pkt-ai0-codec-r2",
+  "signer": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "crates/mjolnir-admin-capabilities/Cargo.toml",
+      "role": "codec/proof source or tests"
+    },
+    {
+      "path": "crates/mjolnir-admin-capabilities/src/lib.rs",
+      "role": "codec/proof source or tests"
+    },
+    {
+      "path": "crates/mjolnir-admin-capabilities/tests/codec.rs",
+      "role": "codec/proof source or tests"
+    },
+    {
+      "path": "Cargo.lock",
+      "role": "pinned dependency resolution"
+    },
+    {
+      "path": "groups/ai0-codec/red-first.md",
+      "role": "red-first evidence"
+    }
+  ],
+  "evidence": {
+    "kind": "command",
+    "command": "CARGO_TARGET_DIR=/tmp/lm-target cargo test --locked -p mjolnir-admin-capabilities",
+    "exit_code": 0,
+    "output_tail": "test result: ok. 28 passed; 0 failed; 0 ignored. Doc-tests: 0 tests, pass.",
+    "observed": "Conductor ran the focused command after inspecting code and strengthening byte-mutation coverage for apply-plan arguments and correcting 32/64-bit declared-length fixtures. Worker red-first baseline recorded26failed/2passed; first worker timed out at600s, focused finishing retry passed.",
+    "note": "Only canonical bytes and Ed25519 possession proof accepted. No issuer/rights/time/revocation/replay/transport or live-node security acceptance."
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "5d8c323",
+    "paths": [
+      "crates/mjolnir-admin-capabilities/Cargo.toml",
+      "crates/mjolnir-admin-capabilities/src/lib.rs",
+      "crates/mjolnir-admin-capabilities/tests/codec.rs",
+      "Cargo.lock",
+      "groups/ai0-codec/red-first.md"
+    ]
+  },
+  "summary": "Canonical local-profile request codec and strict holder-proof verification implemented;28focused tests pass. Parent authorization capability remains incomplete.",
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "codex-conductor",
+    "content_hash": "sha256:d40229a41c47a621db5b4c5bd4ecb14d77705be3ae88254844b142a490cc2014",
+    "signed_at": "2026-09-15T19:54:56.549Z"
+  },
+  "raw_ref": ".spawns/mjolnir-mesh-ai0.1.1-1789501694-209490-2b7143e0/raw.txt"
+}
