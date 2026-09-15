@@ -1,11 +1,11 @@
 # ADR proposal: explicit verifier context, no ambient authorization
 
-> **Timing update from synced steering (2026-09-15):** privileged grants may be
-> usable for at most **900 seconds without fresh verified authority/revocation
-> information**; continued offline use requires explicit owner reauthorization.
-> The earlier 3600-second token-lifetime ceiling below does not permit an hour of
-> stale authority. [Current steering](../add-household-trust-contract/steer.md)
-> controls; `mjolnir-mesh-ai0.1.2` owns reconciliation and engine-readiness review.
+> **Timing confirmation from synced steering (2026-09-15):** privileged grants
+> default to **900 seconds**, with an owner-configurable **3600-second v1 ceiling**.
+> [Current steering](../add-household-trust-contract/steer.md) explicitly corrects
+> the earlier same-day 15-minute hard-cap note. Renewal needs fresh authorization;
+> policy cannot lengthen issued grants. `mjolnir-mesh-ai0.1.2` owns the remaining
+> exact time-evidence mechanism and independent engine-readiness review.
 > The codec/holder-proof slice has no timing or authorization API and is unaffected.
 
 The local implementation pins and first codec/proof slice are in
