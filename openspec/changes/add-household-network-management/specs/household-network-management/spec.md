@@ -4,6 +4,54 @@
 
 ## ADDED Requirements
 
+### Requirement: One initial owner delegates scoped capabilities
+
+The product SHALL begin with one owner and offer Admin, Member, and Guest presets
+as scoped grants. Agency SHALL use the IdentiKey Biscuit format with a defined
+mesh profile, destination verification, and no authority inferred from membership.
+A second owner SHALL NOT be required for setup. Recovery SHALL be explicit.
+
+#### Scenario: Admin exceeds a delegated node scope
+
+- GIVEN an admin grant permits Wi-Fi changes on Hall only
+- WHEN the holder requests an Office change or ownership transfer
+- THEN the destination refuses even if the holder is a house keyspace member
+
+#### Scenario: Holder-bound delegation names another person
+
+- GIVEN a grant requires Alice's verified holder identity
+- WHEN Alice attempts to delegate to Bob by only appending a Bob-holder check
+- THEN the system does not treat Alice's check as removed
+- AND a new recipient requires authorized scoped issuance within the parent ceiling
+
+### Requirement: Connecting visitors can discover the hub without signing up
+
+The experience SHALL invite visitors to hello.mesh and optional identity creation,
+with anonymous exploration, consent before public announcement, a dismissal path,
+and manual/QR discovery independent of automatic portal presentation. Browser-only
+passkeys SHALL NOT be a prerequisite for this welcome experience.
+
+#### Scenario: Visitor declines identity
+
+- GIVEN a visitor sees the welcome invitation
+- WHEN they explore anonymously or choose “Just the internet, please”
+- THEN no identity, membership, or capability is created
+- AND hello.mesh remains discoverable and internet access follows network policy
+
+#### Scenario: No internet and no portal sheet
+
+- GIVEN local networking works but upstream internet and automatic portal presentation do not
+- WHEN a visitor opens the advertised local hub URL
+- THEN the hub offers local information/services and optional identity
+- AND does not claim that dismissing the invitation restores internet
+
+#### Scenario: A portal browser cannot retain the identity
+
+- GIVEN identity storage continuity to the regular browser is unverified
+- WHEN the visitor chooses identity creation
+- THEN the flow offers a regular-browser path with clear persistence limits
+- AND never transports the private key through a URL or requests an existing owner seed
+
 ### Requirement: Separate intent, capability, and observed state
 
 The system SHALL represent internet connections, node connections, client Wi-Fi,

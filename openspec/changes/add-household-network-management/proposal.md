@@ -50,7 +50,12 @@ an IdentiKey or `.mesh` name does not confer router administration.
 
 ## Decisions awaiting review
 
-House versus individual ownership; visible admin entry versus previous secret
+Confirmed 2026-09-14: one initial owner, delegating to admins, members, and guests;
+everyone is invited to hello.mesh and optional identity creation. The
+[identity and welcome refinement](identity-and-welcome.md) records latest IdentiKey
+evidence, Biscuit attenuation, FOKS-style keyspaces, and secure-context boundaries.
+
+Still open: visible admin entry versus previous secret
 knock; private resident Wi-Fi versus current open default. Recommended choices
 are explicitly marked in the brief. Standalone phone-browser ownership also needs
 a trusted-origin/bootstrap decision before it can be promised as supported.

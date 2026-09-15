@@ -114,7 +114,7 @@ navigation. Disabled actions explain the missing permission or capability.
 | Rollback verified | Previous settings restored | Review failure | Edit and try again |
 | Partial result | 2 nodes updated, 1 restored, 1 unknown | Review affected nodes | Retry only after reconciliation |
 | Healthy network | Internet and local network working | No urgent CTA | Add node / Invite person as ordinary actions |
-| Only one owner | Add a recovery option before handing over | Set up recovery | Explain why; does not block residents' internet |
+| Recovery not verified | Prepare recovery for the owner's credentials | Set up recovery | One owner is supported; second owner not required |
 
 ## User flows
 
@@ -179,6 +179,12 @@ navigation. Disabled actions explain the missing permission or capability.
 
 ### 5. Resident / guest / local developer
 
+The expanded [welcome flow](../../openspec/changes/add-household-network-management/identity-and-welcome.md)
+defines the portal invitation, regular-browser handoff, consent before publication,
+QR/manual discovery, dismissal, and offline states. Invite all visitors; do not
+require identity to browse the hub. Member is the permission role; resident is
+the person's relationship to the house.
+
 1. Join allowed Wi-Fi. Internet access follows network policy, independent of
    creating an IdentiKey or publishing a name.
 2. Public front desk shows internet/local status and allowed services. Existing
@@ -191,13 +197,15 @@ navigation. Disabled actions explain the missing permission or capability.
 
 ### 6. Delegate, revoke, and recover
 
-1. Owner opens People & access → Invite person → role, scope, expiry.
+1. The single initial owner opens People & access → Invite person → Admin, Member,
+   or Guest → exact permissions, node/service scope, expiry. Role labels are
+   presets; show the effective grant and whether further delegation is allowed.
 2. Recipient accepts using their credential. Show issued / accepted / enforced
    states; an invitation string is not a permanent admin password.
 3. Revoke shows where enforcement is confirmed and where a disconnected node
    remains pending. Removing a resident also explains shared Wi-Fi password
    rotation where relevant.
-4. Lost admin laptop: second owner or offline recovery authorizes replacement,
+4. Lost admin laptop: owner or explicitly established recovery authorizes replacement,
    revokes lost credentials, and verifies fresh access.
 5. Transfer: replacement accepts and proves access before the final old owner is
    removed. Factory reset/release is an explicit separate destructive procedure.

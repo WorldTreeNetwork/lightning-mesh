@@ -64,10 +64,15 @@ Admins should spend most console time on Overview and its actionable exceptions.
 Residents should rarely need the console at all. A topology map supplements a
 plain explanation; it is not the landing-page prerequisite.
 
-## Recommended defaults awaiting review
+## Confirmed direction and recommended defaults
 
-- House ownership with one initial owner, a prompt to add a second recovery-capable
-  owner, delegated network admins, residents, and guests. No cloud login required.
+- Confirmed 2026-09-14: one initial owner delegates to admins, members, and guests.
+  A second owner is not required. Recovery setup is separate from delegation.
+- Confirmed: invite every connecting person to discover hello.mesh and optionally
+  create an identity. Browsing and internet do not require identity creation.
+- Proposed implementation: Biscuit agency capabilities and the existing IdentiKey
+  shared-keyspace model, with its runtime gaps explicitly tracked. See the
+  [identity and welcome refinement](../../openspec/changes/add-household-network-management/identity-and-welcome.md).
 - Discoverable **Manage network** entry protected by authorization. This proposes
   changing the secret-knock requirement in the [older IA](../fleet-admin/INFORMATION_ARCHITECTURE.md).
 - Private resident Wi-Fi with optional isolated guests; optional identity for
@@ -164,7 +169,8 @@ values after errors; focus the error summary and then the offending field.
 Pilot goals, not measured results: a new purchaser gets a three-node kit online
 without shell commands; an admin can explain a proposed radio tradeoff before
 applying; a resident can distinguish upstream outage from local connectivity;
-a second admin recovers management after the installer's laptop is unavailable.
+the owner uses verified recovery after the installer's laptop is unavailable.
+Visitors can find hello.mesh again after dismissing the welcome invitation.
 
 Run observed tasks with a purchaser, resident, and technical admin: cable setup,
 Wi-Fi-only setup, bad password, weak room, cable removal, invitation, and owner

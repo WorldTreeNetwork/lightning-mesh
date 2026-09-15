@@ -159,6 +159,12 @@ separate architecture and upstream cooperation.
 
 ## 5. Identity, ownership, and access
 
+Confirmed 2026-09-14: one initial owner delegates to admins, members, and guests.
+See [the identity and welcome refinement](identity-and-welcome.md) for the pulled
+IdentiKey evidence, Biscuit application profile, FOKS-style keyspaces, and hub
+invitation. This refines the generic grant model below; it does not add a second
+token format. A second owner is optional, not a setup requirement.
+
 Identity means a principal with credentials, not a display name, MAC address,
 SSID password, or SSH key copied from the developer's machine. Keep four layers
 distinct: network association; house membership; local-service permissions;
@@ -167,7 +173,7 @@ node administration. Reuse IdentiKey where appropriate without merging scopes.
 | Role | Internet / services | Network settings | Invite admins / transfer / recovery |
 |---|---|---|---|
 | Guest | Guest internet; explicit service exceptions | No | No |
-| Resident | Resident policy; own service identities | No | No |
+| Member | Member/resident policy; own service identities | No | No |
 | Network admin | Resident permissions plus diagnostics | Assigned nodes/house; no owner grants | No owner transfer; delegation only if explicitly granted |
 | Owner | Policy-controlled service access, not automatic access to residents' private data | All house network settings | Yes |
 | Temporary technician | Explicit diagnostics/config scope, expiring | Only granted operations | No |
@@ -230,7 +236,7 @@ browser trust. HTTPS alone does not supply independent owner-signing custody.
   credential. Human-readable name is editable independently of authority.
 - New phone/laptop: existing owner authorizes a new credential; do not copy raw
   private keys through chat, clipboard instructions, or node-hosted pages.
-- Lost credential: use a second owner or offline recovery material, revoke old
+- Lost credential: use verified offline recovery or an explicitly appointed recovery authority, revoke old
   credentials, rotate affected authority, and report pending enforcement.
 - Last-owner removal: blocked until replacement/recovery is verified. Recovery
   material should be tested during setup without forcing cloud synchronization.

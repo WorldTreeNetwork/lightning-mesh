@@ -10,3 +10,6 @@ Additional qualification and policy gaps are linked from the planning bead.
 - `mjolnir-mesh-ai0`: review/activation, configuration policy and shared setup.
 - `mjolnir-mesh-lpv`: current hardware qualification and next-hardware inputs.
 - `mjolnir-mesh-isnx`: observed UX validation and browser bootstrap review.
+- `mjolnir-mesh-xqai`: one-owner delegation and hello.mesh invitation refinement.
+- `mjolnir-mesh-ai0.1`: mesh Biscuit profile and keyspace integration prerequisites.
+- `mjolnir-mesh-ai0.2`: hub invitation, optional identity, and discovery fallbacks.
