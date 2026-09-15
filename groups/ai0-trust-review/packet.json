@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-trust-review-r1",
+  "node_id": "mjolnir-mesh-ai0.3",
+  "capability": "household-authority",
+  "change_id": "add-household-trust-contract",
+  "requester": {"id":"codex-conductor","kind":"model","harness":"codex","signing":{"mode":"stand-in","stand_in_id":"codex-conductor"}},
+  "assignee": {"id":"opus-4-8-arch-review","kind":"model","harness":"claude","interface":"opus-4.8","signing":{"mode":"stand-in","stand_in_id":"opus-4-8-arch-review"}},
+  "role": "reader",
+  "goal": "Fresh independent architecture advise of add-household-trust-contract. First read only proposal.md Why, living-spec rules and cited existing source; write a ten-line independent take before opening design.md, tasks.md and the delta. Then compare and write reviews/2026-09-15-advise.md with ADVISE accept or send-back, READER and SPAWN provenance. This is contract-only, not runtime acceptance. Be rigorous about owner/issuer/holder separation, recovery, revocation, reboot/time, physical proof and API-contract gaps that must be resolved before dependent implementations. If a material human decision is required, identify it explicitly. Project requires beads tracking: put blocking findings in your review rather than adding markdown task checkboxes; conductor records them in beads. Work inside conductor-workers boundary: edit declared paths and return for conductor persistence.",
+  "anchors": [
+    {"symbol":"openspec/changes/add-household-trust-contract/proposal.md:7","invariant":"Read Why first, before proposed design."},
+    {"symbol":"openspec/specs/living-specs/spec.md","invariant":"Proposed requirements are not evidence of built runtime."},
+    {"symbol":"docs/network-coordination/secure-context-and-control-plane.md:159","invariant":"Existing proposal separates self-service name authority from protected node operations; not a shipped capability."},
+    {"symbol":"crates/mjolnir-hello/src/portal.rs","invariant":"Existing public portal does not establish owner authority."}
+  ],
+  "acceptance": {"kind":"contrast","if_true":"Contract cleanly distinguishes a valid narrower owner-authorized operation from membership, altered-holder, untrusted-issuer, stale-authority and replay attempts, with honest implementation boundaries.","if_false":"Review identifies concrete missing constraints or contradictions that prevent using this as the downstream trust contract."},
+  "out_of_scope": [{"item":"runtime implementation and live node access","tracked_as":"mjolnir-mesh-bf7.1 / ai0.1 / ai0.9 / b6j.2"}],
+  "constraints": {"permission":"write","paths":["openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise.md"],"do_not":["deploy","push","fold","change router configuration","edit product code","edit other agents files"]},
+  "load_class":"intention-critical",
+  "rigor":"architecture",
+  "density":"standard",
+  "surface":"packet-only"
+}

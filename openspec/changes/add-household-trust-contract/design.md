@@ -1,0 +1,90 @@
+# ADR proposal: authority is checked at the destination
+
+Status: proposed under activated ai0.3; independent review outstanding.
+
+## Inputs and limits
+
+The household dossier's identity-and-welcome.md records reviewed IdentiKey protocol
+commits and distinguishes adopted formats from missing runtimes. Reuse its Biscuit
+agency format and FOKS-inspired keyspace separation. Neither this contract nor its
+review claims those runtimes are implemented. Existing signed public name claims
+are bounded self-service, not authorization for a node operation.
+
+## Principals
+
+House identity is a stable identifier bound to the initial owner's signed genesis
+record. A node's pinned identity and ownership epoch bind its current house and
+owner authority. Owner credentials authorize issuer keys and ownership transitions;
+issuer keys mint bounded Biscuit grants; holder keys sign operations. These are
+distinct roles even when a prototype uses one protected device for custody.
+An IdentiKey/keyspace membership record and Wi-Fi association confer none of them.
+
+One initial owner is sufficient. Admin, Member and Guest are UI presets, not an
+ordered numeric privilege hierarchy. Admin grants enumerate actual operations,
+targets and lifetime, with delegation disabled unless explicitly allowed.
+Issuer private keys must not be copied to every router. Destinations need public
+issuer pins and verified current authority state, not minting secrets.
+
+## Claim and recovery boundary
+
+An unclaimed node accepts one atomic owner binding only after device-specific proof
+and a fresh physically armed ceremony are both verified. Bind the ceremony to the
+node identity, proposed owner credential, challenge and current unclaimed epoch;
+fail closed on reuse, concurrent losing claims or interrupted persistence. Discovery
+and the existing WPS WAN-SSH window are not such proof. bf7.1 must select and review
+the actual provisioning channel/ceremony; this contract does not endorse unaudited
+custom key exchange or assume a trusted browser origin.
+
+After claiming, a physical button alone cannot replace an owner. Normal transfer or
+recovery requires authority rooted in the existing owner or separately enrolled
+recovery credential. Losing all such credentials requires an explicitly destructive
+local reset with loss of prior house authority/data access, not covert takeover.
+Recovery must rotate authority epochs and reject previously issued control grants.
+Every node must enforce its own durable transition before it reports completion;
+offline nodes remain outstanding, not silently recovered/revoked.
+
+## Delegation and authorization
+
+The target verifies pinned house/node identity and authority epoch, approved issuer,
+the complete Biscuit chain/checks, authenticated holder and structured request.
+Trusted facts come from that verifier: exact house, target, operation, argument
+digest, credential, epoch, time evidence and request freshness. A token-supplied
+fact cannot override ambient verifier facts or confer issuer trust.
+
+Attenuation may intersect operations, resources and time, never widen them. A change
+of holder is not accomplished by adding a contradictory holder caveat. Reissue a
+new holder-bound grant only through an approved issuer enforcing the parent's
+explicit delegation ceiling, lifetime and revocation lineage. V1 may require owner
+approval for every new recipient instead of autonomous delegated minting.
+
+A signed control request binds protocol version, house, node, authority epoch,
+operation and all arguments to a one-use challenge/request identifier. The target
+must durably serialize acceptance against concurrent replay and revocation. A lost
+reply is not permission to execute again: an authenticated retry returns a recorded
+receipt or a pending/unknown outcome. Receipt correlation does not prove hardware
+success; network apply has its own independently verified result contract.
+
+## Time, partitions and privacy
+
+Persist a trusted time floor and authority revision; clock rollback cannot extend a
+grant. If the target cannot establish validity after reboot, privileged operation is
+refused with a recovery/time-unavailable reason rather than accepting indefinitely.
+Exact clock-evidence protocol and maximum offline validity belong to ai0.1 and must
+have negative vectors before implementation is advertised as safe.
+
+Revocation is immediately enforced on nodes that have verified/persisted it. An
+isolated node cannot know about a newer revocation: show pending enforcement, and
+bound stale authorization with grant expiry. No UI may claim global revocation while
+target acknowledgements are missing. Untrusted gossip cannot roll back authority.
+
+HTTP hello.mesh receives no owner seed or reusable admin bearer authority. Installed
+signing UI displays authenticated target, operation, impact and expiry; an HTTP
+adapter may relay opaque requests but cannot supply trusted confirmation text.
+Never put keys, tokens or secret-bearing operation arguments in URLs/public logs.
+
+## Qualification owed downstream
+
+Owner binding races/crash recovery (bf7.1), token origin/holder/attenuation vectors
+(ai0.1), non-ingesting consumer forgery/replay rejection (ai0.9) and exactly-once
+acceptance/unknown outcomes (b6j.2) must be implemented and tested independently.
+This node is the shared contract, not a claim those acceptance tests already pass.
