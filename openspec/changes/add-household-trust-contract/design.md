@@ -93,6 +93,13 @@ Never put keys, tokens or secret-bearing operation arguments in URLs/public logs
 
 ## Delegated v1 timing policy
 
+> **Superseded offline interpretation:** [newer direct steering](steer.md)
+> caps stale authority at 900 seconds and requires explicit owner reauthorization
+> for continued offline use. The 3600-second token-lifetime ceiling below must
+> never authorize an hour without fresh authority information. `ai0.1.2` owns
+> reconciliation and independent engine-readiness review; earlier reviews do not
+> establish acceptance of the revised time-evidence mechanism.
+
 Duke delegated this choice with "decide for me" and resumed the campaign.
 The physical recovery window defaults to 120 seconds, is configurable by an
 authorized owner, and closes after one successful recovery. This is a WPS-like

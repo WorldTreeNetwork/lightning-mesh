@@ -1,5 +1,13 @@
 # ADR proposal: explicit verifier context, no ambient authorization
 
+> **Timing update from synced steering (2026-09-15):** privileged grants may be
+> usable for at most **900 seconds without fresh verified authority/revocation
+> information**; continued offline use requires explicit owner reauthorization.
+> The earlier 3600-second token-lifetime ceiling below does not permit an hour of
+> stale authority. [Current steering](../add-household-trust-contract/steer.md)
+> controls; `mjolnir-mesh-ai0.1.2` owns reconciliation and engine-readiness review.
+> The codec/holder-proof slice has no timing or authorization API and is unaffected.
+
 The local implementation pins and first codec/proof slice are in
 [codec-profile.md](codec-profile.md). Its new byte-level choices need independent
 review; the earlier abstract-contract acceptance does not accept those choices.
