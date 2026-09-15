@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ncy-1-fold",
+  "node_id": "mjolnir-mesh-ncy.1",
+  "capability": "mesh-mini-apps",
+  "change_id": "add-mini-app-contract",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-5-fold"
+    }
+  },
+  "role": "folder",
+  "goal": "Fold add-mini-app-contract into living specs and archive it. All tasks.md boxes are [x]. Apply deltas from openspec/changes/add-mini-app-contract/specs/ onto openspec/specs/. Confirm every SHALL is living. git mv the change dir to openspec/changes/archive/2026-09-15-add-mini-app-contract. Amend ARCHITECTURE.md only if shape changed. One LEARNINGS line if there was a surprise (aarch64 size +1.50 MiB mixed embed+TLS is recorded in groups/mjolnir-mesh-ncy.1/size-delta.md). Do not implement leftover work. Do not fold other changes. Do not touch crates/mjolnir-hello/static/index.html. Do not deploy.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mini-app-contract/proposal.md:3",
+      "invariant": "ACTIVE BUILD; refuse if PENDING or PARKED."
+    },
+    {
+      "symbol": "openspec/changes/add-mini-app-contract/tasks.md",
+      "invariant": "Every owed box is [x]."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "A SHALL only in changes/ is not living truth."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Every SHALL from this change is in openspec/specs/ and openspec/changes/add-mini-app-contract/ is gone (archived).",
+    "if_false": "A claimed SHALL remains only under changes/ or leftover tasks were folded away."
+  },
+  "out_of_scope": [
+    {
+      "item": "add-embedded-assert, add-app-manifest-publish, live install",
+      "tracked_as": "mjolnir-mesh-ncy.4 / ncy.2 / fleet"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/mesh-mini-apps/spec.md",
+      "openspec/changes/add-mini-app-contract",
+      "openspec/changes/archive/2026-09-15-add-mini-app-contract",
+      "ARCHITECTURE.md",
+      "docs/LEARNINGS.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "edit product code",
+      "touch crates/mjolnir-hello/static/index.html",
+      "fold other changes"
+    ]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only"
+}

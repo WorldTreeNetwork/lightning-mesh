@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-09-15 — aarch64 musl `mjolnir-hello` grew +1.50 MiB (+119.5%) after ncy.1 mixed embed+TLS (`ureq` 2.12 + `rustls` 0.23): before `5654ce5` 1.26 MiB, after `4606896` tree 2.76 MiB. The delta is not TLS-only (older `static/` embed in the before binary). It does not authorize dropping to plain-HTTP fetch — that contradicts the self-signed-https scenario and needs a change amendment. (`groups/mjolnir-mesh-ncy.1/size-delta.md`, `add-mini-app-contract`)
 - 2026-09-14 — Uplink-aware portal behavior supersedes the earlier default-open rule: the kernel default route is the local data-plane truth. Route present means `captive:false` plus exact OS success; no route means an informational offline portal. User action never changes either state. (`crates/mjolnir-hello/src/portal.rs`, `openspec/specs/captive-portal/spec.md`)
 - 2026-09-14 — Default-open client behavior supersedes the 2026-08-31 captive-sheet buttons: CAPPORT always reports `captive:false`, intercepted OS probes receive their byte-exact success payload immediately, and `/api/portal/pass` is compatibility-only. (`crates/mjolnir-hello/src/routes.rs`, `openspec/specs/captive-portal/spec.md`)
 - 2026-08-31 — This repo had no `openspec/`; `ready.py` / `run.py --until fold` stop empty until a change is actually scaffolded. (`openspec/`, `/Users/dukejones/.agents/skills/ready/scripts/ready.py`)
