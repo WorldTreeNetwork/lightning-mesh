@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "id": "res-ai0-trust-review-r2",
+  "packet_id": "pkt-ai0-trust-review-r2",
+  "signer": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise-2.md",
+      "role": "independent Opus architecture review, persisted by conductor"
+    }
+  ],
+  "evidence": {
+    "kind": "contrast",
+    "if_true": "A valid narrower owner-authorized operation is distinct from membership, changed holder, untrusted issuer, stale authority and replay.",
+    "if_false": "Contract contradictions prevent downstream use.",
+    "observed": "Fresh Opus4.8 reader accepted amended contract with credential-plus-physical recovery, 120s recovery window, 900s grants and configurable3600s ceiling. Findings on retiring recovery credentials, ordering authority transitions, shared canonical encoding and issuer-pin revocation recorded on downstream beads. Runtime not accepted.",
+    "note": "Conductor attests persistence and observed review, not authorship of the independent verdict or runtime security."
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "a180aec",
+    "paths": [
+      "openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise-2.md"
+    ]
+  },
+  "summary": "Amended trust contract independently accepted; delegated policy decisions resolved. Contract deliverable ai0.3 closed, runtime remains with dependent tasks.",
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "codex-conductor",
+    "content_hash": "sha256:9ba59ac153206d6879c46b3de885c9acfbd5903f6b064fea8c04b861795dc721",
+    "signed_at": "2026-09-15T04:07:04.276Z"
+  },
+  "raw_ref": ".spawns/mjolnir-mesh-ai0.3-1789444468-156277-e38287cb/raw.txt"
+}

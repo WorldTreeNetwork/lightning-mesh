@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-inventory-r2",
+  "node_id": "mjolnir-mesh-ai0.4",
+  "requester": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-5"
+    }
+  },
+  "role": "worker",
+  "goal": "Repair your predecessor's inventory after focused verification found overclaims. Edit only deploy/openwrt/household-inventory.md. Specific corrections: (1) fleet-nodes.conf says m3000 v1/v2, not proven v1; no AP3000 OBSERVED, not proof none exists. (2) setup-wireless.sh supports BACKHAUL_BAND=2g as well as default5g; checks presence not exact radio count. Label defaults vs observed vs alternative. Describe band-swapped upstream5g/mesh2g as possible unqualified pilotalternative, wired backhaul frees5g radios; not only STA+mesh. (3) repo README192.168.1.1 guidance is historical expected behavior, not every node currently answers. Prefer verified pilotIPv6LL; DO NOT recommend unconditional ssh-keygen -R: validate physicaltarget and hostkey outofband. WAN defaultblock has documented AP3000exception. (4) Concurrency failure was fieldobserved on relevantmt76 firmware, not allchips/alltime impossibility. (5) No evidence of USB-Ethernet/spareports is UNKNOWN, not 'Extra Ethernet:none'. USBdongle is ONE route to thirdradio, not onlyway; requirements should include independent third radio, proven AP+mesh concurrency, Ethernetbackhaul/portmaps/PoE as prospective qualification not purchases. Only one extra APdongle needed if using onboardSTA; do not require second extra dongle. (6) Upstream channel locks same radio only; neighboringindependentAPs not forcedtofollow; interference unmeasured. (7) Reapply hazard is not proven testfailure: say not preserved by supportedprofile/not qualified andmayremoveuplink, not 'currentlydoesnot survive'. Use datedbead evidence and sources, no freshSSH/scans. Keep concise, no TODOcheckboxes. Do not invent firmware; if evidence missing explicitlyunknown. Return forconductor persistence.",
+  "anchors": [
+    {
+      "symbol": "deploy/openwrt/fleet-nodes.conf",
+      "invariant": "Historical bootstrap inventory, not proof every listed node is currently present."
+    },
+    {
+      "symbol": "deploy/openwrt/fleet.yml",
+      "invariant": "Retain observation date; do not relabel old snapshot live."
+    },
+    {
+      "symbol": "deploy/openwrt/setup-wireless.sh",
+      "invariant": "Radio roles are band-derived; mt76 concurrency assumptions need actual qualification."
+    },
+    {
+      "symbol": "bd show mjolnir-mesh-rple",
+      "invariant": "Dated observed Symbio2.4GHz station on m3000-b,5GHz mesh to m3000/tr3000, actual verification and limitations."
+    },
+    {
+      "symbol": "AGENTS.md",
+      "invariant": "One laptop WiFi radio; protect its internet default and preserve existing user edits."
+    }
+  ],
+  "acceptance": {
+    "kind": "journey",
+    "journey": "An installer can identify a feasible upstream receiver and safe wired management arrangement from the inventory, with each observation dated and unknowns explicitly marked rather than inferred.",
+    "criteria": [
+      "Pilot topology matches rple without claiming reboot qualification",
+      "Historical AP3000/WR3000S entries are distinct from observed pilot nodes",
+      "Ports and management paths cite concrete repo evidence or say unknown",
+      "Dual-radio and additional-radio/ethernet hardware limits are explicit"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "Live qualification and production network profiles",
+      "tracked_as": "mjolnir-mesh-lpv / mjolnir-mesh-z3th / mjolnir-mesh-ai0.5"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "deploy/openwrt/household-inventory.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "SSH to nodes",
+      "join WiFi",
+      "edit product code",
+      "edit unrelated files"
+    ]
+  },
+  "load_class": "structure-clear",
+  "rigor": "brief",
+  "density": "standard",
+  "surface": "packet-only"
+}

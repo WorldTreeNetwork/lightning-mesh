@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-capabilities-review-r1",
+  "node_id": "mjolnir-mesh-ai0.1",
+  "capability": "mesh-admin-capabilities",
+  "change_id": "add-mesh-admin-capabilities",
+  "requester": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-4-8-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-4.8",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-4-8-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Fresh independent architecture advise of add-mesh-admin-capabilities. First read proposal Why, living specs and existing code anchors only; write ten-line independent take BEFORE opening design/tasks/delta. Then compare and write reviews/2026-09-15-advise.md with ADVISE accept or send-back, READER and SPAWN. Evaluate whether the library contract is implementation-ready: exact canonical encoding, verifier trust boundary, Biscuit Datalog scope safety, holder-proof binding, freshness, grant ceilings and honest downstream replay obligations. Existing recovery/timing policy is settled; do not seek redundant policy approvals. Be concrete about genuinely missing upstream contracts. Tracking is beads: put blockers in review, no task checkboxes; conductor records findings. Edit only declared review file, no implementation or commits. This is specification review, not acceptance of an implemented runtime.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/proposal.md",
+      "invariant": "Read Why before design."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Built truth differs from proposals."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/portal.rs",
+      "invariant": "Public identity is not administration."
+    },
+    {
+      "symbol": "/home/dorje/work/IdentiKey/identikey-protocol/docs/standards/identikey-capability-v1.md",
+      "invariant": "Adopted Biscuit format, draft profile and missing upstream vectors must be represented honestly."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Contract cleanly distinguishes a valid narrower owner-authorized operation from membership, altered-holder, untrusted-issuer, stale-authority and replay attempts, with honest implementation boundaries.",
+    "if_false": "Review identifies concrete missing constraints or contradictions that prevent using this as the downstream trust contract."
+  },
+  "out_of_scope": [
+    {
+      "item": "runtime implementation and live node access",
+      "tracked_as": "mjolnir-mesh-bf7.1 / ai0.1 / ai0.9 / b6j.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "change router configuration",
+      "edit product code",
+      "edit other agents files"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}
