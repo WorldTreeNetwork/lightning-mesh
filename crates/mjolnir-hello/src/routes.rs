@@ -18,7 +18,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{INDEX_HTML, StaticAssets};
-use crate::portal::{self, PORTAL_HTML, PortalReleases, Probe};
+use crate::portal::{self, PortalReleases, Probe};
 
 /// How long an issued challenge remains redeemable.
 const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -285,21 +285,13 @@ fn health() -> RouteResponse {
 /// `GET /api/captive-portal` — RFC 8908 CAPPORT API response (beads
 /// mjolnir-mesh-5eo, a0u), advertised via DHCP option 114.
 ///
-/// `captive` is `true` only while THIS client still has the greeting pending,
-/// and flips to `false` the moment they take the pass-through. That is an
-/// honest use of the field rather than a gate: RFC 8908 `captive:true` means
-/// "there is a portal interaction outstanding", which is exactly true — the
-/// mesh still never blocks a packet either way. Modern iOS/Android read this
-/// directly and surface a tappable "Sign in to network" banner; older clients
-/// fall back to the probe interception in [`crate::portal`].
-fn captive_portal(releases: &PortalReleases, client_ip: Option<IpAddr>) -> RouteResponse {
-    let captive = !portal::is_released(releases, client_ip);
+/// The network is open by default: identity and front-desk interaction are
+/// voluntary, so client operating systems must never wait for a dismissal.
+fn captive_portal(_releases: &PortalReleases, _client_ip: Option<IpAddr>) -> RouteResponse {
     RouteResponse::json_typed(
         200,
         "application/captive+json",
-        format!(
-            r#"{{"captive":{captive},"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}}"#
-        ),
+        r#"{"captive":false,"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}"#,
     )
 }
 
@@ -321,25 +313,20 @@ fn portal_pass(releases: &PortalReleases, client_ip: Option<IpAddr>) -> RouteRes
 
 /// Answer a client-OS connectivity probe (bead a0u).
 ///
-/// Released clients get the byte-exact payload their OS expects from an open
-/// network, so it marks the mesh connected. Everyone else gets the portal page,
-/// which is what makes the OS open its captive-portal sheet — the one surface
-/// that shows a stranger `hello.mesh` exists without them going looking.
+/// Every client gets the byte-exact payload its OS expects from an open
+/// network. The voluntary front desk remains available at `hello.mesh`.
 fn probe_response(
     probe: Probe,
-    releases: &PortalReleases,
-    client_ip: Option<IpAddr>,
+    _releases: &PortalReleases,
+    _client_ip: Option<IpAddr>,
 ) -> RouteResponse {
-    if portal::is_released(releases, client_ip) {
-        let (status, content_type, body) = probe.success();
-        return RouteResponse {
-            status,
-            content_type,
-            body: body.to_vec(),
-            cors: false,
-        };
+    let (status, content_type, body) = probe.success();
+    RouteResponse {
+        status,
+        content_type,
+        body: body.to_vec(),
+        cors: false,
     }
-    RouteResponse::html(200, PORTAL_HTML.as_bytes().to_vec())
 }
 
 /// `GET /api/directory` — serve `directory.json` verbatim (cached, last-good
@@ -1569,9 +1556,7 @@ mod tests {
 
         let value: serde_json::Value =
             serde_json::from_slice(&resp.body).expect("captive-portal body must be valid JSON");
-        // A client that hasn't taken the pass-through still has a portal
-        // interaction outstanding, which is what RFC 8908 `captive` means.
-        assert_eq!(value["captive"], serde_json::json!(true));
+        assert_eq!(value["captive"], serde_json::json!(false));
         assert_eq!(
             value["user-portal-url"],
             serde_json::json!("http://hello.mesh/")
@@ -1582,10 +1567,9 @@ mod tests {
         );
     }
 
-    /// Full pass-through round trip on ONE store (bead a0u): greeted first,
-    /// then released, and every surface has to agree afterwards.
+    /// Internet readiness does not depend on the legacy pass-through action.
     #[test]
-    fn pass_through_flips_capport_and_frees_the_probe() {
+    fn default_open_does_not_require_pass_through() {
         let (challenges, spool) = no_state();
         let releases = new_portal_releases();
         let client: IpAddr = "10.42.12.77".parse().unwrap();
@@ -1607,17 +1591,23 @@ mod tests {
             )
         };
 
-        // Before: the probe gets the portal, and CAPPORT says a portal is due.
+        // Before any action, the OS gets success and CAPPORT says open.
         let probe = call("GET", "/hotspot-detect.html");
         assert_eq!(probe.status, 200);
-        assert!(String::from_utf8_lossy(&probe.body).contains("Just the internet, please"));
+        assert_eq!(
+            probe.body,
+            b"<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>".to_vec()
+        );
+        assert_eq!(call("GET", "/generate_204").status, 204);
         let capport: serde_json::Value =
             serde_json::from_slice(&call("GET", "/api/captive-portal").body).unwrap();
-        assert_eq!(capport["captive"], serde_json::json!(true));
+        assert_eq!(capport["captive"], serde_json::json!(false));
 
+        // Keep the old endpoint idempotent for a cached portal sheet, but it
+        // no longer changes connectivity behavior.
         assert_eq!(call("POST", "/api/portal/pass").status, 200);
 
-        // After: the OS gets its byte-exact success payload and stops asking.
+        // After the compatibility action, the same default-open contract holds.
         let probe = call("GET", "/hotspot-detect.html");
         assert_eq!(probe.status, 200);
         assert_eq!(
@@ -1630,11 +1620,10 @@ mod tests {
         assert_eq!(capport["captive"], serde_json::json!(false));
     }
 
-    /// The probe paths must be matched BEFORE the SPA static fallback, or the
-    /// OS gets the SvelteKit bundle instead of the portal and the sheet is a
-    /// blank page.
+    /// Probe paths must be matched before SPA fallback and return each OS's
+    /// byte-exact open-network response.
     #[test]
-    fn probe_paths_are_not_shadowed_by_the_spa_fallback() {
+    fn probe_paths_return_open_network_success() {
         for path in [
             "/hotspot-detect.html",
             "/generate_204",
@@ -1642,18 +1631,21 @@ mod tests {
             "/ncsi.txt",
             "/success.txt",
         ] {
-            let body = String::from_utf8_lossy(&route_for("GET", path).body).to_string();
-            assert!(
-                body.contains("Lightning Mesh"),
-                "{path} did not serve the portal page"
+            let response = route_for("GET", path);
+            let probe = Probe::for_path(path).unwrap();
+            let (status, content_type, body) = probe.success();
+            assert_eq!(response.status, status, "wrong status for {path}");
+            assert_eq!(
+                response.content_type, content_type,
+                "wrong content type for {path}"
             );
+            assert_eq!(response.body, body, "wrong body for {path}");
         }
     }
 
-    /// One client's pass-through must not silence the greeting for the next
-    /// person who joins the same node.
+    /// Release state from older clients cannot make a new client captive.
     #[test]
-    fn pass_through_is_scoped_to_the_client_that_took_it() {
+    fn release_state_does_not_change_default_open_behavior() {
         let (challenges, spool) = no_state();
         let releases = new_portal_releases();
 
@@ -1676,9 +1668,7 @@ mod tests {
 
         portal::release(&releases, "10.42.12.10".parse().unwrap());
         assert_eq!(call("/generate_204", "10.42.12.10").status, 204);
-
-        let other = call("/hotspot-detect.html", "10.42.12.11");
-        assert!(String::from_utf8_lossy(&other.body).contains("Lightning Mesh"));
+        assert_eq!(call("/generate_204", "10.42.12.11").status, 204);
     }
 
     #[test]
