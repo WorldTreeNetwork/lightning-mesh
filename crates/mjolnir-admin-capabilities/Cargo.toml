@@ -1,0 +1,13 @@
+[package]
+name = "mjolnir-admin-capabilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Canonical mesh administrative request codec and holder-proof verification (local profile v1)"
+
+[dependencies]
+# Exact pins per openspec/changes/add-mesh-admin-capabilities/codec-profile.md.
+minicbor = { version = "=0.26.5", default-features = false, features = ["std"] }
+ed25519-dalek = "=2.2.0"
+blake3.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-codec-r2",
+  "node_id": "mjolnir-mesh-ai0.1.1",
+  "requester": {
+    "id": "codex-conductor",
+    "kind": "model",
+    "harness": "codex",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "codex-conductor"
+    }
+  },
+  "assignee": {
+    "id": "opus-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-5"
+    }
+  },
+  "role": "worker",
+  "goal": "Finish the EXISTING ai0.1.1 codec implementation after predecessor hit its600s wallclocklimit just before final verification. Do not restart from scratch; code/tests/red-first.md and Cargo.lock are already written. Read codec-profile.md and current crate, run CARGO_TARGET_DIR=/tmp/lm-target cargo test --locked -p mjolnir-admin-capabilities, fix only real remaining failures and warnings, rustfmt only owned Rust files, rerun focused gate if changed, then return concise result. Existing red-first evidence26/28 failed behavioralstubs is recorded and must be preserved; no need repeatred. Particularly check invalid-key fixture (was corrected from allff to y=2), unused Verifier import, and canonical/field-binding tests without weakening them. No authorization/time/replay surfaces, no claimofhardware or upstreamconformance. Do not edit othercrates or docs outside declaredpaths. Use fileedittools, not shell/Python file-write tricks. Work at conductor-workers boundary: edit and return, conductor persists.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/codec-profile.md",
+      "invariant": "Exact local pin, not upstream conformance; signatures prove possession, not authorization."
+    },
+    {
+      "symbol": "openspec/changes/add-mesh-admin-capabilities/reviews/2026-09-15-advise-2.md",
+      "invariant": "Must exist and accept this byte profile before implementation."
+    },
+    {
+      "symbol": "Cargo.toml:1",
+      "invariant": "Workspace members crates/*; new crate auto-discovered, no root manifest edit."
+    },
+    {
+      "symbol": "AGENTS.md",
+      "invariant": "Preserve unrelated concurrent edits; use CARGO_TARGET_DIR=/tmp/lm-target."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "CARGO_TARGET_DIR=/tmp/lm-target cargo test --locked -p mjolnir-admin-capabilities",
+    "criteria": [
+      "Literal canonical fixtures and all signed-field mutation cases pass",
+      "Unsupported encodings/algorithms and weak keys reject",
+      "No authorization, expiry, replay or deployment claim"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "Biscuit policy, authority/time/revocation and durable replay execution",
+      "tracked_as": "mjolnir-mesh-ai0.1 / ai0.9 / b6j.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "crates/mjolnir-admin-capabilities/Cargo.toml",
+      "crates/mjolnir-admin-capabilities/src/lib.rs",
+      "crates/mjolnir-admin-capabilities/tests/codec.rs",
+      "Cargo.lock",
+      "groups/ai0-codec/red-first.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "SSH to nodes",
+      "join WiFi",
+      "edit existing product crates",
+      "edit unrelated files"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only",
+  "capability": "mesh-admin-capabilities"
+}
