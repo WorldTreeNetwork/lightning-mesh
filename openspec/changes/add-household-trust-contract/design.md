@@ -35,9 +35,16 @@ and the existing WPS WAN-SSH window are not such proof. bf7.1 must select and re
 the actual provisioning channel/ceremony; this contract does not endorse unaudited
 custom key exchange or assume a trusted browser origin.
 
-After claiming, a physical button alone cannot replace an owner. Normal transfer or
-recovery requires authority rooted in the existing owner or separately enrolled
-recovery credential. Losing all such credentials requires an explicitly destructive
+After claiming, a physical button alone cannot replace an owner. Normal transfer
+requires existing owner authority. Owner recovery requires both a previously
+enrolled recovery credential and fresh physical presence at a node, as confirmed
+by Duke in response to the recovery-policy question. Neither factor alone suffices;
+possession of the credential does not permit remote-only recovery. Bind the local
+confirmation to the specific recovery request, node identity and ownership epoch
+so an unrelated button press cannot authorize a competing remote request. bf7.1
+must define and qualify that ceremony; this decision does not claim hardware proof
+already exists or require physical access to every node in the house.
+Losing all such credentials requires an explicitly destructive
 local reset with loss of prior house authority/data access, not covert takeover.
 Recovery must rotate authority epochs and reject previously issued control grants.
 Every node must enforce its own durable transition before it reports completion;

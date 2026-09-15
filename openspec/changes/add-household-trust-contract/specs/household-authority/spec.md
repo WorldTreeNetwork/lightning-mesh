@@ -54,8 +54,11 @@ revocation from enforcement still pending on offline nodes.
 - THEN the old grant is not made valid again
 
 ### Requirement: Recovery does not create a takeover path
-The system SHALL require existing owner-rooted or previously enrolled recovery
-authority for non-destructive ownership recovery. A local reset without it SHALL
+The system SHALL require both a previously enrolled recovery credential and fresh
+physical presence at a node for non-destructive owner recovery. Physical
+confirmation SHALL be bound to the recovery request, node identity and ownership
+epoch; neither credential possession nor physical access alone SHALL suffice.
+A local reset without recovery authority SHALL
 NOT retain access to the former house's authority or secrets. HTTP hub code SHALL
 NOT receive protected owner keys or reusable administrative bearer grants.
 
@@ -63,3 +66,13 @@ NOT receive protected owner keys or reusable administrative bearer grants.
 - GIVEN a node already bound to a house
 - WHEN a nearby person presses its setup button without recovery authority
 - THEN they cannot replace the owner or gain the previous house's protected access
+
+#### Scenario: Recovery credential without physical access
+- GIVEN a valid previously enrolled recovery credential
+- WHEN its holder requests owner recovery remotely without fresh physical confirmation
+- THEN recovery is refused and existing ownership remains unchanged
+
+#### Scenario: Both recovery factors
+- GIVEN a valid enrolled recovery credential and fresh physical confirmation at a node
+- WHEN both verify against the same recovery request and current ownership epoch
+- THEN recovery may proceed under the authority-rotation and per-node acknowledgement rules

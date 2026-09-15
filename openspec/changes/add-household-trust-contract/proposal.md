@@ -24,6 +24,9 @@ Membership and an attractive role label must not become router administration.
 - ADR: design.md records the trust-boundary decision for later architecture folding.
 - Work node: mjolnir-mesh-ai0.3; activation inherited from Duke's `activate ai0`.
 - Independent review is required before dependent implementation consumes this contract.
+- Post-review human decision: recovery requires an enrolled credential plus physical
+  access to a node. The earlier review remains historical; the amended recovery
+  ceremony must be included in the next review before claiming implementation.
 
 ## User journey & surfaces
 
