@@ -18,7 +18,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{INDEX_HTML, StaticAssets};
-use crate::portal::{self, PortalReleases, Probe};
+use crate::portal::{self, OFFLINE_PORTAL_HTML, PortalReleases, Probe};
 
 /// How long an issued challenge remains redeemable.
 const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -285,23 +285,24 @@ fn health() -> RouteResponse {
 /// `GET /api/captive-portal` — RFC 8908 CAPPORT API response (beads
 /// mjolnir-mesh-5eo, a0u), advertised via DHCP option 114.
 ///
-/// The network is open by default: identity and front-desk interaction are
-/// voluntary, so client operating systems must never wait for a dismissal.
-fn captive_portal(_releases: &PortalReleases, _client_ip: Option<IpAddr>) -> RouteResponse {
+/// Portal state describes the router's forwarding state. It never describes a
+/// client action: online is immediately open; offline offers the local mesh.
+fn captive_portal(internet_available: bool) -> RouteResponse {
     RouteResponse::json_typed(
         200,
         "application/captive+json",
-        r#"{"captive":false,"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}"#,
+        format!(
+            r#"{{"captive":{},"user-portal-url":"http://hello.mesh/","venue-info-url":"http://hello.mesh/"}}"#,
+            !internet_available
+        ),
     )
 }
 
 /// `POST /api/portal/pass` — take the pass-through (bead a0u).
 ///
-/// Records this client as released so every subsequent probe gets the genuine
-/// OS success payload and the sheet stops appearing. Returns 200 even when the
-/// client address is unknown: the page's only job afterwards is to re-trigger
-/// the OS probe, and failing that call closed would strand the user in a sheet
-/// they explicitly asked to leave.
+/// Retained for compatibility with cached copies of the former portal. It may
+/// record the client, but release state does not override current routing.
+/// Returns 200 even when the client address is unknown.
 fn portal_pass(releases: &PortalReleases, client_ip: Option<IpAddr>) -> RouteResponse {
     if let Some(ip) = client_ip {
         portal::release(releases, ip);
@@ -313,13 +314,12 @@ fn portal_pass(releases: &PortalReleases, client_ip: Option<IpAddr>) -> RouteRes
 
 /// Answer a client-OS connectivity probe (bead a0u).
 ///
-/// Every client gets the byte-exact payload its OS expects from an open
-/// network. The voluntary front desk remains available at `hello.mesh`.
-fn probe_response(
-    probe: Probe,
-    _releases: &PortalReleases,
-    _client_ip: Option<IpAddr>,
-) -> RouteResponse {
+/// Online clients get the byte-exact payload their OS expects. Offline clients
+/// get a self-contained explanation and a link to the local front desk.
+fn probe_response(probe: Probe, internet_available: bool) -> RouteResponse {
+    if !internet_available {
+        return RouteResponse::html(200, OFFLINE_PORTAL_HTML.as_bytes().to_vec());
+    }
     let (status, content_type, body) = probe.success();
     RouteResponse {
         status,
@@ -824,8 +824,8 @@ fn submit_coordinate_stamp(
 /// `body` is the raw request body (only consulted for `POST` handlers).
 /// `challenges` and `spool_dir` are the S4 identity-ceremony seams.
 /// `directory_cache` and `directory_file` are the S3 read-only mesh-state
-/// seams. `releases` and `client_ip` are the captive-portal pass-through seam
-/// (bead a0u): which client asked, and whether it already opted out.
+/// seams. `releases` and `client_ip` retain compatibility with the former
+/// per-client portal pass-through.
 #[allow(clippy::too_many_arguments)]
 pub fn route(
     method: &str,
@@ -841,21 +841,56 @@ pub fn route(
     releases: &PortalReleases,
     client_ip: Option<IpAddr>,
 ) -> RouteResponse {
+    let needs_internet_state = method == "GET"
+        && (path == "/api/captive-portal" || Probe::for_path(path).is_some());
+    route_with_internet_state(
+        method,
+        path,
+        static_root,
+        body,
+        challenges,
+        spool_dir,
+        directory_cache,
+        directory_file,
+        radio_cache,
+        radio_file,
+        releases,
+        client_ip,
+        !needs_internet_state || portal::internet_available(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_with_internet_state(
+    method: &str,
+    path: &str,
+    static_root: Option<&Path>,
+    body: &[u8],
+    challenges: &ChallengeStore,
+    spool_dir: &Path,
+    directory_cache: &DirectoryCache,
+    directory_file: &Path,
+    radio_cache: &RadioCache,
+    radio_file: &Path,
+    releases: &PortalReleases,
+    client_ip: Option<IpAddr>,
+    internet_available: bool,
+) -> RouteResponse {
     // Client-OS connectivity probes (bead a0u). Checked BEFORE the route table
     // so a probe path can never be shadowed by the SPA static fallback, which
     // would answer with the bundle's index.html and leave the OS guessing.
     if method == "GET"
         && let Some(probe) = Probe::for_path(path)
     {
-        return probe_response(probe, releases, client_ip);
+        return probe_response(probe, internet_available);
     }
 
     let mut resp = match (method, path) {
         ("GET", "/api/health") => health(),
 
         // RFC 8908 CAPPORT API (mjolnir-mesh-5eo): the standards-track banner.
-        // `captive` reflects whether THIS client still has the portal pending.
-        ("GET", "/api/captive-portal") => captive_portal(releases, client_ip),
+        // `captive` reflects whether this router currently has internet routing.
+        ("GET", "/api/captive-portal") => captive_portal(internet_available),
 
         // Pass-through: the escape hatch that keeps this from being a walled
         // garden (bead a0u). Idempotent, and deliberately unauthenticated —
@@ -1508,8 +1543,16 @@ mod tests {
 
     /// Helper: route with throwaway state, returning the `RouteResponse`.
     fn route_for(method: &str, path: &str) -> RouteResponse {
+        route_for_with_internet(method, path, true)
+    }
+
+    fn route_for_with_internet(
+        method: &str,
+        path: &str,
+        internet_available: bool,
+    ) -> RouteResponse {
         let (challenges, spool) = no_state();
-        route(
+        route_with_internet_state(
             method,
             path,
             None,
@@ -1522,6 +1565,7 @@ mod tests {
             Path::new("/nonexistent"),
             &new_portal_releases(),
             None,
+            internet_available,
         )
     }
 
@@ -1567,6 +1611,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn offline_mesh_reports_captive_and_serves_local_explanation() {
+        let resp = route_for_with_internet("GET", "/api/captive-portal", false);
+        let value: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(value["captive"], serde_json::json!(true));
+
+        for path in ["/hotspot-detect.html", "/generate_204", "/connecttest.txt"] {
+            let response = route_for_with_internet("GET", path, false);
+            assert_eq!(response.status, 200);
+            assert_eq!(response.content_type, "text/html; charset=utf-8");
+            assert_eq!(response.body, OFFLINE_PORTAL_HTML.as_bytes());
+        }
+    }
+
     /// Internet readiness does not depend on the legacy pass-through action.
     #[test]
     fn default_open_does_not_require_pass_through() {
@@ -1575,7 +1633,7 @@ mod tests {
         let client: IpAddr = "10.42.12.77".parse().unwrap();
 
         let call = |method: &str, path: &str| {
-            route(
+            route_with_internet_state(
                 method,
                 path,
                 None,
@@ -1588,6 +1646,7 @@ mod tests {
                 Path::new("/nonexistent"),
                 &releases,
                 Some(client),
+                true,
             )
         };
 
@@ -1650,7 +1709,7 @@ mod tests {
         let releases = new_portal_releases();
 
         let call = |path: &str, ip: &str| {
-            route(
+            route_with_internet_state(
                 "GET",
                 path,
                 None,
@@ -1663,6 +1722,7 @@ mod tests {
                 Path::new("/nonexistent"),
                 &releases,
                 Some(ip.parse().unwrap()),
+                true,
             )
         };
 
