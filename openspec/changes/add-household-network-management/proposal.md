@@ -1,6 +1,6 @@
 # Add household network management
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 ## Why
 
@@ -11,9 +11,10 @@ identity do not provide secure fleet commissioning or topology policy.
 
 ## Scope
 
-Propose a configuration model, capability-gated topology choices, ownership and
-recovery, and shared web/desktop workflows. The planning artifact is complete
-independently of implementation. No living spec is changed or capability shipped.
+Implement the configuration model, capability-gated topology choices, ownership
+and recovery, and shared web/desktop workflows through the `mjolnir-mesh-ai0`
+dependency graph. Activation is authorization to build, not evidence that a
+capability has shipped. Living specs remain unchanged until verified work folds.
 
 Design: [technical model and hardware inputs](design.md).
 Experience: [brief](../../../.design/household-network/DESIGN_BRIEF.md) and
@@ -72,5 +73,10 @@ Future scope: [open backhaul and a paid right to pass](future-transit.md), poten
 settled through local-EVM token transfers. This is parked exploration, not an
 initial requirement or a decision to open deployed backhaul.
 
-This is a planning proposal. Implementation remains pending review and activation.
+Activated by Duke with `activate ai0` on 2026-09-14 (America/Los_Angeles).
+This activation covers implementation of the existing ai0 dependency graph;
+child changes inherit it when scaffolded. Dependency ordering, independent
+architecture/instrument reviews, and human verification gates still apply.
+Live-network changes require a separate explicit go-ahead; the working Symbio
+uplink must not be disrupted by this software campaign. Paid transit remains parked.
 Work state and implementation follow-ups are tracked in beads, not checkboxes here.
