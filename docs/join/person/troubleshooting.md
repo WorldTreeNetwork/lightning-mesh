@@ -9,7 +9,7 @@ status: built
 time: reference
 requires: []
 next_step: null
-verified_against: 503cd17 (2026-09-13)
+verified_against: a402557 (2026-09-14)
 ---
 
 # Troubleshooting
@@ -42,13 +42,14 @@ You got an address, but the router at `10.42.x.1` doesn't answer.
 | Cause | Fix |
 |---|---|
 | No router in the mesh has an uplink right now | Nothing to fix on your device. `.mesh` services still work |
-| Your phone says "Connected" anyway | Expected after "Just the internet, please". The OS is told the network is fine |
+| Your phone says "Connected" anyway | Expected. The mesh is available even when no router currently has an internet uplink |
 
-## The welcome sheet never appeared
+## A captive welcome sheet appeared
 
-That's fine; it's optional. Possible reasons: Private DNS or VPN is on, you
-already tapped "Just the internet, please" in the last 12 hours, or the
-operator turned the sheet off. Go straight to `http://hello.mesh`.
+Updated routers report the network as open, so a welcome sheet is unexpected.
+Close it with the device's Done or Cancel control and rejoin. If it returns,
+tell the operator that `/api/captive-portal` should report `"captive":false`.
+You can open `http://hello.mesh` voluntarily in your normal browser.
 
 ## My identity disappeared
 

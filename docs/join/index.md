@@ -9,7 +9,7 @@ status: built
 time: reference
 requires: []
 next_step: person.connect
-verified_against: 503cd17 (2026-09-13)
+verified_against: a402557 (2026-09-14)
 ---
 
 # Join Lightning Mesh
@@ -28,7 +28,7 @@ doesn't. Pick how you're joining:
 ## The path for a new person
 
 1. [Connect to the Wi-Fi](person/01-connect.md): join the open network.
-2. [Say hello](person/02-hello-mesh.md): the welcome sheet and `http://hello.mesh`.
+2. [Say hello](person/02-hello-mesh.md): confirm the connection and open `http://hello.mesh` when you want the front desk.
 3. [Create your identity](person/03-identity.md): an IdentiKey you hold, and its recovery phrase.
 4. [Sign in to mesh apps](person/04-sign-in.md): approve apps with your identity.
 5. [Find services](person/05-services.md): open what people have shared.
@@ -49,7 +49,7 @@ planned.
 
 | Built | Not yet |
 |---|---|
-| Open Wi-Fi, welcome sheet, hello.mesh front desk | Seamless roaming between routers (being field-tested) |
+| Open Wi-Fi, immediate internet, hello.mesh front desk | Seamless roaming between routers (being field-tested) |
 | IdentiKey with a 24-word recovery phrase | Deleting your identity from a mesh |
 | Signing in to mesh apps | Claiming your own `.mesh` name from hello.mesh |
 | `.mesh` services, published by operators and apps | App cards inside hello.mesh ([mini-apps](publish/02-mini-apps.md)) |

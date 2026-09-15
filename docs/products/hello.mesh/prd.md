@@ -6,12 +6,12 @@ scope_tier: mvp
 ---
 # PRD: hello.mesh — The Mesh Front Desk
 
-> **As built (2026-09-13).** This is the July 2026 MVP plan, kept as written.
+> **As built (2026-09-14).** This is the July 2026 MVP plan, kept as written.
 > Where it differs from the built product:
 > - There is **no "just browse" button** (Journey 1). Anonymous use of
->   hello.mesh needs no action at all (FR5). The closest built control is on
->   the captive-portal welcome sheet, which offers **Just the internet,
->   please** and **Create your IdentiKey**.
+>   hello.mesh and the internet needs no action at all (FR5). Connectivity
+>   checks report an open network immediately; people open hello.mesh
+>   voluntarily when they want the front desk or an IdentiKey.
 > - `.mesh` name resolution, out of scope here, shipped on its own track, so
 >   the page is reached at `http://hello.mesh` as well as by LAN IP.
 > - FR23 (RFC 8910 option 114, now pointing at `/api/captive-portal`) and FR26

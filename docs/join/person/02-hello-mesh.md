@@ -1,7 +1,7 @@
 ---
 id: person.hello
 title: Say hello
-description: Handle the welcome sheet and open hello.mesh, the front desk every router serves.
+description: Connect without a portal gate and open hello.mesh, the front desk every router serves.
 path: person
 order: 2
 audience: [person, agent]
@@ -9,7 +9,7 @@ status: built
 time: 2 min
 requires: [person.connect]
 next_step: person.identity
-verified_against: 503cd17 (2026-09-13)
+verified_against: a402557 (2026-09-14)
 ---
 
 # Say hello
@@ -18,33 +18,22 @@ Every router runs a small front desk at **hello.mesh**. It shows who's
 around, what you can open, and how the routers connect, and it's where you
 make your identity.
 
-> **Status: built.** The welcome sheet hasn't been field-tested on every
-> phone model yet, so if it doesn't appear, go straight to step 2.
+> **Status: built.** Connectivity checks report an open connection immediately.
+> Opening hello.mesh is voluntary and does not control internet access.
 
-## Step 1: The welcome sheet
+## Step 1: Confirm the connection
 
-Right after you join, your phone or laptop may show a sheet titled
-**"You're on Lightning Mesh"**. It has two buttons:
+Right after you join, your phone or laptop should mark the Wi-Fi as connected.
+There is no welcome-sheet button, login, or account step required for internet
+access.
 
-| Button | What it does |
-|---|---|
-| **Create your IdentiKey** | Opens hello.mesh inside the sheet |
-| **Just the internet, please** | Says "You're all set", closes the sheet, and won't interrupt you again for about 12 hours |
+**Do:** wait for the Wi-Fi indicator to show connected.
 
-Nothing is blocked either way. This isn't a login wall.
+**Expect:** normal internet access when any mesh router has an uplink. Local
+`.mesh` services still work when the mesh has no internet uplink.
 
-**Do:** tap **Just the internet, please**.
-
-**Why this one:** the sheet is a stripped-down browser, and an identity made
-inside it may not be kept. Make your identity in your normal browser
-instead (step 2).
-
-**Expect:** "You're all set". The sheet closes.
-
-**If not:** close the sheet with your phone's Done or Cancel control.
-
-The sheet may appear again after a router restart, if you move to another
-router, or if your address changes. Tap the same button again.
+**If not:** forget the network and rejoin it, then see
+[Troubleshooting](troubleshooting.md).
 
 ## Step 2: Open hello.mesh
 

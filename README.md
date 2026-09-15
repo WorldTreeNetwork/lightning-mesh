@@ -140,7 +140,7 @@ Built since (September 2026): the `hello.mesh` front desk and directory, a
 browser-held IdentiKey with a recovery phrase and cross-origin sign-in
 (`/assert`), the `.mesh` name layer (`e21` first stone: embedded DNS responder,
 operator-published services, stationary device names, key-owned leased names),
-captive-portal welcome sheet, automatic internet sharing, and guest-client
+default-open connectivity checks, automatic internet sharing, and guest-client
 roam (`sz9`, awaiting field validation in `0pv`). Mini-app cards inside
 hello.mesh are designed and partly merged, not deployed (`ncy`). The
 user-facing picture of what works is [docs/join](docs/join/index.md).
