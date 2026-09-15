@@ -1,0 +1,14 @@
+{
+  "schema_version":"1.0",
+  "id":"res-ai0-trust-review-r1",
+  "packet_id":"pkt-ai0-trust-review-r1",
+  "signer":{"id":"codex-conductor","kind":"model","harness":"codex","signing":{"mode":"stand-in","stand_in_id":"codex-conductor"}},
+  "artifacts":[{"path":"openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise.md","role":"independent Opus architecture review, persisted by conductor"}],
+  "evidence":{"kind":"contrast","if_true":"A valid narrower owner-authorized operation is distinct from membership, changed holder, untrusted issuer, stale authority and replay.","if_false":"Contract contradictions prevent downstream use.","observed":"Fresh Opus4.8 reader returned ADVISE accept for the contract only. Four downstream requirements and a human offline-validity policy decision were recorded on dependent beads. First attempt timed out; fresh retry completed with exit0.","note":"Conductor attests persistence and observed review, not authorship of the independent verdict or runtime security."},
+  "disposition":"pass",
+  "promoted":false,
+  "commit":{"sha":"ba19e94224d39445cf6ab989ff04c04341dbc238","paths":["openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise.md"]},
+  "summary":"Independent trust-contract review accepted and persisted; no runtime capability accepted or deployed. Human offline-authority policy is still owed before capability implementation.",
+  "signature":{"mode":"stand-in","stand_in_id":"codex-conductor","content_hash":"sha256:77375d458ecebe37440b3c438655c155f70a74048f46b7f103e902f30dae7ae6","signed_at":"2026-09-15T02:39:00Z"},
+  "raw_ref":".spawns/mjolnir-mesh-ai0.3-1789439517-87265-68bbb77d/raw.txt"
+}
