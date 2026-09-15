@@ -49,11 +49,19 @@ Authorization:
 | Publish, renew or unpublish your own name | Name owner key | Browser key is enough |
 | Node-scoped actions (device names, hosting, storage, radio, installs, ownership transfer) | Node owner capability | Installed signer (Lightning Admin first) |
 
-Node ownership is bootstrapped by physical pairing (a WPS-button window), never
-by first gossip claim. Prerequisite: owner-signed name records verified by every
-consumer.
+Node ownership needs a physical-presence step (WPS or storage-node button)
+plus a reviewed per-device proof. The existing WPS window isn't proof on its
+own. Ownership is never taken by first gossip claim. Prerequisite: owner-signed
+name records verified by every consumer.
 
-Awaiting Duke's decision. Bead `mjolnir-mesh-b6j.2`.
+**Decided (steer 2026-09-15).** The household campaign `ai0` governs this:
+- signed node control is `add-signed-node-control` (bead `mjolnir-mesh-b6j.2`)
+- the claim ceremony is `add-household-owner-claim` (`bf7.1`)
+- grants are `add-mesh-admin-capabilities` (`ai0.1`): configuration grants
+  default to 900 s, with an owner-configurable 3600 s v1 ceiling
+- the shared contract is `openspec/changes/add-household-trust-contract`
+
+Lightning Admin is the first hard-custody signer.
 
 ## D4: HTTPS and certificates
 
@@ -71,5 +79,17 @@ Awaiting Duke's decision. Bead `mjolnir-mesh-b6j.2`.
   Workers.
 - A private per-mesh CA is for managed devices only.
 
-Awaiting Duke's decision. Bead `mjolnir-mesh-b6j.1` (supersedes the direct
-lease-to-certificate idea in `mjolnir-mesh-3fg`).
+**Decided (steer 2026-09-15).**
+- Zone: `mesh.worldtree.network` by default, with bring-your-own.
+- HTTPS covers apps **and** per-router front desks in the same phase.
+- The build order puts HTTPS after signed records and owner claim.
+
+Change: [`add-https-aliases`](../../openspec/changes/add-https-aliases/proposal.md)
+(PENDING), bead `mjolnir-mesh-b6j.1`. It supersedes the direct
+lease-to-certificate idea in `mjolnir-mesh-3fg`.
+
+## D1 outcome
+
+**Decided (steer 2026-09-15):** one software image; the inference role is
+enabled automatically when a Hailo device is detected; two documented hardware
+builds.

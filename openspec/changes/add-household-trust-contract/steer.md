@@ -10,16 +10,16 @@ Recorded here because both decisions below feed this contract's downstream
 beads.
 
 ## Decided
-- **Maximum offline validity for privileged grants (g3y3): 15 minutes** (user,
-  took the recommendation on record).
-  - Applies to configuration-changing grants. They stop being usable after 15
-    minutes without fresh verified revocation or authority information.
-  - Continued use needs explicit owner reauthorization. An owner with their
-    signer present may reissue locally while offline.
-  - Doesn't expire ordinary internet access or require hub identity.
+- **Offline validity for privileged grants (g3y3): keep the contract as
+  written** (user, confirmed in the change session the same day).
+  - Configuration-changing grants default to 900 seconds. Owner policy may set
+    up to a 3600-second v1 ceiling.
+  - Renewal needs fresh authorization. Policy can't lengthen issued grants.
+  - An earlier same-day note recorded "15 minutes maximum". That was corrected:
+    15 minutes is the default, not a hard maximum.
 
-  Why: keeps exposure to unpropagated revocation small; the owner can still
-  act offline.
+  Why: offline admin availability for owners who choose it, with small
+  default exposure to unpropagated revocation.
 - **Owner claim ceremony: WPS press (or storage-node button) as physical
   presence plus reviewed per-device proof** (user, reconciled with accepted
   finding F-C).
@@ -52,14 +52,21 @@ beads.
 - Concrete per-device proof mechanism: still belongs to `bf7.1`.
 
 ## Feeds change
-- **g3y3 is now closed at 15 minutes.** The "maximum offline validity" gap at
-  design.md line ~79 is filled with that value. Keep the distinction between
-  losing internet and losing authority freshness.
-- **Owner claim.** Keep the WPS window as insufficient proof on its own. Make
-  the claim ceremony name physical presence (WPS or storage-node button) plus a
-  reviewed per-device proof.
-- **Signer.** Note Lightning Admin as the first hard-custody signer surface.
-- **Scope.** Keep HTTPS and certificate work out of this contract. It depends
-  on this contract's owner and issuer model but is planned under `b6j.1`.
-- **Re-review.** The next independent ceremony review should cover the 15-minute
-  value alongside the tightened recovery policy.
+
+**Result of the change pass (2026-09-15): no delta change needed.** Every
+decision above was already in this change:
+- **Grant lifetime.** design.md "Delegated v1 timing policy" and the spec
+  requirement "Separate bounded recovery and administrative lifetimes" carry the
+  900-second default and 3600-second ceiling, matching
+  `add-mesh-admin-capabilities`.
+- **Claim ceremony.** design.md "Claim and recovery boundary" already says the
+  WPS window isn't proof, and requires device-specific proof plus a fresh
+  physical ceremony ("WPS-like interaction, not use of the WPS authentication
+  protocol").
+- **Signer.** proposal.md's journey already names Lightning Admin's setup.
+- **Scope.** HTTPS isn't in this contract. It's planned in
+  `openspec/changes/add-https-aliases` (`b6j.1`), which depends on this
+  contract's house and node identities.
+
+The existing review evidence therefore still applies. The pending ceremony
+re-review for the tightened recovery policy is unchanged by this steer.
