@@ -24,9 +24,19 @@ policy patch on an issued grant. Unlocked owner signer may reissue locally
 without internet. Delegates need owner-authorized reissue.
 
 **Unlimited** is not a configuration-grant profile. It is only private
-read-only diagnostics on the owner's registered holder-bound device, ended by
-holder revocation or authority-epoch change. Never for configuration-changing
-or delegated Admin grants.
+read-only diagnostics on the owner's registered holder-bound device. It
+waives wall-clock token expiry only. The profile stale-authority maximum
+and missing-time refusal still apply to these privileged reads. Holder
+revocation or authority-epoch change ends them once the destination has
+verified that fact; a partitioned destination cannot observe either, so
+exposure is bounded by stale-authority, not by "no expiry". Never for
+configuration-changing or delegated Admin grants.
+
+House profile and grant class are verifier inputs from verified authority
+state at the **grant's issuance epoch**. A token-asserted profile is
+accepted only if it is not looser than that recorded profile. Profile
+changes apply only to newly issued grants: the stale-authority maximum
+for an already-issued grant is the issuance-time profile.
 
 **Grant-class caps** (no profile loosens these):
 
@@ -47,11 +57,12 @@ are unaffected.
 
 A destination MAY authorize a privileged operation only when all of:
 
-1. Token expiry is in the future under **authenticated** time, not the node
-   wall clock alone.
-2. The destination last verified current authority/revocation information
-   within the profile's **max stale authority** window.
-3. Grant-class cap, parent ceiling, and profile ceiling are all respected.
+1. Effective expiry is in the future under **authenticated** `unix_seconds`
+   (see below). The node wall clock is not an input.
+2. Staleness `unix_seconds - authority_verified_at` is within the
+   issuance-time profile's **max stale authority** window.
+3. Grant-class cap, parent ceiling, and profile ceiling are all respected
+   using issuer-signed `issued_at` / `expires_at`.
 4. Renewal is a new authorization check, not activity-extended lifetime.
 
 A 7-day token NEVER authorizes 7 days of stale authority. Missing, regressed,
@@ -80,14 +91,32 @@ pub struct TimeEvidence {
 }
 ```
 
+`unix_seconds` SHALL be derived from signed material (newest verified
+authority/revocation record time, or an issuer-signed time attestation bound
+to a destination challenge) plus a monotonic elapsed reading. It SHALL NOT
+be filled from `SystemTime::now()` or any other wall clock, including after
+a successful authority sync. `authority_verified_at <= unix_seconds` else
+refuse. Staleness is only `unix_seconds - authority_verified_at` compared
+to the issuance-time profile maximum; never wall-clock subtraction.
+
+A persisted high-water floor stores the greatest `unix_seconds` accepted.
+Evidence below the floor is regressed and refused. The floor never decreases.
+Clock rollback or loss of monotonic window: previous evidence is not restored;
+privileged use fails closed until new authenticated evidence exists.
+
 Construction is destination-only. Test fixtures may supply frozen evidence;
 production must not accept a caller wall clock as that type. Token blocks
 MUST NOT be allowed to derive `time()`, `unix_seconds`, or
 `authority_verified_at`. Inspect parsed blocks for reserved fact/rule heads
-(same rule as codec-profile: not substring matching).
+(same rule as codec-profile: not substring matching). Only `unix_seconds`
+from `TimeEvidence` may feed the Datalog `time` fact.
 
-Clock rollback or loss of monotonic window: previous evidence is not restored;
-privileged use fails closed until new authenticated evidence exists.
+The authority block SHALL carry issuer-signed `issued_at` and `expires_at`
+(claims, never freshness). Missing either refuses. `issued_at > unix_seconds`
+refuses. Effective expiry is
+`min(expires_at, issued_at + class cap, issued_at + profile ceiling, parent ceiling)`.
+Without those facts an engine that only evaluates the token's own expiry
+check cannot enforce any cap.
 
 ## Negative vectors owed before engine code
 
@@ -100,8 +129,16 @@ privileged use fails closed until new authenticated evidence exists.
 - Unlimited diagnostic used for a configuration operation → refuse.
 - `AuthorizerBuilder::time()` or token-asserted time as the only evidence → refuse.
 - Clock moved backwards after expiry → still refuse.
-- Authority verify under partition: issuer revoked on a reachable replica,
-  destination has not verified within stale window → refuse (extends F-D).
+- Authority verify under partition, Relaxed: issuer revoked on a reachable
+  replica, destination has not verified within 7 d → refuse (extends F-D).
+- Same, Standard: not verified within 24 h → refuse.
+- Same, Strict: not verified within 15 min → refuse.
+- Positive F-D control: issuer revoked after the destination's last verify,
+  request still inside the stale window, token unexpired → accept. Tests
+  MUST distinguish "refused because stale" from "accepted inside bounded
+  exposure".
+- No-expiry owner diagnostic with missing time evidence → refuse.
+- No-expiry owner diagnostic past issuance-time stale maximum → refuse.
 
 ## Review gate
 
