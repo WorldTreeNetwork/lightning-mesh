@@ -204,16 +204,38 @@ Gossip ingest skips verification (`crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs`
 5. **Later.** Mobile signer, then secure embedding once hello has a secure
    origin.
 
-## Decisions for Duke
+## Decisions (steer 2026-09-15, Duke)
 
-1. The delegated domain: a project domain (for example under
-   `worldtree.network`) as the default, with bring-your-own-domain.
-2. Whether routers get per-node HTTPS front desks, or HTTPS stays for apps
-   only at first.
-3. Desktop signer first (Lightning Admin), before extension or mobile.
-4. Physical pairing on the WPS button for node ownership.
-5. Adopt the build order above, which puts HTTPS **after** signed records and
-   the signer.
+1. **Delegated zone: `mesh.worldtree.network`** is the default, with
+   bring-your-own-domain supported. Apps are
+   `https://a-<app-key-hash>.<mesh-label>.mesh.worldtree.network` and router
+   front desks are `https://n-<node-key-hash>.<mesh-label>.mesh.worldtree.network`.
+2. **HTTPS scope: apps and per-router front desks** in the HTTPS phase. This was
+   chosen over apps-first, so every router needs TLS termination and renewal.
+   Walk-up `http://hello.mesh` stays.
+3. **Signer: Lightning Admin desktop first**, then browser extension, then
+   mobile.
+4. **Node ownership: physical presence plus reviewed per-device proof.** A WPS or
+   storage-node button press is only the presence step. The existing WPS window
+   isn't proof on its own (accepted review finding F-C). The ceremony is defined
+   in `bf7.1` (`add-household-owner-claim`).
+5. **Build order: trust first.** Signed records and export come first, then
+   signer, claim and signed control, then HTTPS, then mirroring.
+
+**Governance.** The household campaign `ai0` governs trust and control:
+- owner claim `bf7.1`
+- grants `ai0.1` (`add-mesh-admin-capabilities`)
+- control-record integrity `ai0.9`
+- signed node control `b6j.2` (`add-signed-node-control`)
+- the shared contract in `openspec/changes/add-household-trust-contract`
+
+This document keeps HTTPS (`b6j.1`, change `add-https-aliases`), storage-node
+mirroring (`b6j`) and name-record signing beyond `ai0.9`'s admin scope.
+Sections 3 and 5 above are direction; where they overlap `ai0`, the household
+trust contract is authoritative.
+
+Storage nodes use one software image. The inference role turns on when a Hailo
+device is detected (D1).
 
 ## Risks to test
 
