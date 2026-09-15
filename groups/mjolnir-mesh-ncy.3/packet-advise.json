@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ncy-3-advise-r1",
+  "node_id": "mjolnir-mesh-ncy.3",
+  "capability": "mesh-mini-apps",
+  "change_id": "add-app-shelf",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "grok-conductor" }
+  },
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": { "mode": "stand-in", "stand_in_id": "fable-5.1-arch-review" }
+  },
+  "role": "reader",
+  "goal": "Fresh independent advise of add-app-shelf. First read only proposal.md Why, living mesh-mini-apps spec, hello-mesh-web +page.svelte and contract.ts; write a ten-line independent take before opening tasks.md and the delta. Then write reviews/2026-09-15-advise.md with ADVISE accept or send-back, READER and SPAWN. Scope is the Apps shelf UI on hello.mesh consuming GET /api/apps. Do not reopen the folded insertion/sandbox contract. Be rigorous that page load contacts no app hosts, failed manifests are link-out tiles, canEmbed still gates iframes, unmarked services stay in Services, and identity/publish remain out of scope. Keep concise.",
+  "anchors": [
+    { "symbol": "openspec/changes/add-app-shelf/proposal.md:10", "invariant": "Read Why first." },
+    { "symbol": "openspec/specs/mesh-mini-apps/spec.md:119", "invariant": "Sandboxed insertion already living; do not reopen." },
+    { "symbol": "hello-mesh-web/src/lib/miniapp/contract.ts:1", "invariant": "Reuse FRAME_* and canEmbed; no second parser." },
+    { "symbol": "hello-mesh-web/src/routes/+page.svelte:29", "invariant": "Services already on the front desk; Apps mounts above it." }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Shelf can land without contacting app hosts on load, without embedding key-bearing origins, and without mixing unmarked services into Apps.",
+    "if_false": "A concrete missing constraint would put app script in a hello origin or fetch app hosts before tap."
+  },
+  "out_of_scope": [
+    { "item": "identity bridge", "tracked_as": "mjolnir-mesh-ncy.4" },
+    { "item": "meshd --app publish", "tracked_as": "mjolnir-mesh-ncy.2" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": ["openspec/changes/add-app-shelf/reviews/2026-09-15-advise.md"],
+    "do_not": ["deploy", "push", "fold", "implement product code", "edit other changes"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only"
+}

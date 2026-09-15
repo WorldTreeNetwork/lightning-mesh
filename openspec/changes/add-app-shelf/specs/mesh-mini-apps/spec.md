@@ -11,11 +11,25 @@ from the service name and `embed: link`. Manifest strings SHALL render as
 text (or `<img>` for an inlined icon), never as markup.
 
 A card-mode tile that `canEmbed` SHALL create no iframe until the visitor
-opens it. After open, insertion SHALL follow Sandboxed insertion. Every
-tile SHALL keep an open-in-new-tab control. A missing, stale or invalid
-manifest SHALL still show a link-out tile. An empty directory SHALL show
-an empty Apps state, not Services' empty copy. Apps SHALL NOT contact app
-hosts from the browser except the entry URL of an opened card.
+opens it. After open, insertion SHALL follow Sandboxed insertion, using
+`pageOrigin = window.location.origin` (never the literal `hello.mesh`).
+Iframe `src` and link `href` SHALL come only from `entryUrl(service)`.
+Every tile SHALL keep an open-in-new-tab control
+(`target="_blank" rel="noopener noreferrer"`) and SHALL show the entry
+host as text beside the display name. A record with `manifest: null`
+(missing, expired or invalid) SHALL show a link-out tile. A record with
+`stale: true` and a kept manifest SHALL honour that manifest. Closing a
+card SHALL remove the iframe element and its `message` listener. At most
+one card SHALL be open at a time. Mini-apps SHALL NOT also appear in
+Services. An empty Apps shelf SHALL be a compact line, not a full empty
+card. `/api/apps` refresh SHALL ride the directory poll (5 s) or slower.
+The page SHALL NOT add `<link rel="preconnect|prefetch|dns-prefetch|icon">`
+to app entry origins. Apps SHALL NOT contact app hosts from the browser
+except the entry URL of an opened card.
+
+The tile set SHALL be the directory filtered by `isMiniApp`; `/api/apps`
+is a per-service lookup. If that request fails or is not yet loaded, tiles
+SHALL still render as link-out.
 
 #### Scenario: Card tile opens on tap
 

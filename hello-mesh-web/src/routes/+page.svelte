@@ -11,14 +11,17 @@
 	import HeroStrip from '$lib/components/HeroStrip.svelte';
 	import PeoplePanel from '$lib/components/PeoplePanel.svelte';
 	import RoutersPanel from '$lib/components/RoutersPanel.svelte';
+	import AppsPanel from '$lib/components/AppsPanel.svelte';
 	import ServicesPanel from '$lib/components/ServicesPanel.svelte';
 	import { directoryStore, startDirectoryPolling } from '$lib/directory/store.svelte';
 	import { startIdentity } from '$lib/identity/store.svelte';
+	import { isMiniApp } from '$lib/miniapp/contract';
 
 	$effect(startDirectoryPolling);
 	$effect(startIdentity);
 
 	const services = $derived(directoryStore.directory?.services ?? []);
+	const ordinary = $derived(services.filter((svc) => !isMiniApp(svc)));
 </script>
 
 <main class="mx-auto flex max-w-2xl flex-col gap-6 p-6">
@@ -26,7 +29,9 @@
 
 	<PeoplePanel />
 
-	<ServicesPanel {services} loaded={directoryStore.loaded} />
+	<AppsPanel {services} loaded={directoryStore.loaded} />
+
+	<ServicesPanel services={ordinary} loaded={directoryStore.loaded} />
 
 	<RoutersPanel />
 </main>
