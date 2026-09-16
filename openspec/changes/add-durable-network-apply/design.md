@@ -113,3 +113,42 @@ mechanism remain explicit pin-before-code obligations, not permission for a work
 to guess them inside an unreviewed runtime patch. These refinements and those pins
 must be included in the next implementation-readiness review. No human policy
 question is reopened and no OpenWrt implementation is claimed by this amendment.
+
+## Implementation pins (steer 2026-09-15, decide-for-me)
+
+Recorded so the implementation-readiness advise can review exact pins. Not a
+runtime claim. Not a living SHALL until folded.
+
+- **Language.** New workspace crate `crates/mjolnir-apply`: library + unit/fault
+  tests first (`CARGO_TARGET_DIR=/tmp/lm-target`). OpenWrt adapter is a later
+  slice in this same change: optional static musl helper plus the existing
+  BusyBox `usr/sbin/mjolnir-apply` as launcher. Do not rewrite the ash helper
+  as the journal.
+- **On-disk root.** Persistent overlay `/etc/mjolnir/txn/` (tests: a tempdir via
+  env/`TxnPaths`). Never `/tmp`. Never `/root/mjolnir-stage` (legacy stage
+  stays the launcher's download area). Layout:
+  `lock`, `journal.json`, `receipts/<id>.json`, `tombstones.json`,
+  `active/<id>/plan.json`, `active/<id>/snapshot/`.
+- **Encoding.** UTF-8 JSON. Top-level `schema_version: 1`. Plan and journal are
+  separate files. Snapshot copies allowlisted files and writes an explicit
+  missing-file marker for absent sources. Every durable write: write temp, fsync
+  file, rename, fsync parent directory. Disk error denies new mutation.
+- **Lock.** One node-wide exclusive `flock` on `/etc/mjolnir/txn/lock`. The FD
+  is released on process death. Recovery-first on start and before admission
+  takes that lock, then inspects the durable journal. A leftover directory or
+  dead PID is not itself proof that takeover is safe. Do not use `mkdir` locks.
+- **v1 mutation allowlist.** `wireless`, `network`, `firewall`, `mjolnir` UCI;
+  the meshd binary replace; the wpad-mesh swap already in `mjolnir-apply`.
+  Firmware, package, key, and init-file updater operations are **rejected**
+  from this transaction path (not wrapped as recoverable).
+- **Bounds.** Default deadline 120s from durably recorded start; per-plan
+  timeout must be positive and ≤ 600s. Plan JSON ≤ 64 KiB. Snapshot tree ≤
+  8 MiB. Nonterminal transactions and their snapshots are never garbage-
+  collected. Keep the last 32 terminal receipts; tombstone evicted IDs so a
+  reused ID cannot admit a different plan.
+- **Commit ordering.** Health-pass does not commit. Only a successfully
+  persisted terminal journal state does. Crash between health-pass and that
+  write restores the snapshot.
+- **Evidence.** Laptop/fault-injection tests are software evidence. Hardware
+  qualification remains `lpv` / `z3th`. Live radio or fleet deploy is a
+  separate authorization.
