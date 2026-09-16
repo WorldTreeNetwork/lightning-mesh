@@ -6174,10 +6174,12 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
     use tokio::process::Command;
     let mut interval = tokio::time::interval(CLIENT_DATAPLANE_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Sol consult: do not nomaster on a single neigh glimpse (stale/spoof).
+    // Two consecutive live foreign `.1`s (~6s) before detaching copper.
+    let mut merge_ticks: u8 = 0;
     loop {
         interval.tick().await;
         enable_ip_forwarding();
-        enable_roam_sysctls(&client_iface);
         let own_subnet = {
             let s = store.lock().expect("claim store poisoned");
             partition_claims(&s, &self_id).0.map(|(net, _)| net)
@@ -6185,6 +6187,7 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
         let Some(net) = own_subnet else {
             continue;
         };
+        let gw = client_gateway_addr(net);
         let addr_show = Command::new("ip")
             .args(["-4", "addr", "show", "dev", &client_iface])
             .output()
@@ -6193,12 +6196,90 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default();
-        let gw = client_gateway_addr(net);
+        let neigh = Command::new("ip")
+            .args(["-4", "neigh", "show", "dev", &client_iface])
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        if mjolnir_mesh::heal::foreign_gateway_on_bridge(&neigh, gw) {
+            merge_ticks = merge_ticks.saturating_add(1);
+            if merge_ticks >= 2 {
+                isolate_copper_from_client_bridge(&client_iface).await;
+                // proxy-ARP on a merged L2 answers iOS DAD for the offered
+                // address; the phone then drops the lease (spinner, no IP).
+                let path = format!("/proc/sys/net/ipv4/conf/{client_iface}/proxy_arp");
+                let _ = ensure_sysctl_value(&path, "0");
+            }
+        } else {
+            merge_ticks = 0;
+            enable_roam_sysctls(&client_iface);
+        }
+        if mjolnir_mesh::heal::iface_has_ipv4(
+            &addr_show,
+            mjolnir_mesh::heal::STOCK_LAN_ALIAS,
+        ) {
+            strip_stock_lan_alias(&client_iface).await;
+        }
         if !mjolnir_mesh::heal::iface_has_ipv4(&addr_show, gw) {
             assign_client_addr(net, &client_iface).await;
         } else {
             ensure_client_connected_route(net, &client_iface).await;
         }
+    }
+}
+
+/// Pull ethernet/DSA ports out of the client bridge so wifi `/24`s isolate.
+/// Kernel-only: netifd may re-enslave on reload; this loop re-applies.
+#[cfg(target_os = "linux")]
+async fn isolate_copper_from_client_bridge(client_iface: &str) {
+    use tokio::process::Command;
+    let link = Command::new("ip")
+        .args(["-o", "link", "show"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    for port in mjolnir_mesh::heal::copper_bridge_ports(&link, client_iface) {
+        match Command::new("ip")
+            .args(["link", "set", "dev", &port, "nomaster"])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => warn!(
+                port,
+                bridge = client_iface,
+                "merged client L2: detached copper from client bridge"
+            ),
+            Ok(o) => warn!(
+                port,
+                "could not detach copper from client bridge: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => warn!(port, "could not detach copper from client bridge: {e}"),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn strip_stock_lan_alias(client_iface: &str) {
+    use tokio::process::Command;
+    let alias = mjolnir_mesh::heal::STOCK_LAN_ALIAS.to_string();
+    match Command::new("ip")
+        .args(["addr", "del", &format!("{alias}/24"), "dev", client_iface])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => warn!(
+            iface = client_iface,
+            "stripped stock 192.168.1.1/24 from client bridge"
+        ),
+        Ok(_) => {}
+        Err(e) => debug!(iface = client_iface, "could not strip 192.168.1.1: {e}"),
     }
 }
 
@@ -6265,23 +6346,30 @@ async fn retract_client_addr(subnet: Ipv4Net, iface: &str) {
 #[cfg(not(target_os = "linux"))]
 async fn retract_client_addr(_subnet: Ipv4Net, _iface: &str) {}
 
-/// True when the lan config's PRIMARY (first) address is already the wanted
-/// gateway CIDR — the idempotence check for [`reconcile_client_uci`]. Pure so
-/// it's unit-tested below. `current` is `uci get network.lan.ipaddr` output:
-/// space-joined list entries, or the bare stock `192.168.1.1`.
+/// True when the lan config is exactly the claimed gateway CIDR — the
+/// idempotence check for [`reconcile_client_uci`]. Pure so it's unit-tested
+/// below. `current` is `uci get network.lan.ipaddr` output: space-joined list
+/// entries, or the bare stock `192.168.1.1`.
+///
+/// A trailing `192.168.1.1/24` recovery alias is **not** current. That alias
+/// is fleet-identical; two nodes on one switch both answer it (AP3000 field
+/// blackhole). Rewrite to the claimed `/24` alone.
 fn lan_uci_is_current(current: &str, want_primary: &str) -> bool {
-    current.split_whitespace().next() == Some(want_primary)
+    let toks: Vec<&str> = current.split_whitespace().collect();
+    toks == [want_primary]
 }
 
 /// Make the claimed /24 own the OpenWrt lan config (mjolnir-mesh-659):
-/// `<gw>/24` becomes the FIRST (primary) entry of `network.lan.ipaddr`, so
-/// dnsmasq's `dhcp.lan` pool (subnet-relative start/limit) serves the claimed
-/// subnet instead of the stock 192.168.1.0/24. The stock subnet is identical
-/// on every node, so clients it leases black-hole across the mesh (replies
-/// exit the far node's own br-lan); the claimed /24 is what babel routes
-/// fleet-wide. 192.168.1.1/24 is kept as a SECOND alias: dnsmasq stops
-/// leasing from it, but the wired-recovery convention survives — a
-/// statically-addressed laptop on the LAN port still reaches the node.
+/// `<gw>/24` is the sole `network.lan.ipaddr`, so dnsmasq's `dhcp.lan` pool
+/// (subnet-relative start/limit) serves the claimed subnet instead of the
+/// stock 192.168.1.0/24. The stock subnet is identical on every node, so
+/// clients it leases black-hole across the mesh (replies exit the far node's
+/// own br-lan); the claimed /24 is what babel routes fleet-wide.
+///
+/// Do **not** keep `192.168.1.1/24` as a second alias. 659 did; AP3000 field
+/// notes and a 2026-09-15 household switch then showed the alias is
+/// fleet-identical and merges with any other node's alias on shared copper.
+/// Wired recovery is link-local `fe80` on `br-lan` plus `10.42.x.1`.
 ///
 /// Best-effort and OpenWrt-only: skips silently when `uci` or a `lan`
 /// interface is absent (RouterOS containers, desktops). Idempotent: no
@@ -6321,7 +6409,6 @@ async fn reconcile_client_uci(subnet: Ipv4Net) {
         "uci -q delete network.lan.ipaddr; \
          uci -q delete network.lan.netmask; \
          uci add_list network.lan.ipaddr='{gw_cidr}'; \
-         uci add_list network.lan.ipaddr='192.168.1.1/24'; \
          uci commit network && \
          /etc/init.d/network reload && \
          /etc/init.d/dnsmasq restart"
@@ -6332,7 +6419,7 @@ async fn reconcile_client_uci(subnet: Ipv4Net) {
     let run = Command::new("sh").args(["-c", &script]).output();
     match tokio::time::timeout(Duration::from_secs(30), run).await {
         Ok(Ok(out)) if out.status.success() => {
-            info!(%gw_cidr, "lan UCI reconciled — DHCP now serves the claimed /24 (192.168.1.1 kept as recovery alias)")
+            info!(%gw_cidr, "lan UCI reconciled — DHCP now serves the claimed /24 (no 192.168.1.1 alias)")
         }
         Ok(Ok(out)) => warn!(
             %gw_cidr,
@@ -6810,14 +6897,16 @@ async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
     None
 }
 
-/// Connectivity LEDs (849.5 AP3000, 849.6 M3000). No-ops on other SKUs.
+/// Connectivity LEDs (849.5–849.7). No-ops on unknown SKUs.
 #[cfg(target_os = "linux")]
 async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
     use mjolnir_mesh::led::{
         APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LED_AMBER, LED_BLUE, LED_M3000_RED,
-        LED_M3000_WHITE, LED_PHY, LED_RED, LedAction, LedFacts, LedSku, classify, default_via_mesh,
-        detect_sku, is_local_egress, mesh_has_estab, mix_ap3000, mix_for_phase, mix_m3000,
-        mix_red_white_for_phase, parse_mesh_ifaces,
+        LED_M3000_WHITE, LED_OUTDOOR_GREEN, LED_PHY, LED_RED, LED_RED_POWER, LED_TR3000_WHITE,
+        LED_WR3000S_STATUS, LED_WR3000S_WAN, LED_WR3000S_WLAN2, LED_WR3000S_WLAN5, LedAction,
+        LedFacts, LedSku, classify, default_via_mesh, detect_sku, is_local_egress, mesh_has_estab,
+        mix_ap3000, mix_for_phase, mix_m3000, mix_outdoor, mix_red_green_for_phase,
+        mix_red_white_for_phase, mix_wr3000s, mix_wr3000s_for_phase, parse_mesh_ifaces,
     };
     use mjolnir_mesh::roam::parse_ap_ifaces;
     use std::path::Path;
@@ -6828,8 +6917,11 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
         return;
     };
     match sku {
-        LedSku::Ap3000 => info!("led: AP3000 status lamps (849.5)"),
+        LedSku::Ap3000 => info!("led: AP3000 indoor status lamps (849.5)"),
         LedSku::M3000 => info!("led: M3000 status lamps (849.6)"),
+        LedSku::Tr3000 => info!("led: TR3000 status lamps (849.7)"),
+        LedSku::Wr3000s => info!("led: WR3000S status lamps (849.7)"),
+        LedSku::Ap3000Outdoor => info!("led: AP3000 Outdoor status lamps (849.7)"),
     }
     let set_trigger_none = |name: &str| {
         let _ = std::fs::write(led_root.join(name).join("trigger"), "none\n");
@@ -6843,6 +6935,9 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
     let topology_lamps: &[&str] = match sku {
         LedSku::Ap3000 => &[LED_AMBER, LED_RED, LED_BLUE],
         LedSku::M3000 => &[LED_M3000_RED, LED_M3000_WHITE],
+        LedSku::Tr3000 => &[LED_RED_POWER, LED_TR3000_WHITE],
+        LedSku::Wr3000s => &[LED_WR3000S_STATUS, LED_WR3000S_WAN, LED_WR3000S_WLAN5],
+        LedSku::Ap3000Outdoor => &[LED_RED_POWER, LED_OUTDOOR_GREEN],
     };
     for name in topology_lamps {
         set_trigger_none(name);
@@ -6850,6 +6945,10 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
     for name in LED_PHY {
         set_trigger_none(name);
         set_bright(name, false);
+    }
+    if sku == LedSku::Wr3000s {
+        set_trigger_none(LED_WR3000S_WLAN2);
+        set_bright(LED_WR3000S_WLAN2, false);
     }
 
     let started = Instant::now();
@@ -6947,14 +7046,37 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
                         set_bright(LED_RED, mix.red);
                         set_bright(LED_BLUE, mix.blue);
                     }
-                    LedSku::M3000 => {
+                    LedSku::M3000 | LedSku::Tr3000 => {
                         let mix = mix_red_white_for_phase(
                             mix_m3000(render.tone),
                             render.flash_ms,
                             on,
                         );
-                        set_bright(LED_M3000_RED, mix.red);
-                        set_bright(LED_M3000_WHITE, mix.white);
+                        let (red, white) = match sku {
+                            LedSku::M3000 => (LED_M3000_RED, LED_M3000_WHITE),
+                            _ => (LED_RED_POWER, LED_TR3000_WHITE),
+                        };
+                        set_bright(red, mix.red);
+                        set_bright(white, mix.white);
+                    }
+                    LedSku::Ap3000Outdoor => {
+                        let mix = mix_red_green_for_phase(
+                            mix_outdoor(render.tone),
+                            render.flash_ms,
+                            on,
+                        );
+                        set_bright(LED_RED_POWER, mix.red);
+                        set_bright(LED_OUTDOOR_GREEN, mix.green);
+                    }
+                    LedSku::Wr3000s => {
+                        let mix = mix_wr3000s_for_phase(
+                            mix_wr3000s(render.tone),
+                            render.flash_ms,
+                            on,
+                        );
+                        set_bright(LED_WR3000S_STATUS, mix.status);
+                        set_bright(LED_WR3000S_WAN, mix.wan_online);
+                        set_bright(LED_WR3000S_WLAN5, mix.wlan_5ghz);
                     }
                 }
             }
@@ -9141,17 +9263,16 @@ config meshd 'meshd'
 
     #[test]
     fn reconciled_lan_config_is_idempotent() {
-        // Claimed primary + recovery alias, as this fix writes it.
-        assert!(lan_uci_is_current(
-            "10.42.61.1/24 192.168.1.1/24",
-            "10.42.61.1/24"
-        ));
+        assert!(lan_uci_is_current("10.42.61.1/24", "10.42.61.1/24"));
     }
 
     #[test]
-    fn wrong_order_or_new_claim_needs_reconcile() {
-        // The manual bench renumber put the claimed addr FIRST — current.
-        // Stock-first ordering (the 659 bug state) is not.
+    fn recovery_alias_is_not_current() {
+        // 659 wrote claimed-primary + 192.168.1.1/24. That alias must go.
+        assert!(!lan_uci_is_current(
+            "10.42.61.1/24 192.168.1.1/24",
+            "10.42.61.1/24"
+        ));
         assert!(!lan_uci_is_current(
             "192.168.1.1/24 10.42.61.1/24",
             "10.42.61.1/24"
