@@ -4,8 +4,8 @@ Authoritative owed work is bead `mjolnir-mesh-ncy.2`.
 
 - [x] Human activation (banner to ACTIVE BUILD) — Duke 2026-09-15
 - [ ] Advise by an independent non-Claude reader; accept before act
-- [ ] Advise send-back: reconcile the proposed 256-byte path ceiling with the living consumer requirement and `contract.ts`; either remove it or modify and test both sides as one rule set
-- [ ] Advise send-back: specify and test omitted `app.path` defaulting canonically to `/`, including the name-claim wire/storage representation and `--app-path` requiring `--app`
+- [x] Advise send-back: drop the 256-byte path ceiling so publish matches living `appPath` / `contract.ts` (pinned 2026-09-16)
+- [x] Advise send-back: omitted `app.path` is `/`; `{"app":{"v":1}}` accepted; `--app-path` requires `--app` (pinned 2026-09-16; vectors on implement boxes)
 - [ ] `mjolnir-mesh`: shared `validate_app_marker` plus JSON vectors in `hello-mesh-web/src/lib/miniapp/fixtures/app-marker/`, also run by `contract.spec.ts`
 - [ ] mjolnir-hello: optional `app` on `NameClaimRequest` and `NameClaimRecord`; reject invalid before spooling; routes tests (valid, invalid path, unsupported version, signature unchanged with and without `app`)
 - [ ] meshd: carry `app` through the spool, leased-name record (`#[serde(default)]`) and directory TXT projection; renewal without `app` clears it; unit tests

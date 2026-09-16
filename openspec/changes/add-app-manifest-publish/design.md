@@ -32,7 +32,8 @@ add a second, incompatible signing scheme.
   ```
 - **Spool record and leased-name CRDT record:** optional
   `app: Option<AppMarker { v: u8, path: String }>`, with `#[serde(default)]`
-  so older records parse.
+  so older records parse. Wire `{"app":{"v":1}}` (omitted path) stores
+  `path: "/"`. Directory omits `txt.path` when the stored path is `/`.
 - **Directory projection:** `app` becomes `txt.app = "v1"`, plus `txt.path`
   when the path isn't `/`.
 - **Control API:** `txt.app` and `txt.path` are validated by the same function.
@@ -40,11 +41,13 @@ add a second, incompatible signing scheme.
 
 ## Validation (one function, shared vectors)
 
-It's the same rules as `contract.ts` `appPath`/`isMiniApp`:
+It's the same rules as `contract.ts` `appPath`/`isMiniApp` (no extra
+publish-time length ceiling — living consumer has none):
 - `v == 1`
+- omitted `path` canonicalizes to `/`
 - `path` starts with `/`
 - `path` contains no `//`, `\`, scheme, or control characters
-- `path` is at most 256 bytes
+- CLI `--app-path` is invalid without `--app`
 
 It's implemented once in `mjolnir-mesh` as a library function, used by
 mjolnir-hello and meshd, and tested against JSON fixtures shared with

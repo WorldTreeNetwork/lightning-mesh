@@ -7,16 +7,20 @@ path) on every path that publishes a name. That covers key-owned name claims
 (`POST /api/name-claim`, as an optional `app` object outside the signed message)
 and the node control API (`POST /v0/publish` and the `mjolnir-meshd publish`
 command, as TXT `app` and `path`). All paths SHALL validate the marker with one
-shared rule set:
+shared rule set, the same as the living `App marker on service records`
+requirement and `contract.ts` `appPath`:
 - version equals `1`
 - the path begins with `/`
 - the path has no `//`, `\`, scheme, or control characters
-- the path is at most 256 bytes
+- an omitted path is `/`
 
-An invalid marker SHALL be rejected with an error before anything is spooled or
-published, and SHALL NOT alter an existing lease or service. A published marker
-SHALL appear in the directory as TXT `app=v1` and, unless the path is `/`,
-`path=<path>`. Consumers SHALL still re-validate the marker.
+There is no separate publish-time length ceiling. An invalid marker SHALL be
+rejected with an error before anything is spooled or published, and SHALL NOT
+alter an existing lease or service. A published marker SHALL appear in the
+directory as TXT `app=v1` and, unless the path is `/`, `path=<path>`.
+`{"app":{"v":1}}` SHALL be accepted and SHALL project like path `/`.
+`--app-path` SHALL be rejected unless `--app` is also set. Consumers SHALL
+still re-validate the marker.
 
 #### Scenario: Self-serve mini-app without SSH
 
@@ -41,6 +45,18 @@ SHALL appear in the directory as TXT `app=v1` and, unless the path is `/`,
 - GIVEN a lease whose last claim carried an app marker
 - WHEN the owner renews without an `app` field
 - THEN the directory entry no longer carries TXT `app` or `path`
+
+#### Scenario: Omitted path is slash
+
+- GIVEN an app holding a valid key-owned lease
+- WHEN it claims with `"app":{"v":1}` and no `path` field
+- THEN the request is accepted and the directory lists TXT `app=v1` without `path=`
+
+#### Scenario: --app-path requires --app
+
+- GIVEN an operator on a router
+- WHEN they run `mjolnir-meshd publish foo --port 80 --app-path /x` without `--app`
+- THEN the command is rejected and no service record changes
 
 #### Scenario: Signed ceremony unchanged
 
