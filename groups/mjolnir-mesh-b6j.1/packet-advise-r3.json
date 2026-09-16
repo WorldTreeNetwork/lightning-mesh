@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-b6j-1-advise-r3",
+  "node_id": "mjolnir-mesh-b6j.1",
+  "capability": "mesh-https-names",
+  "change_id": "add-https-aliases",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Re-advise add-https-aliases after r2 send-back. Prior reviews/2026-09-15-advise-r2.md blocked on (1) JSON not byte-exact and (2) collision history not durable. Author pinned compact JSON (UTF-8, no whitespace, fixed key order, unescaped solidus, shortest-decimal integers), three-line owner_pubkey/payload/sig envelope, and a per-label owner_pubkey collision set that never GCs (tombstone stops answering but key stays). Equal-seq different payloads fail closed. Blind pass: Why + living-specs + MESH_DNS_SERVER_LINE BEFORE design.md. Ten-line take, then compare to r2 blockers. Write openspec/changes/add-https-aliases/reviews/2026-09-15-advise-r3.md with ADVISE accept or send-back, READER and SPAWN. No code, no fold, no deploy.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-https-aliases/proposal.md:12",
+      "invariant": "Why first."
+    },
+    {
+      "symbol": "openspec/changes/add-https-aliases/reviews/2026-09-15-advise-r2.md:32",
+      "invariant": "Two blockers: byte-exact JSON and durable collision memory."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Independent implementations can sign and verify the same bytes; a tombstoned colliding key still blocks a new owner from inheriting the origin.",
+    "if_false": "Serialization still has an unpinned alternative or collision state can be forgotten."
+  },
+  "out_of_scope": [
+    {
+      "item": "Implementation, live ACME, hard custody",
+      "tracked_as": "mjolnir-mesh-b6j.1 act / ai0"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-https-aliases/reviews/2026-09-15-advise-r3.md",
+      "openspec/changes/add-https-aliases/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement product code",
+      "edit other changes"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only"
+}

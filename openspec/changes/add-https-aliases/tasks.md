@@ -4,7 +4,8 @@ Authoritative owed work is bead `mjolnir-mesh-b6j.1`. These boxes mirror what
 this change owes once activated.
 
 - [x] Human activation (banner to ACTIVE BUILD) — Duke named `add-https-aliases` / `b6j.1` 2026-09-15
-- [ ] Advise by an independent non-Claude reader (Sol, Astra-6 or Grok); accept before act
+- [x] Advise by an independent non-Claude reader (Sol, Astra-6 or Grok); accept before act
+  - r1 send-back, r2 send-back, r3 **accept** (`reviews/2026-09-15-advise-r3.md`, READER sol-arch-review)
 - [x] Resolve advise open questions: 80-bit RFC 4648 base32; resolution records in this change (not ai0.9); tiny_http+rustls/ring measured on aarch64; WTN best-effort adapter for the project zone (`design.md` Pins)
 - [ ] Label function shared by meshd, mjolnir-hello and hello-mesh-web, with test vectors
 - [ ] meshd: forward and rebind-exempt only `<mesh-label>.<zone>`; `AliasTable` answering from verified owner-signed records; negative tests (forged record, parent zone)
@@ -20,4 +21,4 @@ this change owes once activated.
 - [x] Re-advise after send-back amendments (same non-Claude family)
 - [x] Re-advise r2 send-back: compact JSON (no whitespace, fixed key order, unescaped `/`, shortest-decimal integers) plus three-line envelope; golden-byte vectors owed at implementation
 - [x] Re-advise r2 send-back: per-label owner_pubkey collision set never GC; equal-seq different payloads fail closed
-- [ ] Re-advise after r2 send-back amendments (same non-Claude family)
+- [x] Re-advise after r2 send-back amendments (same non-Claude family) — r3 accept
