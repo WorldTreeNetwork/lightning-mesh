@@ -437,6 +437,43 @@ fn boot_id_change_uses_reboot_recovery_not_wall_clock_expiry() {
 }
 
 #[test]
+fn boot_recovery_restores_before_network_and_verifies_after_services() {
+    let mut fixture = Fixture::new();
+    let engine = fixture
+        .engine()
+        .with_faults(Arc::new(OneShotFault::new(FaultPoint::AfterState(
+            JournalState::Verifying,
+        ))));
+    engine
+        .apply(&fixture.plan("two-phase-boot"), &mut fixture.adapter)
+        .unwrap_err();
+    fixture.runtime.reboot();
+
+    let lock = NodeLock::acquire(&fixture.paths).unwrap();
+    assert!(fixture.engine().restore_before_network(&lock).unwrap());
+    assert_eq!(fixture.wireless(), b"old-wireless");
+    let journal: Journal =
+        serde_json::from_slice(&fs::read(fixture.paths.journal()).unwrap()).unwrap();
+    assert_eq!(journal.state, JournalState::Restoring);
+    assert!(
+        fixture
+            .engine()
+            .receipt("two-phase-boot")
+            .unwrap()
+            .is_none()
+    );
+
+    let receipt = fixture
+        .engine()
+        .verify_after_services(&lock, &mut fixture.adapter)
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.outcome, Outcome::Restored);
+    assert_eq!(receipt.recovery_trigger, Some(RecoveryTrigger::Reboot));
+    assert!(!fixture.paths.journal().exists());
+}
+
+#[test]
 fn missing_backup_and_failed_verification_require_recovery() {
     let mut fixture = Fixture::new();
     let plan = fixture.plan("missing-backup");

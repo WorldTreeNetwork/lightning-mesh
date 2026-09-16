@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+# Verify restoration after mjolnir-meshd (95) and mjolnir-babeld (96).
+
+START=97
+STOP=08
+
+start() {
+	mkdir -p /etc/mjolnir/txn
+	exec 9>/etc/mjolnir/txn/lock
+	flock -n 9 || {
+		logger -t mjolnir-txn "verify skipped: transaction lock is held"
+		return 1
+	}
+	/usr/bin/mjolnir-txn verify --lock-fd 9 \
+		|| logger -t mjolnir-txn "late verification failed; recovery is required"
+}

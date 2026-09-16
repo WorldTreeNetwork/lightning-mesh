@@ -162,8 +162,20 @@ impl Engine {
         plan: &Plan,
         adapter: &mut dyn ApplyAdapter,
     ) -> Result<Receipt, EngineError> {
+        let lock = NodeLock::acquire(&self.paths)?;
+        self.apply_locked(&lock, plan, adapter)
+    }
+
+    /// Apply while using a lock already held by the caller. This is the entry
+    /// point for the OpenWrt helper, whose fd 9 is inherited from the ash
+    /// launcher rather than reopening the lock path.
+    pub fn apply_locked(
+        &self,
+        _lock: &NodeLock,
+        plan: &Plan,
+        adapter: &mut dyn ApplyAdapter,
+    ) -> Result<Receipt, EngineError> {
         let (plan_bytes, plan_digest) = validate_plan(plan)?;
-        let _lock = NodeLock::acquire(&self.paths)?;
         initialize(&self.paths)?;
 
         self.recover_locked(adapter)?;
@@ -291,9 +303,100 @@ impl Engine {
 
     /// Run recovery under the node-wide lock without admitting a new plan.
     pub fn recover(&self, adapter: &mut dyn ApplyAdapter) -> Result<Option<Receipt>, EngineError> {
-        let _lock = NodeLock::acquire(&self.paths)?;
+        let lock = NodeLock::acquire(&self.paths)?;
+        self.recover_with_lock(&lock, adapter)
+    }
+
+    pub fn recover_with_lock(
+        &self,
+        _lock: &NodeLock,
+        adapter: &mut dyn ApplyAdapter,
+    ) -> Result<Option<Receipt>, EngineError> {
         initialize(&self.paths)?;
         self.recover_locked(adapter)
+    }
+
+    /// Early-boot recovery phase. Restore the allowlisted files before netifd
+    /// starts, but deliberately leave the journal in `restoring` until the late
+    /// service-time verifier has proved the restored network.
+    pub fn restore_before_network(&self, _lock: &NodeLock) -> Result<bool, EngineError> {
+        initialize(&self.paths)?;
+        let Some(mut journal) = self.load_active_journal()? else {
+            return Ok(false);
+        };
+        match journal.state {
+            JournalState::Committed | JournalState::Restored => return Ok(false),
+            JournalState::RecoveryRequired => {
+                return Err(EngineError::RecoveryRequired(
+                    journal
+                        .detail
+                        .unwrap_or_else(|| "previous restoration could not be proved".into()),
+                ));
+            }
+            JournalState::Prepared
+            | JournalState::Applying
+            | JournalState::Verifying
+            | JournalState::Restoring => {}
+        }
+
+        journal.state = JournalState::Restoring;
+        journal.detail =
+            Some("snapshot restored before network startup; verification pending".into());
+        self.persist_state(&journal)?;
+        if let Err(error) = restore_snapshot(&self.paths, &journal.transaction_id) {
+            let trigger = self.recovery_trigger(&journal)?;
+            self.fail_restoration(&mut journal, trigger, &error)?;
+            return Err(EngineError::RecoveryRequired(error.to_string()));
+        }
+        Ok(true)
+    }
+
+    /// Late-boot recovery phase. It never performs the early file copy: if the
+    /// restore phase was missed, the honest outcome is recovery-required.
+    pub fn verify_after_services(
+        &self,
+        _lock: &NodeLock,
+        adapter: &mut dyn ApplyAdapter,
+    ) -> Result<Option<Receipt>, EngineError> {
+        initialize(&self.paths)?;
+        let Some(mut journal) = self.load_active_journal()? else {
+            return Ok(None);
+        };
+        match journal.state {
+            JournalState::Restoring => {
+                let trigger = self.recovery_trigger(&journal)?;
+                let observations = match adapter.verify_restoration(&journal.previous_revision) {
+                    Ok(observations) => sanitize_observations(observations),
+                    Err(detail) => {
+                        let error = EngineError::RestorationFailed(detail);
+                        self.fail_restoration(&mut journal, trigger, &error)?;
+                        return Err(EngineError::RecoveryRequired(error.to_string()));
+                    }
+                };
+                journal.state = JournalState::Restored;
+                journal.observations = observations.clone();
+                journal.detail =
+                    Some("snapshot restoration verified after network services".into());
+                self.persist_state(&journal)?;
+                let receipt =
+                    self.restored_receipt(&journal, trigger, observations, journal.detail.clone());
+                self.finalize(&receipt, false)?;
+                Ok(Some(receipt))
+            }
+            JournalState::Committed | JournalState::Restored => self.recover_locked(adapter),
+            JournalState::RecoveryRequired => Err(EngineError::RecoveryRequired(
+                journal
+                    .detail
+                    .unwrap_or_else(|| "previous restoration could not be proved".into()),
+            )),
+            JournalState::Prepared | JournalState::Applying | JournalState::Verifying => {
+                let detail = "early restore phase did not run before network startup";
+                let error = EngineError::RestorationFailed(detail.into());
+                let trigger = self.recovery_trigger(&journal)?;
+                self.fail_restoration(&mut journal, trigger, &error)?;
+                Err(EngineError::RecoveryRequired(detail.into()))
+            }
+        }
     }
 
     pub fn receipt(&self, id: &str) -> Result<Option<Receipt>, EngineError> {
@@ -308,43 +411,9 @@ impl Engine {
         &self,
         adapter: &mut dyn ApplyAdapter,
     ) -> Result<Option<Receipt>, EngineError> {
-        let ids = active_ids(&self.paths)?;
-        if ids.len() > 1 {
-            return Err(EngineError::RecoveryRequired(
-                "more than one transaction exists under active/".into(),
-            ));
-        }
-        if !self.paths.journal().exists() {
-            if ids.is_empty() {
-                return Ok(None);
-            }
-            return Err(EngineError::RecoveryRequired(format!(
-                "active transaction {} has no journal",
-                ids[0]
-            )));
-        }
-        let mut journal: Journal = read_json(&self.paths.journal()).map_err(|error| {
-            EngineError::RecoveryRequired(format!("journal cannot be trusted: {error}"))
-        })?;
-        validate_journal(&journal).map_err(|error| {
-            EngineError::RecoveryRequired(format!("journal cannot be trusted: {error}"))
-        })?;
-        if ids.as_slice() != [journal.transaction_id.as_str()] {
-            return Err(EngineError::RecoveryRequired(
-                "journal and active/ disagree".into(),
-            ));
-        }
-        let plan: Plan = read_json(&self.paths.plan(&journal.transaction_id)).map_err(|error| {
-            EngineError::RecoveryRequired(format!("durable plan cannot be trusted: {error}"))
-        })?;
-        let (_, digest) = validate_plan(&plan).map_err(|error| {
-            EngineError::RecoveryRequired(format!("durable plan cannot be trusted: {error}"))
-        })?;
-        if digest != journal.plan_digest || plan.transaction_id != journal.transaction_id {
-            return Err(EngineError::RecoveryRequired(
-                "journal does not match its durable plan".into(),
-            ));
-        }
+        let Some(mut journal) = self.load_active_journal()? else {
+            return Ok(None);
+        };
 
         match journal.state {
             JournalState::Committed => {
@@ -396,6 +465,47 @@ impl Engine {
         }
     }
 
+    fn load_active_journal(&self) -> Result<Option<Journal>, EngineError> {
+        let ids = active_ids(&self.paths)?;
+        if ids.len() > 1 {
+            return Err(EngineError::RecoveryRequired(
+                "more than one transaction exists under active/".into(),
+            ));
+        }
+        if !self.paths.journal().exists() {
+            if ids.is_empty() {
+                return Ok(None);
+            }
+            return Err(EngineError::RecoveryRequired(format!(
+                "active transaction {} has no journal",
+                ids[0]
+            )));
+        }
+        let journal: Journal = read_json(&self.paths.journal()).map_err(|error| {
+            EngineError::RecoveryRequired(format!("journal cannot be trusted: {error}"))
+        })?;
+        validate_journal(&journal).map_err(|error| {
+            EngineError::RecoveryRequired(format!("journal cannot be trusted: {error}"))
+        })?;
+        if ids.as_slice() != [journal.transaction_id.as_str()] {
+            return Err(EngineError::RecoveryRequired(
+                "journal and active/ disagree".into(),
+            ));
+        }
+        let plan: Plan = read_json(&self.paths.plan(&journal.transaction_id)).map_err(|error| {
+            EngineError::RecoveryRequired(format!("durable plan cannot be trusted: {error}"))
+        })?;
+        let (_, digest) = validate_plan(&plan).map_err(|error| {
+            EngineError::RecoveryRequired(format!("durable plan cannot be trusted: {error}"))
+        })?;
+        if digest != journal.plan_digest || plan.transaction_id != journal.transaction_id {
+            return Err(EngineError::RecoveryRequired(
+                "journal does not match its durable plan".into(),
+            ));
+        }
+        Ok(Some(journal))
+    }
+
     fn recovery_trigger(&self, journal: &Journal) -> Result<RecoveryTrigger, EngineError> {
         if self.runtime.boot_id()? != journal.boot_id {
             return Ok(RecoveryTrigger::Reboot);
@@ -435,25 +545,34 @@ impl Engine {
                 Ok(receipt)
             }
             Err(error) => {
-                journal.state = JournalState::RecoveryRequired;
-                journal.detail = Some(error.to_string());
-                self.persist_state(journal)?;
-                let receipt = Receipt {
-                    schema_version: SCHEMA_VERSION,
-                    transaction_id: journal.transaction_id.clone(),
-                    plan_digest: journal.plan_digest.clone(),
-                    outcome: Outcome::RecoveryRequired,
-                    previous_revision: journal.previous_revision.clone(),
-                    resulting_revision: journal.previous_revision.clone(),
-                    observations: Vec::new(),
-                    recovery_trigger: Some(trigger),
-                    detail: journal.detail.clone(),
-                    wall_time_ms: self.runtime.wall_time_ms(),
-                };
-                self.finalize(&receipt, true)?;
+                self.fail_restoration(journal, trigger, &error)?;
                 Err(EngineError::RecoveryRequired(error.to_string()))
             }
         }
+    }
+
+    fn fail_restoration(
+        &self,
+        journal: &mut Journal,
+        trigger: RecoveryTrigger,
+        error: &EngineError,
+    ) -> Result<(), EngineError> {
+        journal.state = JournalState::RecoveryRequired;
+        journal.detail = Some(error.to_string());
+        self.persist_state(journal)?;
+        let receipt = Receipt {
+            schema_version: SCHEMA_VERSION,
+            transaction_id: journal.transaction_id.clone(),
+            plan_digest: journal.plan_digest.clone(),
+            outcome: Outcome::RecoveryRequired,
+            previous_revision: journal.previous_revision.clone(),
+            resulting_revision: journal.previous_revision.clone(),
+            observations: Vec::new(),
+            recovery_trigger: Some(trigger),
+            detail: journal.detail.clone(),
+            wall_time_ms: self.runtime.wall_time_ms(),
+        };
+        self.finalize(&receipt, true)
     }
 
     fn restored_receipt(

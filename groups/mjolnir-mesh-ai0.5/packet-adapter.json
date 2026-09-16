@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-apply-adapter",
+  "node_id": "mjolnir-mesh-ai0.5",
+  "capability": "network-change-transactions",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-implement"
+    }
+  },
+  "role": "worker",
+  "goal": "OpenWrt adapter slice of add-durable-network-apply. Engine crate already exists (14 laptop tests). Land a mandatory static helper binary from crates/mjolnir-apply (bin mjolnir-txn), two init phases (restore START<19 copies snapshot onto /etc/config/{wireless,network,firewall,mjolnir} and journals restoring; verify START>96 after meshd/babeld writes restored or recovery-required), and make the existing ash mjolnir-apply take the node lock with `exec 9>/etc/mjolnir/txn/lock; flock -n 9 || exit` then inherit fd 9 (do not reopen the lock path in the helper). Write $STAGE/result only from the receipt after terminal journal fsync. UCI-only v1; do not wrap meshd binary replace or wpad swap. Evidence: m3000-b has /usr/bin/flock -> busybox and `flock -n 9` succeeded 2026-09-16. CARGO_TARGET_DIR=/tmp/lm-target; keep existing engine tests green. Record notes in groups/ai0-apply/adapter-notes.md. Check the stale 'implementation-readiness advise' box as done (r2 accept). Do not deploy, do not --wireless, do not reboot nodes, do not claim hardware qualification.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/design.md:118",
+      "invariant": "Pins: UCI-only, mandatory musl helper outside mutation surface, two-phase init, flock fd 9, derived result, boot_id+monotonic."
+    },
+    {
+      "symbol": "crates/mjolnir-apply/src/engine.rs:90",
+      "invariant": "Reuse ApplyAdapter/Engine/recover; do not fork a second state machine."
+    },
+    {
+      "symbol": "deploy/openwrt/files/usr/sbin/mjolnir-apply:45",
+      "invariant": "Replace mkdir lock with inherited flock; do not bounce wifi."
+    },
+    {
+      "symbol": "deploy/openwrt/files/etc/init.d/mjolnir-meshd:15",
+      "invariant": "meshd START=95 babeld 96; restore must be <19 (netifd), verify >96."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-apply",
+    "criteria": [
+      "Existing 14 engine tests still pass",
+      "Helper is a bin in crates/mjolnir-apply, not ash JSON",
+      "Init scripts exist with START restore<19 and verify>96",
+      "Ash launcher takes flock -n on fd 9 before mutation",
+      "No deploy, no radio, no hardware claim"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "Live fleet install, radio reapply, lpv hardware qualification",
+      "tracked_as": "mjolnir-mesh-lpv"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "crates/mjolnir-apply",
+      "Cargo.lock",
+      "deploy/openwrt/files/etc/init.d/mjolnir-txn-restore",
+      "deploy/openwrt/files/etc/init.d/mjolnir-txn-verify",
+      "deploy/openwrt/files/usr/sbin/mjolnir-apply",
+      "deploy/openwrt/install-node.sh",
+      "openspec/changes/add-durable-network-apply/tasks.md",
+      "groups/ai0-apply/adapter-notes.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "SSH mutate nodes",
+      "run setup-wireless.sh",
+      "edit other crates"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}

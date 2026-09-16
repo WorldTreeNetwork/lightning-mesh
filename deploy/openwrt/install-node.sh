@@ -24,6 +24,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$DIR/mjolnir-meshd-aarch64"
+TXN_BIN="$DIR/mjolnir-txn-aarch64"
 # mjolnir-hello (S7, mjolnir-mesh-eei): OPTIONAL front desk binary. Unlike BIN
 # above, its absence is not fatal — a node runs the mesh fine without it. See
 # README.md "Build the hello front desk" for the (currently manual/documented)
@@ -53,14 +54,18 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$HOST" ] || { echo "usage: install-node.sh [options] root@<node-ip>"; exit 2; }
 [ -f "$BIN" ] || { echo "binary missing — run deploy/openwrt/build.sh first"; exit 1; }
+[ -f "$TXN_BIN" ] || { echo "mandatory transaction helper missing: $TXN_BIN"; exit 1; }
 [ -z "$WIRELESS_ENV" ] || [ -f "$WIRELESS_ENV" ] || { echo "--wireless file not found: $WIRELESS_ENV"; exit 1; }
 
 # ---- stage: push everything (scp -O: dropbear has no sftp-server) ------------
 echo ">> staging payload -> $HOST:$STAGE"
 ssh "$HOST" "mkdir -p $STAGE/pkgs"
 scp -O "$BIN"                                  "$HOST:$STAGE/mjolnir-meshd"
+scp -O "$TXN_BIN"                              "$HOST:$STAGE/mjolnir-txn"
 scp -O "$DIR/files/etc/init.d/mjolnir-meshd"   "$HOST:$STAGE/init.d-mjolnir-meshd"
 scp -O "$DIR/files/etc/init.d/mjolnir-babeld"  "$HOST:$STAGE/init.d-mjolnir-babeld"
+scp -O "$DIR/files/etc/init.d/mjolnir-txn-restore" "$HOST:$STAGE/init.d-mjolnir-txn-restore"
+scp -O "$DIR/files/etc/init.d/mjolnir-txn-verify"  "$HOST:$STAGE/init.d-mjolnir-txn-verify"
 scp -O "$DIR/files/etc/config/mjolnir"         "$HOST:$STAGE/config-mjolnir"
 scp -O "$DIR/setup-wireless.sh"                "$HOST:$STAGE/setup-wireless.sh"
 scp -O "$DIR/files/usr/sbin/mjolnir-apply"     "$HOST:$STAGE/mjolnir-apply"
@@ -71,7 +76,7 @@ scp -O "$DIR/files/etc/init.d/iperf3-server"   "$HOST:$STAGE/init.d-iperf3-serve
 scp -O "$DIR/files/usr/sbin/mjolnir-wan-admin" "$HOST:$STAGE/mjolnir-wan-admin"
 scp -O "$DIR/files/etc/rc.wps/00-mjolnir-wan-admin" "$HOST:$STAGE/rc.wps-00-mjolnir-wan-admin"
 scp -O "$DIR/files/etc/dropbear/authorized_keys" "$HOST:$STAGE/authorized_keys"
-ssh "$HOST" "chmod +x $STAGE/mjolnir-apply"
+ssh "$HOST" "chmod +x $STAGE/mjolnir-apply $STAGE/mjolnir-txn"
 
 # mjolnir-hello binary is OPTIONAL (mjolnir-mesh-eei) — stage it only if a
 # local cross-build exists; the applier installs/enables it iff staged AND

@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -80,7 +80,13 @@ impl TxnPaths {
 /// is closed or the process dies.
 #[derive(Debug)]
 pub struct NodeLock {
-    file: File,
+    handle: LockHandle,
+}
+
+#[derive(Debug)]
+enum LockHandle {
+    Owned(File),
+    Inherited,
 }
 
 impl NodeLock {
@@ -100,15 +106,47 @@ impl NodeLock {
             }
             return Err(error.into());
         }
-        Ok(Self { file })
+        Ok(Self {
+            handle: LockHandle::Owned(file),
+        })
+    }
+
+    /// Adopt a lock file description inherited from a supervising launcher.
+    ///
+    /// This deliberately never opens the lock path. `flock` is repeated on the
+    /// inherited open file description so a helper cannot accidentally run
+    /// without the launcher's node-wide lock.
+    pub fn inherit(raw_fd: RawFd) -> Result<Self, EngineError> {
+        if raw_fd < 0 {
+            return Err(EngineError::Storage("invalid inherited lock fd".into()));
+        }
+        // SAFETY: F_GETFD only validates the caller-provided descriptor.
+        if unsafe { libc::fcntl(raw_fd, libc::F_GETFD) } < 0 {
+            return Err(EngineError::Io(io::Error::last_os_error()));
+        }
+        // SAFETY: the descriptor was validated above. An inherited descriptor
+        // refers to the same open file description locked by the parent shell.
+        let result = unsafe { libc::flock(raw_fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::WouldBlock {
+                return Err(EngineError::Busy);
+            }
+            return Err(error.into());
+        }
+        Ok(Self {
+            handle: LockHandle::Inherited,
+        })
     }
 }
 
 impl Drop for NodeLock {
     fn drop(&mut self) {
-        // SAFETY: the descriptor remains valid until `self.file` is dropped.
-        unsafe {
-            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        if let LockHandle::Owned(file) = &self.handle {
+            // SAFETY: the descriptor remains valid until `file` is dropped.
+            unsafe {
+                libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            }
         }
     }
 }

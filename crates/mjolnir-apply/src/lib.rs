@@ -5,6 +5,7 @@
 
 mod engine;
 mod model;
+mod openwrt;
 mod storage;
 
 pub use engine::{
@@ -15,6 +16,7 @@ pub use model::{
     MAX_TIMEOUT_SECS, Observation, ObservationKind, ObservationStatus, Outcome, Plan, Receipt,
     RecoveryTrigger, SCHEMA_VERSION, Tombstone, Tombstones, UciConfig, Vantage,
 };
+pub use openwrt::{OpenWrtAdapter, active_plan, write_result_from_receipt};
 pub use storage::{NodeLock, TxnPaths};
 
 #[cfg(test)]

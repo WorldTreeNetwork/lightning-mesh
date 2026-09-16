@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+# Restore interrupted UCI transactions before netifd (START=19) reads config.
+
+START=18
+STOP=89
+
+start() {
+	mkdir -p /etc/mjolnir/txn
+	exec 9>/etc/mjolnir/txn/lock
+	flock -n 9 || {
+		logger -t mjolnir-txn "restore skipped: transaction lock is held"
+		return 1
+	}
+	/usr/bin/mjolnir-txn restore --lock-fd 9 \
+		|| logger -t mjolnir-txn "early restore failed; recovery is required"
+}

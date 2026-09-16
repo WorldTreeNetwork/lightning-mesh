@@ -37,23 +37,41 @@ UCI_CONFIGS="wireless network firewall mjolnir"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 write_result() {
+	# Legacy installer outcomes only. Durable UCI transaction mode below lets
+	# mjolnir-txn derive this file from its fsynced terminal receipt.
 	# tmp+mv so the poller never reads a half-written file
 	echo "$1" > "$RESULT.tmp" && mv "$RESULT.tmp" "$RESULT"
 	log "result: $1"
 }
 
-# --- single-instance lock ---------------------------------------------------
-if ! mkdir "$STAGE/.lock" 2>/dev/null; then
-	log "another mjolnir-apply is running ($STAGE/.lock exists) — refusing"
-	exit 1
-fi
-trap 'rmdir "$STAGE/.lock" 2>/dev/null' EXIT
+# --- node-wide process lock -------------------------------------------------
+# fd 9 stays open across child execs. mjolnir-txn validates and flocks this
+# inherited open file description; it must never reopen the lock path.
+mkdir -p /etc/mjolnir/txn
+exec 9>/etc/mjolnir/txn/lock
+flock -n 9 || { log "another network transaction owns the node lock"; exit 1; }
 
 rm -f "$RESULT"
 [ -f "$STAGE/apply.env" ] && . "$STAGE/apply.env"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 RUN_WIRELESS="${RUN_WIRELESS:-0}"
 NOTES=""
+
+TXN_HELPER=/usr/bin/mjolnir-txn
+[ -x "$STAGE/mjolnir-txn" ] && TXN_HELPER="$STAGE/mjolnir-txn"
+[ -x "$TXN_HELPER" ] || { log "mandatory mjolnir-txn helper is missing"; exit 1; }
+
+# Recovery is always admitted before any new work. The UCI transaction mode is
+# intentionally separate from the legacy package/binary installer: only the
+# four allowlisted files in txn-config can be mutated by the durable helper.
+"$TXN_HELPER" recover --lock-fd 9 || exit 1
+if [ -f "$STAGE/txn-plan.json" ]; then
+	[ -d "$STAGE/txn-config" ] || { log "txn-plan.json requires txn-config/"; exit 1; }
+	exec "$TXN_HELPER" apply --lock-fd 9 \
+		--plan "$STAGE/txn-plan.json" \
+		--source-dir "$STAGE/txn-config" \
+		--result "$RESULT"
+fi
 
 # --- package manager: apk (OpenWrt 25.12+) vs opkg ---------------------------
 pm_install()   { if command -v apk >/dev/null 2>&1; then apk add "$1"; else opkg install "$1"; fi; }
@@ -291,6 +309,15 @@ for f in mjolnir-meshd mjolnir-babeld mjolnir-hello iperf3-server; do
 	if [ -f "$STAGE/init.d-$f" ]; then
 		cp "$STAGE/init.d-$f" "/etc/init.d/$f" && chmod +x "/etc/init.d/$f" || rollback "installing /etc/init.d/$f failed"
 	fi
+done
+[ -f "$STAGE/mjolnir-txn" ] \
+	&& cp "$STAGE/mjolnir-txn" /usr/bin/mjolnir-txn \
+	&& chmod +x /usr/bin/mjolnir-txn \
+	|| rollback "installing mandatory /usr/bin/mjolnir-txn failed"
+for f in mjolnir-txn-restore mjolnir-txn-verify; do
+	cp "$STAGE/init.d-$f" "/etc/init.d/$f" && chmod +x "/etc/init.d/$f" \
+		|| rollback "installing /etc/init.d/$f failed"
+	"/etc/init.d/$f" enable || rollback "enabling /etc/init.d/$f failed"
 done
 [ -f "$STAGE/setup-wireless.sh" ] && cp "$STAGE/setup-wireless.sh" /root/setup-wireless.sh && chmod +x /root/setup-wireless.sh
 [ -f "$STAGE/mjolnir-apply" ] && cp "$STAGE/mjolnir-apply" /usr/sbin/mjolnir-apply && chmod +x /usr/sbin/mjolnir-apply
