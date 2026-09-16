@@ -120,10 +120,10 @@ Recorded so the implementation-readiness advise can review exact pins. Not a
 runtime claim. Not a living SHALL until folded.
 
 - **Language.** New workspace crate `crates/mjolnir-apply`: library + unit/fault
-  tests first (`CARGO_TARGET_DIR=/tmp/lm-target`). OpenWrt adapter is a later
-  slice in this same change: optional static musl helper plus the existing
-  BusyBox `usr/sbin/mjolnir-apply` as launcher. Do not rewrite the ash helper
-  as the journal.
+  tests first (`CARGO_TARGET_DIR=/tmp/lm-target`). OpenWrt adapter (later slice
+  in this same change): **mandatory** static musl helper, outside the v1
+  mutation surface, plus the existing BusyBox `usr/sbin/mjolnir-apply` as
+  launcher. Do not rewrite the ash helper as the journal.
 - **On-disk root.** Persistent overlay `/etc/mjolnir/txn/` (tests: a tempdir via
   env/`TxnPaths`). Never `/tmp`. Never `/root/mjolnir-stage` (legacy stage
   stays the launcher's download area). Layout:
@@ -137,15 +137,44 @@ runtime claim. Not a living SHALL until folded.
   is released on process death. Recovery-first on start and before admission
   takes that lock, then inspects the durable journal. A leftover directory or
   dead PID is not itself proof that takeover is safe. Do not use `mkdir` locks.
-- **v1 mutation allowlist.** `wireless`, `network`, `firewall`, `mjolnir` UCI;
-  the meshd binary replace; the wpad-mesh swap already in `mjolnir-apply`.
-  Firmware, package, key, and init-file updater operations are **rejected**
-  from this transaction path (not wrapped as recoverable).
+- **v1 mutation allowlist.** The four UCI files only: `wireless`, `network`,
+  `firewall`, `mjolnir` (paths `/etc/config/{wireless,network,firewall,mjolnir}`).
+  Meshd binary replace and the wpad-mesh package swap stay on the **unwrapped
+  legacy launcher**. Firmware, package manager, key material, and init/updater
+  scripts are rejected from this transaction path. Snapshot rollback inputs are
+  those four files (plus explicit missing-file markers). This keeps the 8 MiB
+  snapshot cap honest (the shipped meshd binary is 10 MiB) and keeps package-db
+  mutations out of a file-copy snapshot.
 - **Bounds.** Default deadline 120s from durably recorded start; per-plan
   timeout must be positive and ≤ 600s. Plan JSON ≤ 64 KiB. Snapshot tree ≤
-  8 MiB. Nonterminal transactions and their snapshots are never garbage-
-  collected. Keep the last 32 terminal receipts; tombstone evicted IDs so a
-  reused ID cannot admit a different plan.
+  8 MiB, checked against the snapshot **before** first mutation; exceeding
+  refuses, never truncates. Nonterminal transactions and their snapshots are
+  never garbage-collected. Keep the last 32 terminal receipts. Tombstones are
+  never evicted (bytes per opaque ID; acceptable). `active/` holds at most one
+  transaction and `journal.json` names it.
+- **Deadline clock.** At `prepared`, record `/proc/sys/kernel/random/boot_id`
+  and `CLOCK_MONOTONIC` (or `/proc/uptime`). The deadline compares monotonic
+  time within the same `boot_id`. A different `boot_id` on recovery is the
+  reboot path, not a wall-clock expiry. Wall time is receipts-only; these
+  routers have no RTC and NTP may step during apply.
+- **Boot recovery executor.** For the OpenWrt adapter slice the static musl
+  helper is **mandatory**, outside the v1 mutation surface (the helper binary
+  is not replaced by a v1 transaction). Two init phases:
+  - **restore** at `START` < 19: copy `active/<id>/snapshot/` back onto
+    `/etc/config/*`, journal → `restoring`, so netifd (19) boots on restored
+    files;
+  - **verify** at `START` > 96: required reachability checks after
+    meshd/babeld (95/96), then write `restored` or `recovery-required`.
+  Until verify writes a terminal state, new admission stays blocked.
+- **Legacy lock participation.** The ash launcher does
+  `exec 9>/etc/mjolnir/txn/lock; flock -n 9 || exit` and execs the helper with
+  fd 9 inherited. The helper does not mutate outside that lock. Adapter packet
+  records `busybox | grep -w flock` from one fleet node before the ash side
+  relies on the applet; the Rust side uses the flock syscall.
+- **Derived result file.** `install-node.sh` still polls `$STAGE/result`. The
+  launcher writes that file only from the receipt **after** the terminal
+  journal fsync, so poller and journal cannot disagree. It is not a second
+  source of truth.
 - **Commit ordering.** Health-pass does not commit. Only a successfully
   persisted terminal journal state does. Crash between health-pass and that
   write restores the snapshot.

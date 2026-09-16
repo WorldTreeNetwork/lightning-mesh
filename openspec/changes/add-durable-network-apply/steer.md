@@ -5,8 +5,8 @@
 
 ## Decided
 
-- **v1 mutation surface:** current `mjolnir-apply` set only — UCI `wireless network firewall mjolnir`, meshd binary, wpad-mesh swap. (decide-for-me)
-  Why: the firmware/package/key/init-file updater cannot be called recoverable on four UCI backups. Reject those ops from this transaction path until a later slice covers them.
+- **v1 mutation surface:** four UCI files only (`wireless`, `network`, `firewall`, `mjolnir`). Meshd binary replace and wpad swap stay on the unwrapped legacy launcher. (decide-for-me, then Fable send-back A/B 2026-09-15)
+  Why: the shipped meshd binary is 10 MiB vs an 8 MiB snapshot cap; wpad swap is a package op whose rollback input is not in the durable tree.
 - **Engine language:** Rust crate `crates/mjolnir-apply` (library + tests first; optional static musl helper later). (decide-for-me)
   Why: instrument red-first and crash-at-transition tests cannot live in BusyBox ash. Legacy `usr/sbin/mjolnir-apply` stays as launcher until the adapter lands.
 - **On-disk:** JSON journal + snapshot tree under persistent `/etc/mjolnir/txn/` (tests: tempdir). Schema version field. Every durable write fsyncs the file and its parent directory. Not `/tmp`, not `/root/mjolnir-stage`. (decide-for-me)
