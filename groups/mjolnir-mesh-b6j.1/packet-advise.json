@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-b6j-1-advise-r1",
+  "node_id": "mjolnir-mesh-b6j.1",
+  "capability": "mesh-https-names",
+  "change_id": "add-https-aliases",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Independent architecture advise of add-https-aliases (ACTIVE BUILD, bead mjolnir-mesh-b6j.1). Author family is Claude (scaffold). You are the non-Claude reader. Blind pass: read proposal Why, living-specs/spec.md, and cited meshd dnsmasq forward/rebind code BEFORE opening design.md, tasks.md or steer.md. Write a ten-line independent take (what you would pin, refuse, one tradeoff). Then open design.md Pins and compare: 80-bit RFC 4648 base32 labels; HTTPS resolution records in this change not ai0.9; tiny_http+rustls/ring with aarch64 measurement; WTN best-effort adapter. Write openspec/changes/add-https-aliases/reviews/2026-09-15-advise.md with ADVISE accept or send-back, READER and SPAWN. Judge key-qualified origins, offline AliasTable, issuance authorization, no origin recycle, walk-up http://hello.mesh unchanged, no wildcard keys. Do not implement. Do not fold. Do not deploy.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-https-aliases/proposal.md:12",
+      "invariant": "Why first. Walk-up hello.mesh stays. Trusted HTTPS names offline, key-bound, no origin recycle."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Not built until verified/folded."
+    },
+    {
+      "symbol": "crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs:6497",
+      "invariant": "Today only /mesh/ is forwarded and rebind-exempt; any new suffix must be exact and not the parent zone."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/main.rs:25",
+      "invariant": "hello is tiny_http on :80 with no TLS today; rustls ring is already a client dependency."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A worker can implement labels, AliasTable, issuance auth, and router TLS without guessing alphabet, record scope, terminator, or who runs the adapter, and cannot recycle an origin or whitelist the parent zone.",
+    "if_false": "A pin is missing or a path forges a name, shares a cert key, or forwards the parent zone."
+  },
+  "out_of_scope": [
+    {
+      "item": "Hard custody signer, owner claim, live Let's Encrypt against production",
+      "tracked_as": "mjolnir-mesh-ai0 / bf7.1 / b6j.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-https-aliases/reviews/2026-09-15-advise.md",
+      "openspec/changes/add-https-aliases/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement product code",
+      "edit other changes"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only"
+}

@@ -56,28 +56,59 @@ Today's precedent is `MESH_DNS_SERVER_LINE = "/mesh/127.0.0.1#5335"` plus the
 - Public DNS for the zone serves only ACME TXT records. It never serves mesh A
   records, so private addresses don't leak and off-mesh lookups fail harmlessly.
 
+## AliasTable record (`mjolnir-https-alias:v1`)
+
+This change owns the resolution record. `ai0.9` is admin-record integrity and
+may supply verify primitives; it does not own this type.
+
+Signed bytes: domain line `mjolnir-https-alias:v1\n` plus canonical JSON, keys
+in this order:
+
+```
+owner_pubkey   64 lowercase hex Ed25519 (the authorization key, not the TLS key)
+fqdn           lowercase ASCII, no trailing dot
+addr           dotted IPv4 (AAAA later)
+seq            uint, monotonic per (owner_pubkey, fqdn)
+valid_from     unix seconds
+valid_until    unix seconds
+```
+
+Ed25519 signature over those exact bytes, 128 lowercase hex, carried beside
+the payload. Consumers verify against `owner_pubkey` and check that the
+hostname label derives from that full key. Highest `seq` for one
+`(owner_pubkey, fqdn)` wins. A record with `valid_until` in the past is a
+tombstone (removal). If two **different** `owner_pubkey` values derive the
+same 16-character label, fail closed: answer neither, issue neither.
+
 ## Issuance authorization
 
-The host builds a CSR with its own key. The owner key (the app owner, or the
-node for `n-` names under the node owners claim) signs:
+The host builds a CSR with a **host-local TLS key** (not the owner key). The
+owner key (the app owner, or the node identity key for `n-` names) signs
+canonical bytes:
+
+Domain line `mjolnir-https-issuance:v1\n` plus JSON keys in this order:
 
 ```
-mjolnir-https-issuance:v1
-fqdn=<exact name>
-txt_digest=<base64url sha256 of the ACME key authorization>
-acme_account=<account URL or key thumbprint>
-csr_spki_sha256=<hash of CSR public key>
-nonce=<16–32 bytes hex>
-expires_at=<unix secs, ≤ 1 h ahead>
+fqdn              lowercase ASCII FQDN, no trailing dot
+txt_digest        unpadded base64url SHA-256 of the ACME key authorization
+acme_account      ACME account URL (RFC 8555), not a thumbprint
+csr_spki_sha256   64 lowercase hex SHA-256 of the CSR SubjectPublicKeyInfo DER
+nonce             32 lowercase hex characters (16 bytes)
+expires_at        decimal unix seconds, must be ≤ now+3600
 ```
+
+Ed25519 over those exact bytes; 128 lowercase hex signature. FQDN v1 is
+ASCII only (labels are already `a-z2-7`).
 
 - **The DNS adapter** verifies all of the following before writing
   `_acme-challenge.<fqdn>` TXT:
-  - the signature, against the key the label was derived from, which binds the
-    name to its key with no extra record lookup
-  - the expiry
-  - a nonce it hasn't seen
-  - that `fqdn` matches the label function
+  - the signature against the **full** owner public key
+  - that the 16-char label derives from that key and no other retained key
+    collides on it (fail closed)
+  - `expires_at` in the future and ≤ 1 h from issue
+  - nonce unseen
+  - `fqdn` normalized and matches the label function
+  - CSR SPKI hash equals `csr_spki_sha256`
 
   It keeps an append-only log. It holds no mesh authority and can be run by
   anyone (bring-your-own domain means your own adapter).

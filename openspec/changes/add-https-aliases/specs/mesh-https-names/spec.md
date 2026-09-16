@@ -5,17 +5,34 @@
 The system SHALL name HTTPS endpoints
 `a-<app-key-label>.<mesh-label>.<zone>` (app hosts) and
 `n-<node-key-label>.<mesh-label>.<zone>` (router front desks). Each label SHALL
-be derived deterministically from the owning public key, and `<mesh-label>`
-from the house identity. A change of owner SHALL produce a different hostname.
-No hostname SHALL be served by a key other than the one its label derives from.
-`<zone>` SHALL default to `mesh.worldtree.network` and SHALL be configurable
-per mesh.
+be derived deterministically from the **owner authorization key** (app owner
+Ed25519, or the node identity key for `n-` names), and `<mesh-label>` from the
+house identity. The TLS leaf key SHALL be generated on the serving host and
+SHALL NOT be that owner key. A certificate for the hostname SHALL be issued
+only when an issuance authorization signed by the owner key binds
+`csr_spki_sha256` of that leaf. A change of owner SHALL produce a different
+hostname whenever the 80-bit labels differ. If two distinct owner keys map to
+the same 16-character label, AliasTable and the issuance adapter SHALL fail
+closed: serve neither name and write no challenge. `<zone>` SHALL default to
+`mesh.worldtree.network` and SHALL be configurable per mesh.
 
 #### Scenario: New owner, new origin
 
 - GIVEN an app served at `https://a-<L1>.<M>.mesh.worldtree.network` by owner key K1
-- WHEN ownership of that app moves to key K2
-- THEN the app is served at `https://a-<L2>.<M>.mesh.worldtree.network` with L2 ≠ L1, and no certificate for the old hostname is issued to K2
+- WHEN ownership of that app moves to key K2 whose 80-bit label L2 ≠ L1
+- THEN the app is served at `https://a-<L2>.<M>.mesh.worldtree.network` and no certificate for the old hostname is issued to K2
+
+#### Scenario: Label collision fails closed
+
+- GIVEN two verified records whose owner public keys differ but whose 80-bit labels are equal
+- WHEN AliasTable or the issuance adapter evaluates either name
+- THEN neither address is answered and no ACME challenge is written
+
+#### Scenario: TLS key is not the owner key
+
+- GIVEN an issuance authorization for `a-<L>.<M>.<zone>` signed by owner key K whose label is L, binding CSR SPKI H
+- WHEN the host presents a TLS certificate whose SPKI hash is H
+- THEN the hostname may be served; the TLS private key is not K
 
 #### Scenario: Bring-your-own zone
 
@@ -26,11 +43,14 @@ per mesh.
 ### Requirement: Offline local resolution of HTTPS names
 
 Every node SHALL answer DNS for `<mesh-label>.<zone>` names from its local
-responder without internet access, using only address records whose owner
-signature it has verified. The node SHALL forward to its responder, and exempt
-from DNS rebind protection, only the suffix `<mesh-label>.<zone>`, never the
-parent zone. Names without a verified owner-signed record SHALL NOT resolve
-locally.
+responder without internet access, using only `mjolnir-https-alias:v1` records
+whose owner signature it has verified against the full owner public key in the
+payload. This change owns that record type (`ai0.9` does not). The node SHALL
+forward to its responder, and exempt from DNS rebind protection, only the
+suffix `<mesh-label>.<zone>`, never the parent zone. Names without a verified
+owner-signed record SHALL NOT resolve locally. For one owner and FQDN, the
+highest `seq` wins; a tombstone (highest seq, `valid_until` in the past) SHALL
+remove the name. Two different owner keys for the same label SHALL fail closed.
 
 #### Scenario: Internet unplugged
 
@@ -52,19 +72,32 @@ locally.
 
 ### Requirement: Owner-authorized certificate issuance
 
-A certificate for an HTTPS name SHALL be obtained with ACME DNS-01. The private
-key SHALL remain on the serving host. The DNS adapter SHALL publish a challenge
-record only for an owner-signed issuance authorization, verified against the
-key the name's label derives from. The authorization binds the exact FQDN, the
-challenge TXT digest, the ACME account, the CSR public-key hash, a single-use
-nonce, and an expiry no more than one hour ahead. The system SHALL NOT issue or
-distribute wildcard keys or share a private key between hosts.
+A certificate for an HTTPS name SHALL be obtained with ACME DNS-01. The TLS
+private key SHALL remain on the serving host and SHALL NOT be the owner
+authorization key. The DNS adapter SHALL publish a challenge record only for a
+`mjolnir-https-issuance:v1` authorization whose Ed25519 signature verifies
+against the full owner public key the label derives from. Signed bytes SHALL be
+the domain line `mjolnir-https-issuance:v1\n` plus canonical JSON with keys in
+this order: `fqdn` (lowercase ASCII, no trailing dot), `txt_digest` (unpadded
+base64url SHA-256 of the ACME key authorization), `acme_account` (ACME account
+URL), `csr_spki_sha256` (64 lowercase hex SHA-256 of the CSR SPKI DER),
+`nonce` (32 lowercase hex chars), `expires_at` (decimal unix seconds, ≤ now+3600).
+The adapter SHALL reject replayed nonces, expired authorizations, wrong-owner
+signatures, FQDNs whose label is not derived from the signing key, and CSRs
+whose SPKI hash is not `csr_spki_sha256`. The system SHALL NOT issue or
+distribute wildcard keys or share a TLS private key between hosts.
 
 #### Scenario: Authorization for someone else's name
 
 - GIVEN an issuance authorization for `a-<L>.<M>.<zone>` signed by a key whose label is not L
 - WHEN it is submitted to the DNS adapter
 - THEN no challenge record is written
+
+#### Scenario: Wrong CSR public key
+
+- GIVEN a valid owner signature for label L binding `csr_spki_sha256` H1
+- WHEN the ACME CSR's SPKI hash is H2 ≠ H1
+- THEN no challenge record is written and no certificate is issued
 
 #### Scenario: Replayed authorization
 

@@ -97,7 +97,7 @@ hosted on the storage node.
 ## Out of scope
 
 - Hard custody, the signer and owner claim: `ai0` (`bf7.1`, `ai0.1`, `b6j.2`).
-- Owner-signed resolution record format itself: a sibling change after `ai0.9`.
+- Admin-record integrity (`ai0.9`) is a primitive this change may consume; HTTPS alias **resolution** records are owned here (Sol send-back).
 - Private per-mesh CA (managed devices only): later, if ever.
 - Moving identity storage to an HTTPS origin: a later identity change.
 - Secure embedding of mini-apps inside hello.mesh: waits on hello having a
