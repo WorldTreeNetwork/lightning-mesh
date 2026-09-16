@@ -73,8 +73,16 @@ every key-bearing origin structurally: IP-literal hosts, reserved
 names (`hello.mesh`, `id.mesh`, and any future name that serves the
 hello page), and the current page origin. Manifests are fetched
 node-side (`GET /api/apps`); the visitor's browser contacts no app
-host until they open one. Identity over the bridge is
-`add-embedded-assert` (`ncy.4`), not this capability.
+host until they open one. Identity over the bridge
+(`add-embedded-assert`, bead `mjolnir-mesh-ncy.4`) is the same
+`mjolnir-identity-assert` v1 token as `/assert`, carried as
+`identity.request` (window message plus one MessagePort) and
+`identity.response` (that port only). Audience is the card's entry
+origin. Consent is drawn by hello.mesh outside the iframe. One
+pending request, a 60 s host deadline, cooldown keyed by service
+name. Framed hello.mesh (`window.top !== window`, including a hello
+origin) fails closed before identity load; application HTML carries
+`frame-ancestors 'self'`, not the captive portal.
 
 ## Pointers
 
@@ -96,5 +104,6 @@ host until they open one. Identity over the bridge is
 - Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
   candidate): `openspec/specs/identity-derived-ula/spec.md`
 - Mini-apps (TXT `app=v1`, node-side manifest fetch, Apps shelf,
-  sandboxed cross-origin card; key origin ≠ app origin):
+  sandboxed cross-origin card; key origin ≠ app origin; identity
+  over the bridge via one-shot MessagePort):
   `openspec/specs/mesh-mini-apps/spec.md`
