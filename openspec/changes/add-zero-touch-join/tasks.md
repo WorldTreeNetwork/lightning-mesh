@@ -21,3 +21,10 @@ Not owed here (bullets, not boxes):
 - `rp9` user IdentiKey
 - Fold (after act lands)
 - Flipping live fleet `MESH_KEY`
+
+## Owed from advise 2026-09-16 (fable-5.1-arch-review, send-back)
+
+- [ ] S1 `fyby.3` spec: production CRDT writes SHALL carry an Ed25519 signature by the subject identity over the canonical record; merge SHALL verify the signature and the subject's lane grant. Add scenario "enrolled member cannot forge another identity's claim / addr-book / name record". Name the coordinate-lane carve-out (stamper ≠ subject; stamper signs and holds the stamp grant).
+- [ ] S2 `661` spec: neighbor admission or session keys SHALL be per node identity (revoking one identity requires no rekey of others; a single fleet-wide babeld key SHALL NOT satisfy this). Announced prefixes SHALL be bound to the announcer's authorized claims; `0.0.0.0/0` SHALL require a gateway grant. Add scenario "enrolled neighbor announces a prefix it does not own".
+- [ ] S3 "Open control plane waits on three gates": rewrite the "Until then … SHALL use … shared mesh key" sentence so it is either owed (fleet `MESH_KEY`, currently out of scope) or a documentation SHALL that the join doc states the gate is absent.
+- [ ] N3 design.md residual RF risk: name HWMP forwarding by quarantined stations (`mesh_fwding=1`) as accepted DoS-only exposure.
