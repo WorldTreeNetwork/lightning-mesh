@@ -126,15 +126,10 @@ client JS.
   `prompt=consent`). This is the standard OIDC silent-refresh dance.
 - No key yet + `prompt=consent`: the IdP shows a "create your identity first"
   panel linking to the front desk (`/`); the visitor makes a key and returns.
-
-> **Known gap today: framed `prompt=none`.** The built `/assert` page does not
-> check whether it is running inside a frame, and hello.mesh HTML is not yet
-> served with `frame-ancestors`. So a previously approved audience's
-> `prompt=none` request signs and redirects even when `/assert` is framed,
-> before anything renders. The fix (a fail-closed `window.top !== window`
-> check before identity load, approval lookup or signing, plus
-> `Content-Security-Policy: frame-ancestors 'self'` on application HTML) is
-> part of the accepted `add-embedded-assert` change, §8, which is not built.
+- Framed `/assert` fails closed: if `window.top !== window` (any parent,
+  including another hello.mesh page), the page stops before identity load,
+  approval lookup or signing. Application HTML is also served with
+  `Content-Security-Policy: frame-ancestors 'self'` (§8).
 
 ## 5. RP-side verification (offline)
 
@@ -217,12 +212,12 @@ export function verify(encoded: string, myOrigin: string, expectedNonce: string)
   extract the key. The assertion honestly conveys that tier; custodial attestation
   (rung 3) is a separate protocol (open item #2).
 
-## 8. Planned: embedded transport (not built)
+## 8. Embedded transport
 
-> **Status: accepted design, not built.** Source of truth:
-> [`openspec/changes/add-embedded-assert`](../../openspec/changes/add-embedded-assert/)
-> (bead `mjolnir-mesh-ncy.4`, depends on `add-mini-app-contract`). Nothing in
-> this section runs on the mesh today. Everything in §1–§7 is unchanged by it.
+> **Status: built** in hello.mesh (bead `mjolnir-mesh-ncy.4`). Source of truth
+> for the contract is the living `mesh-mini-apps` spec plus this section.
+> The assertion format in §1–§7 is unchanged; only the transport is added.
+> Fleet roll of this hello binary is a separate deploy.
 
 **Why.** A mini-app shown as a card inside hello.mesh (a sandboxed
 cross-origin iframe, see
@@ -272,7 +267,7 @@ assertion** over the mini-app `postMessage` bridge instead.
   both the bridge and `/assert` stop before identity load, approval lookup,
   listener registration or signing. hello.mesh application HTML gets
   `Content-Security-Policy: frame-ancestors 'self'` (not the captive-portal
-  probe responses). This also closes today's framed `prompt=none` gap (§4).
+  probe responses). Same fail-closed rule as §4.
 - **Bounded consent.** One pending request across all cards, with an absolute
   **60 s** host-owned deadline. After Deny, dismiss, expiry or an app-driven
   reload, that app enters a **cooldown keyed by service name** (30 s, doubling

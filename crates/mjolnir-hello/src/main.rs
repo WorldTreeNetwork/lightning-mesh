@@ -86,6 +86,17 @@ fn main() {
             response.add_header(cors);
         }
 
+        // ncy.4: hello.mesh application HTML must not be framed by a foreign
+        // origin. Captive probes and `/api/*` leave this unset.
+        if resp.frame_ancestors_self {
+            let csp = Header::from_bytes(
+                &b"Content-Security-Policy"[..],
+                &b"frame-ancestors 'self'"[..],
+            )
+            .expect("valid CSP header");
+            response.add_header(csp);
+        }
+
         if let Err(err) = request.respond(response) {
             tracing::warn!(%err, "failed to respond to request");
         }

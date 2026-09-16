@@ -29,7 +29,8 @@
 		type AssertErrorCode
 	} from '$lib/identity/assert';
 
-	const APPROVALS_KEY = 'hello-mesh-assert-approvals';
+	import { isApproved, rememberApproval } from '$lib/identity/approvals';
+	import { isFramed } from '$lib/miniapp/identity-bridge';
 
 	type View = 'checking' | 'invalid' | 'no-identity' | 'consent' | 'redirecting';
 
@@ -43,28 +44,7 @@
 	const pubkey = $derived(identity ? publicKeyHex(identity.publicKey) : '');
 	const shortKey = $derived(pubkey ? pubkey.slice(0, 8) : '');
 
-	function loadApprovals(): Record<string, number> {
-		try {
-			const raw = localStorage.getItem(APPROVALS_KEY);
-			return raw ? (JSON.parse(raw) as Record<string, number>) : {};
-		} catch {
-			return {};
-		}
-	}
 
-	function isApproved(audience: string): boolean {
-		return Boolean(loadApprovals()[audience]);
-	}
-
-	function rememberApproval(audience: string) {
-		try {
-			const approvals = loadApprovals();
-			approvals[audience] = Math.floor(Date.now() / 1000);
-			localStorage.setItem(APPROVALS_KEY, JSON.stringify(approvals));
-		} catch {
-			// Approval memory is a convenience; ignore storage failures.
-		}
-	}
 
 	/** Sign an assertion for the current request and redirect back to the RP. */
 	function completeApproval(req: AssertRequest, id: StoredIdentity) {
@@ -93,7 +73,7 @@
 	function approve() {
 		if (!request || !identity || busy) return;
 		busy = true;
-		rememberApproval(request.audience);
+		rememberApproval(browser ? localStorage : null, request.audience);
 		completeApproval(request, identity);
 	}
 
@@ -104,6 +84,11 @@
 
 	onMount(async () => {
 		if (!browser) return;
+		if (isFramed(window)) {
+			view = 'invalid';
+			errorDetail = 'hello.mesh will not sign in while framed.';
+			return;
+		}
 
 		const parsed = parseAssertRequest(new URLSearchParams(window.location.search));
 		if ('error' in parsed) {
@@ -119,7 +104,7 @@
 
 		if (parsed.prompt === 'none') {
 			// Silent path: only complete if we already have a key AND prior consent.
-			if (identity && isApproved(parsed.audience)) {
+			if (identity && isApproved(localStorage, parsed.audience)) {
 				completeApproval(parsed, identity);
 			} else {
 				fail(parsed, 'interaction_required');

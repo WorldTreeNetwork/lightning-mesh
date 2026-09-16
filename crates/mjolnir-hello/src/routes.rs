@@ -211,6 +211,10 @@ pub struct RouteResponse {
     /// browser topology view (bead ng9) aggregates `GET /api/*` from OTHER
     /// nodes' overlay addresses, so those reads must be cross-origin-readable.
     pub cors: bool,
+    /// When set, the adapter emits `Content-Security-Policy: frame-ancestors 'self'`.
+    /// SPA/static hello.mesh HTML only — never `/api/*`, `PORTAL_HTML`, or
+    /// probe success bodies (ncy.4).
+    pub frame_ancestors_self: bool,
 }
 
 impl RouteResponse {
@@ -220,6 +224,7 @@ impl RouteResponse {
             content_type: "application/json",
             body: body.into().into_bytes(),
             cors: false,
+            frame_ancestors_self: false,
         }
     }
 
@@ -229,6 +234,7 @@ impl RouteResponse {
             content_type: "text/html; charset=utf-8",
             body,
             cors: false,
+            frame_ancestors_self: false,
         }
     }
 
@@ -241,6 +247,7 @@ impl RouteResponse {
             content_type,
             body: body.into().into_bytes(),
             cors: false,
+            frame_ancestors_self: false,
         }
     }
 
@@ -253,6 +260,7 @@ impl RouteResponse {
             content_type: content_type_for(path),
             body,
             cors: false,
+            frame_ancestors_self: false,
         }
     }
 }
@@ -326,6 +334,7 @@ fn probe_response(probe: Probe, internet_available: bool) -> RouteResponse {
         content_type,
         body: body.to_vec(),
         cors: false,
+        frame_ancestors_self: false,
     }
 }
 
@@ -841,8 +850,8 @@ pub fn route(
     releases: &PortalReleases,
     client_ip: Option<IpAddr>,
 ) -> RouteResponse {
-    let needs_internet_state = method == "GET"
-        && (path == "/api/captive-portal" || Probe::for_path(path).is_some());
+    let needs_internet_state =
+        method == "GET" && (path == "/api/captive-portal" || Probe::for_path(path).is_some());
     route_with_internet_state(
         method,
         path,
@@ -913,12 +922,21 @@ fn route_with_internet_state(
             submit_coordinate_stamp(body, challenges, spool_dir, directory_cache, directory_file)
         }
 
-        ("GET", _) => serve_static(path, static_root),
+        ("GET", _) => {
+            let mut page = serve_static(path, static_root);
+            // Application HTML only. Probe paths returned above, so this never
+            // tags PORTAL_HTML or OS success bodies.
+            if page.content_type.starts_with("text/html") {
+                page.frame_ancestors_self = true;
+            }
+            page
+        }
         _ => RouteResponse {
             status: 404,
             content_type: "text/plain",
             body: b"not found".to_vec(),
             cors: false,
+            frame_ancestors_self: false,
         },
     };
 
@@ -1583,6 +1601,39 @@ mod tests {
     }
 
     #[test]
+    fn spa_html_sets_frame_ancestors_self() {
+        assert!(route_for("GET", "/").frame_ancestors_self);
+        assert!(route_for("GET", "/assert").frame_ancestors_self);
+        assert!(route_for("GET", "/index.html").frame_ancestors_self);
+        assert!(!route_for("GET", "/api/health").frame_ancestors_self);
+        assert!(!route_for("GET", "/api/apps").frame_ancestors_self);
+        assert!(!route_for("GET", "/api/captive-portal").frame_ancestors_self);
+        assert!(!route_for("POST", "/api/portal/pass").frame_ancestors_self);
+    }
+
+    #[test]
+    fn captive_probes_never_set_frame_ancestors() {
+        for path in [
+            "/hotspot-detect.html",
+            "/generate_204",
+            "/connecttest.txt",
+            "/ncsi.txt",
+        ] {
+            let online = route_for_with_internet("GET", path, true);
+            assert!(
+                !online.frame_ancestors_self,
+                "{path} online probe must not carry frame-ancestors"
+            );
+            let offline = route_for_with_internet("GET", path, false);
+            assert_eq!(offline.body, OFFLINE_PORTAL_HTML.as_bytes());
+            assert!(
+                !offline.frame_ancestors_self,
+                "{path} PORTAL_HTML must not carry frame-ancestors"
+            );
+        }
+    }
+
+    #[test]
     fn apps_endpoint_serializes_the_memory_snapshot() {
         let resp = route_for("GET", "/api/apps");
         assert_eq!(resp.status, 200);
@@ -1622,6 +1673,7 @@ mod tests {
             assert_eq!(response.status, 200);
             assert_eq!(response.content_type, "text/html; charset=utf-8");
             assert_eq!(response.body, OFFLINE_PORTAL_HTML.as_bytes());
+            assert!(!response.frame_ancestors_self);
         }
     }
 

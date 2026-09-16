@@ -16,9 +16,16 @@
 	import { directoryStore, startDirectoryPolling } from '$lib/directory/store.svelte';
 	import { startIdentity } from '$lib/identity/store.svelte';
 	import { isMiniApp } from '$lib/miniapp/contract';
+	import { isFramed } from '$lib/miniapp/identity-bridge';
+	import { browser } from '$app/environment';
+
+	const framed = browser && isFramed(window);
 
 	$effect(startDirectoryPolling);
-	$effect(startIdentity);
+	$effect(() => {
+		if (framed) return;
+		return startIdentity();
+	});
 
 	const services = $derived(directoryStore.directory?.services ?? []);
 	const ordinary = $derived(services.filter((svc) => !isMiniApp(svc)));

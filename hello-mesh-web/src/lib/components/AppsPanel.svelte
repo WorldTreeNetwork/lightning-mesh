@@ -5,6 +5,7 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import type { DirectoryService } from '$lib/directory/api';
+	import ConsentSheet from '$lib/components/ConsentSheet.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
@@ -29,6 +30,15 @@
 		tileManifest,
 		type ShelfTile
 	} from '$lib/miniapp/apps';
+	import { IdentityBridgeHost, isFramed } from '$lib/miniapp/identity-bridge';
+	import {
+		buildAssertionPayload,
+		encodeAssertionToken,
+		signAssertion
+	} from '$lib/identity/assert';
+	import { isApproved, rememberApproval } from '$lib/identity/approvals';
+	import { loadIdentity } from '$lib/identity/storage';
+	import { publicKeyHex } from '$lib/identity/keys';
 
 	let { services, loaded = true }: { services: DirectoryService[]; loaded?: boolean } = $props();
 
@@ -38,6 +48,14 @@
 	let frameEl = $state<HTMLIFrameElement | null>(null);
 	let cardHeight = $state(320);
 	let inited = $state(false);
+	let skipNextLoad = $state(true);
+	let host = new IdentityBridgeHost();
+	let hostTick = $state(0);
+	let identityLabel = $state('');
+	let identityShort = $state('');
+	const bump = () => {
+		hostTick += 1;
+	};
 
 	const tiles = $derived(shelfTiles(services, appsJson));
 	const count = $derived(tiles.length);
@@ -81,7 +99,8 @@
 		}
 	}
 
-	function openCard(tile: ShelfTile) {
+	function openCard(tile: ShelfTile, gesture?: Event) {
+		if (isFramed(window)) return;
 		const url = entryUrl(tile.service);
 		if (!url) return;
 		if (
@@ -90,24 +109,84 @@
 		) {
 			return;
 		}
+		if (gesture instanceof Event && gesture.isTrusted) {
+			host.trustedOpen(tile.service.name);
+		}
+		if (opened === tileKey(tile)) {
+			frameEl?.scrollIntoView({ block: 'nearest' });
+			bump();
+			return;
+		}
+		if (opened) closeCard();
 		opened = tileKey(tile);
 		cardHeight = tileManifest(tile)?.height ?? 320;
 		inited = false;
+		skipNextLoad = true;
 	}
 
 	function closeCard() {
+		if (opened) host.cardRemoved(opened, Date.now());
 		opened = null;
 		frameEl = null;
 		inited = false;
+		bump();
+	}
+
+	async function signFor(origin: string, nonce: string) {
+		const id = await loadIdentity();
+		if (!id) return;
+		const payloadJson = buildAssertionPayload({
+			pubkey: publicKeyHex(id.publicKey),
+			displayName: id.label?.trim() || '',
+			audience: origin,
+			nonce,
+			issuedAt: Math.floor(Date.now() / 1000)
+		});
+		const sig = signAssertion(id.secretKey, payloadJson);
+		rememberApproval(browser ? localStorage : null, origin);
+		host.completeSign(encodeAssertionToken({ payload: payloadJson, sig }));
+		bump();
+	}
+
+	async function onIdentityMessage(event: MessageEvent, tile: ShelfTile, origin: string) {
+		if (isFramed(window)) return;
+		const data = event.data;
+		if (!data || data.mesh !== 'mini-app/v1' || data.type !== 'identity.request') return;
+		const id = await loadIdentity();
+		identityLabel = id?.label?.trim() || '';
+		identityShort = id ? publicKeyHex(id.publicKey).slice(0, 8) : '';
+		const port = event.ports.length === 1 ? event.ports[0] : null;
+		host.handleRequest(
+			{
+				eventSource: event.source,
+				eventOrigin: event.origin,
+				cardSource: frameEl?.contentWindow ?? null,
+				entryOrigin: origin,
+				portCount: event.ports.length,
+				nonce: data.nonce,
+				prompt: data.prompt,
+				serviceName: tile.service.name,
+				cardId: tileKey(tile),
+				hasKey: Boolean(id),
+				approved: isApproved(browser ? localStorage : null, origin),
+				now: Date.now()
+			},
+			port,
+			tileManifest(tile)?.name
+		);
+		bump();
+		if (host.pending?.claimed) await signFor(origin, host.pending.nonce);
 	}
 
 	$effect(() => {
 		if (!browser || !opened || !frameEl) return;
+		if (isFramed(window)) return;
 		const frame = frameEl;
 		const tile = tiles.find((t) => tileKey(t) === opened);
 		const origin = tile ? entryOrigin(tile.service) : undefined;
 		if (!tile || !origin) return;
 		const onMessage = (event: MessageEvent) => {
+			void onIdentityMessage(event, tile, origin);
 			const msg = acceptBridgeMessage(event, frame.contentWindow, origin);
 			if (!msg) return;
 			if (msg.type === 'ready' && !inited && frame.contentWindow) {
@@ -116,8 +195,8 @@
 			} else if (msg.type === 'resize') {
 				cardHeight = clampHeight(msg.height);
 			} else if (msg.type === 'open') {
-				const url = safeOpenUrl(msg.url);
-				if (url) window.open(url, '_blank', 'noopener');
+				const href = safeOpenUrl(msg.url);
+				if (href) window.open(href, '_blank', 'noopener');
 			}
 		};
 		return bindCardMessages(window, onMessage);
@@ -162,6 +241,11 @@
 								{#if tile.record?.stale && manifest}
 									<p class="mt-1 text-xs text-muted-foreground">May be out of date</p>
 								{/if}
+								{#if hostTick >= 0 && host.sharedWith && isOpen}
+									<p class="mt-1 text-xs text-muted-foreground">
+										Identity shared with {host.sharedWith}
+									</p>
+								{/if}
 							</div>
 							{#if url}
 								<a
@@ -176,7 +260,7 @@
 							{/if}
 						</div>
 						{#if embeddable && !isOpen}
-							<Button class="mt-2" size="sm" variant="secondary" onclick={() => openCard(tile)}>
+							<Button class="mt-2" size="sm" variant="secondary" onclick={(e) => openCard(tile, e)}>
 								Open here
 							</Button>
 						{/if}
@@ -197,6 +281,14 @@
 									referrerpolicy={FRAME_REFERRER}
 									style="height: {cardHeight}px"
 									class="w-full rounded-md border border-border bg-background"
+									onload={() => {
+										if (skipNextLoad) {
+											skipNextLoad = false;
+											return;
+										}
+										if (opened) host.iframeLoaded(opened, Date.now());
+										bump();
+									}}
 								></iframe>
 							</div>
 						{/if}
@@ -205,4 +297,27 @@
 			</ul>
 		</Collapsible.Content>
 	</Collapsible.Root>
+{/if}
+
+{#if hostTick >= 0 && host.sheet}
+	<ConsentSheet
+		origin={host.sheet.origin}
+		appName={host.sheet.name}
+		displayName={identityLabel}
+		shortKey={identityShort}
+		offerCreate={host.sheet.offerCreate}
+		onallow={() => {
+			const claimed = host.claimAllow(Date.now());
+			bump();
+			if (claimed) void signFor(claimed.origin, claimed.nonce);
+		}}
+		ondeny={() => {
+			host.deny(Date.now());
+			bump();
+		}}
+		ondismiss={() => {
+			host.dismiss(Date.now());
+			bump();
+		}}
+	/>
 {/if}
