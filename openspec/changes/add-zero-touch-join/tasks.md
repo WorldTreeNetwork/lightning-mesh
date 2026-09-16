@@ -33,3 +33,7 @@ Not owed here (bullets, not boxes):
 
 - [x] S4 `fyby.3` spec: releases/tombstones/unpublishes subject-signed over lane key + HLC; enrolled cannot drop another's claim (pinned 2026-09-16 r2)
 - [x] S5 `661` spec: router-id origin bind (transit-safe); scenario is E originates under own id; design names enrolled-insider origin forgery as R5 residual (pinned 2026-09-16 r2)
+
+## Owed from advise r3 2026-09-16 (fable-5.1-arch-review, send-back)
+
+- [x] S6 `661` spec: sz9 proto 158 `/32` carve-out (option a); scenario roamed client still installs; design names `/32` hijack as R5 residual (pinned 2026-09-16 r3)

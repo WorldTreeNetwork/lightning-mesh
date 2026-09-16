@@ -49,6 +49,17 @@ Cross-cutting trust boundary. Security-sensitive. Steer 2026-09-16.
 - **Quarantine handshake addressing.** The joiner uses IPv6 link-local
   (or an ungated ephemeral), not a claimed `10.254`, so the enrollment
   lane does not collide with overlay derivation.
+- **sz9 carve-out (S6, option a).** Visited-node proto 158 `/32`s still
+  install under origin binding. Enrolled-insider single-`/32` hijack is
+  R5 residual. No signed mobility lane in this change. Do not drop
+  `pub mod roam`.
+- **Canonical bytes** are a versioned, domain-tagged explicit message
+  per lane and mutation type (the `mjolnir-name-claim:v1` shape), not
+  postcard of the struct (`#[serde(default)]` would shift bytes).
+- **Frozen unsigned variants** decode-and-drop at merge once fyby.3 is
+  enforced; they are not keep-applying.
+- **`leased_name` is the wire precedent**, not proof that HEAD
+  re-verifies at merge (it does not).
 
 ## Why not the operator's first instinct
 

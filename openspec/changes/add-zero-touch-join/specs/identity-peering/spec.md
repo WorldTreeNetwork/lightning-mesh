@@ -99,9 +99,12 @@ nodes. A single fleet-wide babeld HMAC key SHALL NOT satisfy this
 requirement. Prefix binding SHALL be on the update's router-id origin, not on
 the immediate neighbor (jump nodes MUST re-announce prefixes behind
 them). A router-id SHALL only originate prefixes it is authorized to
-claim; `0.0.0.0/0` SHALL require a gateway grant. An enrolled neighbor
-forging another member's router-id is residual, handled by revocation
-(R5), not by this requirement.
+claim, **except** mobility host `/32`s (sz9, proto 158): a `/32` in
+the mesh client space originated by any enrolled router-id with a live
+session SHALL still install. `0.0.0.0/0` SHALL require a gateway grant.
+An enrolled neighbor forging another member's router-id, or hijacking a
+single client `/32`, is residual, handled by revocation (R5), not by
+this requirement. This change does not owe a signed mobility lane.
 Origin-id stamping without session freshness SHALL NOT satisfy this
 requirement.
 

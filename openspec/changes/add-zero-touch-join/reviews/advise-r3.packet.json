@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-zero-touch-join-advise-r3-fable",
+  "node_id": "add-zero-touch-join-advise-r3-fable",
+  "capability": "identity-peering",
+  "change_id": "add-zero-touch-join",
+  "goal": "Re-advise add-zero-touch-join after r2 send-back amendments. You are Fable 5.1, other-family reader. Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-zero-touch-join/reviews/2026-09-16-advise-r3.md (that exact name).\n\nr1 send-back answered. r2 send-back S4/S5 claimed answered:\nS4 every production mutation including release/tombstone/unpublish is subject-signed over canonical bytes including lane key and HLC; scenario enrolled cannot release another's claim\nS5 prefix bind is router-id origin (transit-safe); scenario E originates under own id; jump re-announce still installs; design names enrolled-insider origin forgery as R5 residual not owed proof\nAlso design pins: signed records as new enum variants (old freeze); quarantine handshake on link-local not claimed 10.254\n\nBLIND PASS from Why + cited docs/code first, then open design/tasks/spec and r1/r2.\n\nCited: identity-peering-requirements.md gating; crdt/gossip.rs; leased_name.rs; babel/config.rs; spec delta AFTER the take.\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** fable-5.1-arch-review\n> **SPAWN:** <this spawn dir>\nIf send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": ["Implement", "Fold", "Flip the banner"],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "r2 S4 and S5 are answered; hop allow-list and fleet HMAC still do not satisfy the gates.",
+    "if_false": "Releases remain unsigned, or prefix bind is still per-neighbor and breaks transit."
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-zero-touch-join/reviews/",
+      "openspec/changes/add-zero-touch-join/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-fable-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-fable-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
