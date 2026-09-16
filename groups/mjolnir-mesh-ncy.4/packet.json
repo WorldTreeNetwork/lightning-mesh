@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ncy-4-act",
+  "node_id": "mjolnir-mesh-ncy.4",
+  "capability": "mesh-mini-apps",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-4.6"
+    }
+  },
+  "role": "worker",
+  "goal": "Finish add-embedded-assert: identity.request over the mini-app bridge with one-shot MessagePort identity.response, shared hello-mesh-assert-approvals, fail-closed framing, service-name cooldown, host-rendered consent, and CSP frame-ancestors 'self' on SPA/static hello HTML only. Partial web files already exist; complete remaining host tests, verifyAssertion round trip, RouteResponse CSP flag + hello adapter header, identity-assertion.md §8 planned→built, and remove the §4 framed prompt=none gap note. Ethernet is up for read-only hello probes; do not deploy, do not bake static/index.html, do not z3th/ri7v/HTTPS.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-embedded-assert/reviews/2026-09-13-advise-r7.md",
+      "invariant": "Advise accept at round 7; implement the accepted delta, do not reopen the architecture."
+    },
+    {
+      "symbol": "openspec/changes/add-embedded-assert/specs/mesh-mini-apps/spec.md:19",
+      "invariant": "One-shot one-way port; never start() or listen; audience is event.origin; tokens never window.postMessage."
+    },
+    {
+      "symbol": "openspec/changes/add-embedded-assert/specs/mesh-mini-apps/spec.md:75",
+      "invariant": "Cooldown keyed by service name, survives ip/port republish, reset only by approval or trusted shelf tap."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/routes.rs:319",
+      "invariant": "CSP is SPA/static application HTML only; never PORTAL_HTML or probe success bodies."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cd hello-mesh-web && bun run check && bun run test && cd .. && CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-hello --offline",
+    "criteria": [
+      "wrong-origin and no-port requests drop; malformed nonce is invalid_request on the port",
+      "audience is the entry origin; prompt=none without approval is interaction_required",
+      "deny is access_denied, dismiss/expiry/iframe load are interaction_required",
+      "cooldown is per service name across ip/port republish; trusted open resets it",
+      "round-trip token verifies with verifyAssertion",
+      "SPA HTML has frame-ancestors 'self'; /api/*, PORTAL_HTML and probe success bodies do not"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "meshd --app publish",
+      "tracked_as": "mjolnir-mesh-ncy.2"
+    },
+    {
+      "item": "HTTPS / .mesh certificates",
+      "tracked_as": "mjolnir-mesh-b6j.1"
+    },
+    {
+      "item": "live fleet deploy or radio reapply",
+      "tracked_as": "mjolnir-mesh-ri7v / mjolnir-mesh-z3th"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "hello-mesh-web/src/lib/miniapp/identity-bridge.ts",
+      "hello-mesh-web/src/lib/miniapp/identity-bridge.spec.ts",
+      "hello-mesh-web/src/lib/identity/approvals.ts",
+      "hello-mesh-web/src/lib/components/ConsentSheet.svelte",
+      "hello-mesh-web/src/lib/components/AppsPanel.svelte",
+      "hello-mesh-web/src/routes/+page.svelte",
+      "hello-mesh-web/src/routes/assert/+page.svelte",
+      "crates/mjolnir-hello/src/routes.rs",
+      "crates/mjolnir-hello/src/main.rs",
+      "docs/network-coordination/identity-assertion.md",
+      "openspec/changes/add-embedded-assert/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "SSH mutate nodes",
+      "join WiFi",
+      "edit crates/mjolnir-hello/static/index.html",
+      "edit deploy/openwrt/fleet-nodes.conf"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only"
+}

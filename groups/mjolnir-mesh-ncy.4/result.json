@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "id": "res-ncy-4-act",
+  "packet_id": "pkt-ncy-4-act",
+  "signer": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "hello-mesh-web/src/lib/miniapp/identity-bridge.ts",
+      "role": "identity request decision + host"
+    },
+    {
+      "path": "hello-mesh-web/src/lib/miniapp/identity-bridge.spec.ts",
+      "role": "unit tests including verifyAssertion round trip"
+    },
+    {
+      "path": "hello-mesh-web/src/lib/identity/approvals.ts",
+      "role": "shared approvals store"
+    },
+    {
+      "path": "hello-mesh-web/src/lib/components/ConsentSheet.svelte",
+      "role": "host-rendered consent"
+    },
+    {
+      "path": "hello-mesh-web/src/lib/components/AppsPanel.svelte",
+      "role": "bridge wiring + Identity shared chrome"
+    },
+    {
+      "path": "hello-mesh-web/src/routes/+page.svelte",
+      "role": "fail-closed identity start when framed"
+    },
+    {
+      "path": "hello-mesh-web/src/routes/assert/+page.svelte",
+      "role": "fail-closed /assert when framed"
+    },
+    {
+      "path": "crates/mjolnir-hello/src/routes.rs",
+      "role": "SPA HTML frame-ancestors flag"
+    },
+    {
+      "path": "crates/mjolnir-hello/src/main.rs",
+      "role": "CSP header adapter"
+    },
+    {
+      "path": "docs/network-coordination/identity-assertion.md",
+      "role": "\u00a78 built; \u00a74 framed gap closed"
+    }
+  ],
+  "evidence": {
+    "kind": "command",
+    "command": "cd hello-mesh-web && bun run check && bun run test && cd .. && CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-hello --offline",
+    "exit_code": 0,
+    "output_tail": "svelte-check 0 errors; vitest 123 passed (21 identity-bridge); cargo test -p mjolnir-hello 56 passed including spa_html_sets_frame_ancestors_self and captive_probes_never_set_frame_ancestors.",
+    "observed": "Ethernet LAN 10.42.242.246 via 10.42.242.1 hello healthy; default still Wi-Fi 10.43.1.254. Did not deploy; live hello still the previous binary.",
+    "note": "No HTTPS, no meshd --app publish, no z3th/ri7v."
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "d3f3f8b",
+    "paths": [
+      "hello-mesh-web/src/lib/miniapp/identity-bridge.ts",
+      "hello-mesh-web/src/lib/miniapp/identity-bridge.spec.ts",
+      "hello-mesh-web/src/lib/identity/approvals.ts",
+      "hello-mesh-web/src/lib/components/ConsentSheet.svelte",
+      "hello-mesh-web/src/lib/components/AppsPanel.svelte",
+      "hello-mesh-web/src/routes/+page.svelte",
+      "hello-mesh-web/src/routes/assert/+page.svelte",
+      "crates/mjolnir-hello/src/routes.rs",
+      "crates/mjolnir-hello/src/main.rs",
+      "docs/network-coordination/identity-assertion.md",
+      "openspec/changes/add-embedded-assert/tasks.md"
+    ]
+  },
+  "summary": "Embedded identity assertion landed: one-shot port responses, shared approvals, fail-closed framing, service-name cooldown, SPA-only frame-ancestors CSP. Not fleet-rolled.",
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "grok-conductor",
+    "content_hash": "sha256:d79e9b64d0d5aebabfbd013ff6c564c3b6b47ab0829ccdfe718c56c081ff79e9"
+  }
+}
