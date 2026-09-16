@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-apply-pins-advise",
+  "node_id": "mjolnir-mesh-ai0.5",
+  "capability": "network-change-transactions",
+  "change_id": "add-durable-network-apply",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "fable-5.1-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Implementation-readiness advise of add-durable-network-apply pins. Prior architecture advise already accepted (reviews/2026-09-15-advise.md). This read is whether the 2026-09-15 steer/design pins are exact enough to implement without a worker guessing. Blind pass: read proposal Why, living-specs/spec.md, cited mjolnir-apply mkdir lock and install-node.sh launcher BEFORE opening design.md, steer.md, or tasks.md. Write a ten-line independent take (what you would pin, refuse, one tradeoff). Then open the Implementation pins section and compare. Write openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise-pins.md with ADVISE accept or send-back, READER and SPAWN. Judge: flock vs mkdir, JSON journal under /etc/mjolnir/txn, Rust crate vs ash journal, v1 allowlist rejecting firmware/package/key/init updater, 64KiB/8MiB/32-receipt/tombstone bounds, health-pass-does-not-commit, recovery-first before admission. Do not equate laptop tests with OpenWrt completion. No code, no fold, no deploy, no live radio.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/proposal.md:8",
+      "invariant": "Why first. Reboot recovery and honest receipts."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Not built until verified/folded."
+    },
+    {
+      "symbol": "deploy/openwrt/files/usr/sbin/mjolnir-apply:45",
+      "invariant": "mkdir lock orphans on SIGKILL; rollback does not verify restoration."
+    },
+    {
+      "symbol": "deploy/openwrt/install-node.sh:163",
+      "invariant": "setsid survives SSH loss, not boot."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A worker can implement the journal/lock/allowlist/bounds without inventing a second on-disk format or wrapping the firmware updater as recoverable.",
+    "if_false": "A pin is still missing or contradicts crash durability / false client-internet / lock liveness."
+  },
+  "out_of_scope": [
+    {
+      "item": "Live hardware qualification, fleet deploy, HTTPS, app publish",
+      "tracked_as": "mjolnir-mesh-z3th / ri7v / b6j.1 / ncy.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise-pins.md",
+      "openspec/changes/add-durable-network-apply/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement product code",
+      "change router configuration",
+      "edit other changes"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}

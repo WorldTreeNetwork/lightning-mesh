@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-apply-pins-advise-r2",
+  "node_id": "mjolnir-mesh-ai0.5",
+  "capability": "network-change-transactions",
+  "change_id": "add-durable-network-apply",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "fable-5.1-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Re-advise add-durable-network-apply implementation pins after send-back. Prior file reviews/2026-09-15-advise-pins.md is send-back (items A–D). Author re-pinned in design.md Implementation pins: v1 = four UCI files only; meshd binary and wpad swap stay on unwrapped legacy launcher; snapshot cap 8 MiB refuse-before-mutation; mandatory musl helper outside mutation surface; two-phase init START<19 restore and START>96 verify; deadline is boot_id + CLOCK_MONOTONIC; derived STAGE/result; launcher inherits flock fd 9; tombstones never evicted; active/ holds at most one txn. Blind pass: Why + living-specs + mjolnir-apply mkdir lock BEFORE design.md. Ten-line take, then compare the re-pin to A–D. Write openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise-pins-r2.md with ADVISE accept or send-back, READER and SPAWN. Do not reopen the accepted architecture advise. No code, no fold, no deploy, no live radio.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/proposal.md:8",
+      "invariant": "Why first."
+    },
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise-pins.md:104",
+      "invariant": "Send-back items A–D are the owed pins."
+    },
+    {
+      "symbol": "deploy/openwrt/files/usr/sbin/mjolnir-apply:45",
+      "invariant": "mkdir lock and unverified rollback remain the legacy helper."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A worker can implement journal/lock/UCI-only allowlist/boot helper/monotonic deadline without guessing a second format or wrapping wpad/meshd as recoverable.",
+    "if_false": "A send-back item A–D is still missing or newly contradicted."
+  },
+  "out_of_scope": [
+    {
+      "item": "Live hardware, fleet deploy, HTTPS, app publish",
+      "tracked_as": "mjolnir-mesh-z3th / ri7v / b6j.1 / ncy.2"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise-pins-r2.md",
+      "openspec/changes/add-durable-network-apply/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement product code",
+      "change router configuration",
+      "edit other changes"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}

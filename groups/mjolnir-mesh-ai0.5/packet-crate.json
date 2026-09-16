@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-apply-crate",
+  "node_id": "mjolnir-mesh-ai0.5",
+  "capability": "network-change-transactions",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-implement"
+    }
+  },
+  "role": "worker",
+  "goal": "Laptop slice of add-durable-network-apply: new workspace crate crates/mjolnir-apply implementing the pinned journal/state-machine, flock, monotonic deadline, UCI-only snapshot allowlist, receipts and tombstones. Pins are in openspec/changes/add-durable-network-apply/design.md Implementation pins and reviews/2026-09-15-advise-pins-r2.md (accept). Red-first: write groups/ai0-apply/red-first.md with failing tests for stale revision, concurrent apply, duplicate-ID conflict, crash at each journal transition, partial snapshot, unwritable storage, corrupt journal, reboot (boot_id change), missing backup, restoration failure, local-only false-positive internet evidence; then make them pass. Health-pass does not commit. Recovery-first before admission. Tests use a tempdir TxnPaths and injected clock/boot_id. CARGO_TARGET_DIR=/tmp/lm-target. rustfmt owned Rust. Do not implement the OpenWrt adapter, init scripts, or edit usr/sbin/mjolnir-apply. Do not deploy. Do not claim hardware qualification.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/design.md:118",
+      "invariant": "Implementation pins: UCI-only v1, JSON under TxnPaths, flock, boot_id+monotonic, 64KiB/8MiB/32 receipts, tombstones never evicted, active/ at most one txn."
+    },
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/reviews/2026-09-15-advise-pins-r2.md:1",
+      "invariant": "Readiness advise accept. Helper flock of inherited fd 9 is adapter-slice; crate uses the flock syscall."
+    },
+    {
+      "symbol": "openspec/changes/add-durable-network-apply/specs/network-change-transactions/spec.md:1",
+      "invariant": "Revision-checked apply, durable recovery before mutation, honest receipts."
+    },
+    {
+      "symbol": "Cargo.toml:1",
+      "invariant": "Workspace members crates/*; new crate auto-discovered. CARGO_TARGET_DIR=/tmp/lm-target."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-apply",
+    "criteria": [
+      "Red-first cases in groups/ai0-apply/red-first.md now pass",
+      "Stale revision and duplicate-ID conflict refuse before mutation",
+      "Crash between health-pass and commit restores snapshot",
+      "boot_id change takes reboot recovery, not wall-clock expiry",
+      "Local-only probe cannot be recorded as client internet",
+      "No OpenWrt adapter or live radio claimed"
+    ]
+  },
+  "out_of_scope": [
+    {
+      "item": "OpenWrt musl helper, init START phases, ash launcher flock fd 9, live radio",
+      "tracked_as": "mjolnir-mesh-ai0.5 adapter slice / z3th"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "crates/mjolnir-apply",
+      "Cargo.lock",
+      "groups/ai0-apply/red-first.md",
+      "openspec/changes/add-durable-network-apply/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "SSH to nodes",
+      "edit deploy/openwrt/files/usr/sbin/mjolnir-apply",
+      "edit other crates"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "standard",
+  "surface": "packet-only"
+}
