@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-09-16 — m3000-b STA/WWAN to *Symbio* (`wireless.uplink` + `network.wwan` metric 20) taken down; radio0 is the Lightning Mesh client AP again (ch 6). Default now babel via `10.254.61.115` (tr3000). setup-wireless.sh still refuses while a STA section exists (z3th). (`wireless.uplink` deleted on-box)
 - 2026-09-15 — Household nodes on one ethernet switch merge client L2: indoor-b AP DHCP-vended m3000's `10.42.242.x`; ping to `.1` 2s ttl=63; iOS spinner/no lease (proxy-ARP fails DAD). `reconcile_client_uci` must not re-add `192.168.1.1/24` (659 alias; AP3000 notes already forbade it). Dataplane detaches copper from `br-lan` after two live foreign `10.42.y.1` neighs. Recovery is `fe80` + `10.42.x.1`, not a fleet-identical alias. (`crates/mjolnir-mesh/src/heal.rs`, meshd `reconcile_client_dataplane`)
 - 2026-09-15 — Cudy M3000 front LED is bicolor red/white (`red:wan-online`, `white:wan-online`). `green:wan`/`green:lan` are port lamps, not topology. 849.5 no-ops without `amber:status`. (`crates/mjolnir-mesh/src/led.rs`, mjolnir-mesh-849.6)
 - 2026-09-15 — LED SKU probes (849.7): TR3000 `red:power`+`white:status` (same mix as M3000); AP3000 Outdoor `red:power`+`green:status` (must beat TR3000 — both have `red:power`); WR3000S all-white which-lamp (`white:status` / `wan-online` / `wlan-5ghz`). Never write `white:wps` — wan-admin owns it. (`crates/mjolnir-mesh/src/led.rs`)
