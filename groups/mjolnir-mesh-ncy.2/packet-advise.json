@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ncy-2-advise-r1",
+  "node_id": "mjolnir-mesh-ncy.2",
+  "capability": "mesh-mini-apps",
+  "change_id": "add-app-manifest-publish",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Independent advise of add-app-manifest-publish (ACTIVE BUILD, bead mjolnir-mesh-ncy.2). Author family is Grok (scaffold). You are the non-Claude reader. Blind pass: read proposal Why/What/journey, living mesh-mini-apps spec, and cited NameClaimRequest plus contract.ts appPath BEFORE opening design.md or tasks.md. Write a ten-line independent take (what you would pin, refuse, one tradeoff). Then open design.md and compare. Write openspec/changes/add-app-manifest-publish/reviews/2026-09-15-advise.md with ADVISE accept or send-back, READER and SPAWN. Judge: unsigned app marker on name-claim (same trust as scheme/ip), one shared validator matching appPath, invalid marker rejected before spool, older records still parse, CLI is recovery not headline. Do not implement. Do not fold. Do not deploy.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-app-manifest-publish/proposal.md:11",
+      "invariant": "Why first. Self-serve name-claim cannot mark a mini-app today; SSH publish is the only path."
+    },
+    {
+      "symbol": "openspec/specs/mesh-mini-apps/spec.md",
+      "invariant": "Living mini-app contract already defines app=v1 / path= and consumer re-validation."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "Not built until verified/folded."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/routes.rs:144",
+      "invariant": "v1 name-claim preimage is challenge+name+port only; ip and scheme are already unsigned extras."
+    },
+    {
+      "symbol": "hello-mesh-web/src/lib/miniapp/contract.ts:64",
+      "invariant": "Shelf already rejects path without leading slash, with //, backslash, controls, or a scheme."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A worker can add the unsigned app marker on name-claim and the CLI without changing the signed preimage, and cannot persist an invalid path or a second signing scheme.",
+    "if_false": "The marker is inside the v1 signature, a bad path can overwrite a lease, or publish-time checks become the security boundary instead of consumer re-validation."
+  },
+  "out_of_scope": [
+    {
+      "item": "Signing the marker in owner-signed name records",
+      "tracked_as": "mjolnir-mesh-ai0.9"
+    },
+    {
+      "item": "Signed admin RPC publish",
+      "tracked_as": "mjolnir-mesh-b6j.2"
+    },
+    {
+      "item": "Apps shelf UI",
+      "tracked_as": "mjolnir-mesh-ncy.3"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-app-manifest-publish/reviews/2026-09-15-advise.md",
+      "openspec/changes/add-app-manifest-publish/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement product code",
+      "edit other changes"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only"
+}

@@ -1,6 +1,6 @@
 # add-app-manifest-publish
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-mesh-ncy.2` (epic `mjolnir-mesh-ncy`). Re-scoped by steer
 2026-09-15: publishing must not require SSH, so the mini-app marker has to be

@@ -122,5 +122,6 @@ overlay (iroh + babeld + CRDT) is the product, the radio is plumbing**.
   health gate → rollback), never through a live SSH session doing the
   mutation inline.
 - Guest-client roam (`sz9`): `crates/mjolnir-mesh/src/roam.rs` + meshd
-  `roam_loop` — host `/32`s (proto 158) for phones that kept another node's
-  IP. Do not drop `pub mod roam`. Field validation is `0pv`.
+  `roam_loop` — `proxy_arp` on the client bridge plus host `/32`s (proto 158)
+  for phones that kept another node's IP. Do not drop `pub mod roam`. Field
+  validation is `0pv`.

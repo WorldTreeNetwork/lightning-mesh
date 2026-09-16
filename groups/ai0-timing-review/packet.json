@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-ai0-timing-profile-review",
+  "node_id": "mjolnir-mesh-ai0.3",
+  "capability": "household-authority",
+  "change_id": "add-household-trust-contract",
+  "requester": {
+    "id": "grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-arch-review"
+    }
+  },
+  "role": "reader",
+  "goal": "Targeted timing/profile re-review of add-household-trust-contract after DECIDED v2 security profiles, together with the ai0.1.2 time-evidence pin. Author family of the profile amendment is Grok. You are the non-Claude reader. Do not reopen the accepted trust architecture (reviews/2026-09-15-advise-2.md). Do not review engine.rs.\n\nBLIND PASS: from proposal Why, living-specs/spec.md, the household-authority spec delta, and cited portal.rs only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md, tasks.md, steer.md, or time-evidence.md until that take is written.\n\nTHEN open design.md Delegated v1 timing policy and add-mesh-admin-capabilities/time-evidence.md. Judge whether the written policy plus the pin answer: per-profile stale maxima (Strict 15m / Standard 24h / Relaxed 7d); grant-class caps; epoch-bound no-expiry read-only diagnostics; fail-closed when freshness cannot be proven; issuer-revocation-under-partition tested per profile (extends F-D). Sol already consulted on the numbers (notes/2026-09-15-sol-grant-profiles-consult.md); this pass is whether the normative text and time-evidence pin actually encode that policy.\n\nWrite openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise-timing.md with ADVISE accept or send-back, READER and SPAWN. Send-back may add owed boxes on tasks.md. Do not implement. Do not fold. Do not flip the banner.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-household-trust-contract/proposal.md:8",
+      "invariant": "Why first. Authority must survive a hostile entry router. Membership is not administration."
+    },
+    {
+      "symbol": "openspec/specs/living-specs/spec.md",
+      "invariant": "A SHALL under changes/ is not runtime. This review is contract plus the time-evidence pin, not a built verifier."
+    },
+    {
+      "symbol": "openspec/changes/add-household-trust-contract/specs/household-authority/spec.md:3",
+      "invariant": "DECIDED v2 profiles, class caps, no unlimited mutation, Standard default."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/portal.rs:102",
+      "invariant": "Public captive/open path does not require an administrative identity."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A worker can implement profile timers, class caps, no-expiry diagnostics, and fail-closed freshness without guessing numbers or treating wall-clock as authority, and cannot issue unlimited mutating grants.",
+    "if_false": "A profile, cap, stale window, or fail-closed rule is missing, contradicts the pin, or lets a partitioned node act on stale mutating authority past the stated maximum."
+  },
+  "out_of_scope": [
+    {
+      "item": "Whole trust-architecture re-review (already accepted r2)",
+      "tracked_as": "openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise-2.md"
+    },
+    {
+      "item": "Authorization engine implementation",
+      "tracked_as": "mjolnir-mesh-ai0.1"
+    },
+    {
+      "item": "Owner-claim ceremony / per-device proof",
+      "tracked_as": "mjolnir-mesh-bf7.1"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-household-trust-contract/reviews/2026-09-15-advise-timing.md",
+      "openspec/changes/add-household-trust-contract/tasks.md"
+    ],
+    "do_not": [
+      "deploy",
+      "push",
+      "fold",
+      "implement product code",
+      "edit design.md",
+      "edit time-evidence.md",
+      "edit engine.rs",
+      "reopen the accepted trust architecture"
+    ]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only"
+}
