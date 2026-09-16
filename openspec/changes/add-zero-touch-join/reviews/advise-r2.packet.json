@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-zero-touch-join-advise-r2-fable",
+  "node_id": "add-zero-touch-join-advise-r2-fable",
+  "capability": "identity-peering",
+  "change_id": "add-zero-touch-join",
+  "goal": "Re-advise add-zero-touch-join after send-back amendments. You are Fable 5.1, other-family reader. Conductor/amender is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-zero-touch-join/reviews/2026-09-16-advise-r2.md (that exact name).\n\nr1 send-back is reviews/2026-09-16-advise.md. Amendments claimed:\nS1 subject-signed CRDT records + enrolled-forge scenario + coordinate stamper carve-out\nS2 per-identity babel (no fleet HMAC) + origin binding + enrolled-unowned-prefix scenario\nS3 live MESH_KEY empty is a fact; join doc SHALL say gate absent; no RF ingest\nN3 mesh_fwding=1 HWMP named as accepted DoS-only\n\nBLIND PASS first from Why + living specs + cited docs/code, then open design.md/tasks.md/spec delta and r1, compare.\n\nWhy (proposal, not design): factory node still needs a laptop and hand list peer; operator wants plug-and-wait find; iroh does not authenticate 802.11s/babel; product is discovery not trust.\n\nCited before design.md:\n- docs/network-coordination/identity-peering-requirements.md Gating open backhaul\n- docs/network-coordination/island-formation.md membership authorized set\n- crates/mjolnir-mesh/src/crdt/gossip.rs merge without subject signatures today\n- crates/mjolnir-mesh/src/crdt/leased_name.rs subject-signed pattern to generalize\n- openspec/changes/add-zero-touch-join/specs/identity-peering/spec.md AFTER the take\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** fable-5.1-arch-review\n> **SPAWN:** <this spawn dir>\nIf send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": ["Implement", "Fold", "Flip the banner"],
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-zero-touch-join/specs/identity-peering/spec.md",
+      "invariant": "CRDT merge verifies subject signature and grant; babel keys are per identity."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "r1 S1–S3 and N3 are answered in the delta/design without hop-allow-list or fleet HMAC satisfying the gates.",
+    "if_false": "Gate 2 can still be a hop allow-list, or gate 1 a shared babeld key, or MESH_KEY SHALL contradicts HEAD."
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-zero-touch-join/reviews/",
+      "openspec/changes/add-zero-touch-join/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-fable-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-fable-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

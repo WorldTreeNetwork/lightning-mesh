@@ -35,6 +35,20 @@ Cross-cutting trust boundary. Security-sensitive. Steer 2026-09-16.
   the announcer's authorized claims; default needs a gateway grant.
 - **Grant is per accepting node** (`membership-enrollment.md` local
   K / allow / block), not a mesh-wide instant.
+- **Releases and tombstones** are production mutations: subject-signed
+  over canonical bytes that include the lane key and HLC, same as
+  records. An enrolled member cannot drop another identity's claim.
+- **Babel prefix bind is router-id origin** (transit-safe). Jump nodes
+  re-announce. Enrolled-insider forgery of another member's router-id
+  is accepted residual until R5 revocation; this change does not owe
+  cryptographic route-origin proof.
+- **Migration.** Signed records land as new gossip enum variants; old
+  variants freeze. Persisted claim/addr books MUST load across the
+  schema change (not empty-on-unknown, which would renumber `pt9`
+  backhaul claims).
+- **Quarantine handshake addressing.** The joiner uses IPv6 link-local
+  (or an ungated ephemeral), not a claimed `10.254`, so the enrollment
+  lane does not collide with overlay derivation.
 
 ## Why not the operator's first instinct
 

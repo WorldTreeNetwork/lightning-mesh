@@ -96,8 +96,12 @@ neighbor session with freshness **and** to the announcer's node
 identity. Neighbor admission or session keys SHALL be per node
 identity: revoking one identity SHALL NOT require rekeying other
 nodes. A single fleet-wide babeld HMAC key SHALL NOT satisfy this
-requirement. Announced prefixes SHALL be prefixes the announcer is
-authorized to claim; `0.0.0.0/0` SHALL require a gateway grant.
+requirement. Prefix binding SHALL be on the update's router-id origin, not on
+the immediate neighbor (jump nodes MUST re-announce prefixes behind
+them). A router-id SHALL only originate prefixes it is authorized to
+claim; `0.0.0.0/0` SHALL require a gateway grant. An enrolled neighbor
+forging another member's router-id is residual, handled by revocation
+(R5), not by this requirement.
 Origin-id stamping without session freshness SHALL NOT satisfy this
 requirement.
 
@@ -113,22 +117,27 @@ requirement.
 - WHEN it is replayed after the session nonce or window has moved
 - THEN it is not applied
 
-#### Scenario: Enrolled neighbor cannot announce a prefix it does not own
+#### Scenario: Enrolled origin cannot announce a prefix it does not own
 
 - GIVEN node E is enrolled and has a session
 - AND E's authorized claim is `10.42.12.0/24`, not the default route
-- WHEN E announces `10.42.99.0/24` or `0.0.0.0/0`
+- WHEN E originates `10.42.99.0/24` or `0.0.0.0/0` under E's own router-id
 - THEN other nodes do not install that route
+- AND a jump node re-announcing V's authorized `10.42.12.0/24` with V's
+  router-id still installs
 
 ### Requirement: CRDT writes are identity-authorized
 
 Production CRDT records for subnet claims, address book, services, and
 name-lane writes SHALL carry an Ed25519 signature by the **subject**
 identity over the canonical record (the same shape as leased-name
-claims). Merge SHALL verify that signature **and** that the subject
-holds a grant for that lane. Checking only the delivering hop's grant
-SHALL NOT satisfy this requirement. HLC first-writer-wins SHALL apply
-only among identities that pass both checks.
+claims). Every production mutation, including release, tombstone, and
+unpublish, SHALL be subject-signed over canonical bytes that include
+the lane key and the HLC. Merge SHALL verify that signature **and**
+that the subject holds a grant for that lane. Checking only the
+delivering hop's grant SHALL NOT satisfy this requirement. HLC
+first-writer-wins SHALL apply only among identities that pass both
+checks.
 
 The coordinate lane is a named carve-out: the stamper may differ from
 the subject; the stamper SHALL sign and SHALL hold the stamp grant.
@@ -144,6 +153,13 @@ the subject; the stamper SHALL sign and SHALL hold the stamp grant.
 - GIVEN node E is enrolled and holds a claim-write grant for itself
 - WHEN E gossips a subnet claim or addr-book entry whose subject is node V
 - THEN members reject it (signature is not V's, or V did not grant E)
+
+#### Scenario: Enrolled member cannot release or tombstone another identity's claim
+
+- GIVEN node V holds an authorized, subject-signed claim for `10.42.12.0/24`
+- AND node E is enrolled
+- WHEN E gossips a `SubnetClaimRelease` (or tombstone / unpublish) for that lane
+- THEN members do not drop V's claim
 
 #### Scenario: Authorized claim still FWW among grantees
 

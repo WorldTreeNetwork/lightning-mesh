@@ -28,3 +28,8 @@ Not owed here (bullets, not boxes):
 - [x] S2 `661` spec: per-identity neighbor keys (no fleet HMAC); prefixes bound to authorized claims; default needs gateway grant; enrolled-unowned-prefix scenario (pinned 2026-09-16)
 - [x] S3 rewrite: live empty `MESH_KEY` is a fact, not owed; join doc SHALL say the gate is absent until the three gates land (pinned 2026-09-16)
 - [x] N3 design.md: `mesh_fwding=1` HWMP by quarantined stations named as accepted DoS-only (pinned 2026-09-16)
+
+## Owed from advise r2 2026-09-16 (fable-5.1-arch-review, send-back)
+
+- [x] S4 `fyby.3` spec: releases/tombstones/unpublishes subject-signed over lane key + HLC; enrolled cannot drop another's claim (pinned 2026-09-16 r2)
+- [x] S5 `661` spec: router-id origin bind (transit-safe); scenario is E originates under own id; design names enrolled-insider origin forgery as R5 residual (pinned 2026-09-16 r2)
