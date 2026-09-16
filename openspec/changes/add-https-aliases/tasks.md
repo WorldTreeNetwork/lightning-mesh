@@ -17,4 +17,7 @@ this change owes once activated.
 - [x] Advise send-back: reconcile `proposal.md` ownership of HTTPS resolution records and specify the versioned, canonical owner-signed AliasTable record plus conflict/removal behavior and verification vectors
 - [x] Advise send-back: distinguish label owner/node authorization keys from host-local TLS CSR keys, and make 80-bit label collisions fail closed end-to-end with negative vectors
 - [x] Advise send-back: pin the byte-exact issuance-authorization encoding, normalized identifiers, signature envelope/domain separation, and golden/malformed/wrong-CSR vectors
-- [ ] Re-advise after send-back amendments (same non-Claude family)
+- [x] Re-advise after send-back amendments (same non-Claude family)
+- [x] Re-advise r2 send-back: compact JSON (no whitespace, fixed key order, unescaped `/`, shortest-decimal integers) plus three-line envelope; golden-byte vectors owed at implementation
+- [x] Re-advise r2 send-back: per-label owner_pubkey collision set never GC; equal-seq different payloads fail closed
+- [ ] Re-advise after r2 send-back amendments (same non-Claude family)

@@ -61,24 +61,30 @@ Today's precedent is `MESH_DNS_SERVER_LINE = "/mesh/127.0.0.1#5335"` plus the
 This change owns the resolution record. `ai0.9` is admin-record integrity and
 may supply verify primitives; it does not own this type.
 
-Signed bytes: domain line `mjolnir-https-alias:v1\n` plus canonical JSON, keys
-in this order:
+Signed bytes: domain line `mjolnir-https-alias:v1\n` plus **compact JSON**
+(UTF-8, no whitespace, keys in this exact order, `/` unescaped, integers as
+shortest decimal with no exponent and no leading zeros except `0`, strings
+with only mandatory JSON escapes):
+
+`{"owner_pubkey":"<64hex>","fqdn":"<fqdn>","addr":"<dotted-ipv4>","seq":<uint>,"valid_from":<unix>,"valid_until":<unix>}`
+
+Ed25519 over those exact bytes. Transport envelope is three UTF-8 lines, LF,
+no extra spaces:
 
 ```
-owner_pubkey   64 lowercase hex Ed25519 (the authorization key, not the TLS key)
-fqdn           lowercase ASCII, no trailing dot
-addr           dotted IPv4 (AAAA later)
-seq            uint, monotonic per (owner_pubkey, fqdn)
-valid_from     unix seconds
-valid_until    unix seconds
+owner_pubkey=<64 lowercase hex>
+payload=<the compact JSON above, one line>
+sig=<128 lowercase hex>
 ```
 
-Ed25519 signature over those exact bytes, 128 lowercase hex, carried beside
-the payload. Consumers verify against `owner_pubkey` and check that the
-hostname label derives from that full key. Highest `seq` for one
-`(owner_pubkey, fqdn)` wins. A record with `valid_until` in the past is a
-tombstone (removal). If two **different** `owner_pubkey` values derive the
-same 16-character label, fail closed: answer neither, issue neither.
+Consumers verify `sig` over `mjolnir-https-alias:v1\n`+payload against
+`owner_pubkey`, and check the hostname label derives from that full key.
+Highest `seq` for one `(owner_pubkey, fqdn)` wins. Equal `seq` with different
+payloads: fail closed (serve neither). A record with `valid_until` in the past
+is a tombstone (stops answering that owner+fqdn) but the **owner_pubkey stays
+in the per-label collision set forever** (survives expiry, tombstone,
+compaction, and process restart). If a new key's 16-character label matches
+any retained owner_pubkey, fail closed: answer neither, issue neither.
 
 ## Issuance authorization
 
@@ -86,19 +92,25 @@ The host builds a CSR with a **host-local TLS key** (not the owner key). The
 owner key (the app owner, or the node identity key for `n-` names) signs
 canonical bytes:
 
-Domain line `mjolnir-https-issuance:v1\n` plus JSON keys in this order:
+Domain line `mjolnir-https-issuance:v1\n` plus **the same compact JSON rule**
+(UTF-8, no whitespace, keys in this order, `/` unescaped, integers shortest
+decimal):
+
+`{"fqdn":"<fqdn>","txt_digest":"<b64url>","acme_account":"<url>","csr_spki_sha256":"<64hex>","nonce":"<32hex>","expires_at":<unix>}`
+
+Transport envelope (three LF lines):
 
 ```
-fqdn              lowercase ASCII FQDN, no trailing dot
-txt_digest        unpadded base64url SHA-256 of the ACME key authorization
-acme_account      ACME account URL (RFC 8555), not a thumbprint
-csr_spki_sha256   64 lowercase hex SHA-256 of the CSR SubjectPublicKeyInfo DER
-nonce             32 lowercase hex characters (16 bytes)
-expires_at        decimal unix seconds, must be ≤ now+3600
+owner_pubkey=<64 lowercase hex>
+payload=<the compact JSON above, one line>
+sig=<128 lowercase hex>
 ```
 
-Ed25519 over those exact bytes; 128 lowercase hex signature. FQDN v1 is
-ASCII only (labels are already `a-z2-7`).
+`sig` is Ed25519 over `mjolnir-https-issuance:v1\n`+payload. FQDN v1 is ASCII
+only. Implementation tests SHALL include golden signed-byte vectors and
+malformed encodings (whitespace inserted, escaped solidus, leading-zero
+integers). The adapter's collision set is the same durable per-label
+owner_pubkey history as AliasTable.
 
 - **The DNS adapter** verifies all of the following before writing
   `_acme-challenge.<fqdn>` TXT:

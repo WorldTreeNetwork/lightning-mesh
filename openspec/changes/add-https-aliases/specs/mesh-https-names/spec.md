@@ -45,12 +45,17 @@ closed: serve neither name and write no challenge. `<zone>` SHALL default to
 Every node SHALL answer DNS for `<mesh-label>.<zone>` names from its local
 responder without internet access, using only `mjolnir-https-alias:v1` records
 whose owner signature it has verified against the full owner public key in the
-payload. This change owns that record type (`ai0.9` does not). The node SHALL
+payload. This change owns that record type (`ai0.9` does not). Signed bytes
+SHALL be `mjolnir-https-alias:v1\n` plus compact JSON (UTF-8, no whitespace,
+fixed key order, unescaped `/`, shortest-decimal integers). The node SHALL
 forward to its responder, and exempt from DNS rebind protection, only the
 suffix `<mesh-label>.<zone>`, never the parent zone. Names without a verified
 owner-signed record SHALL NOT resolve locally. For one owner and FQDN, the
-highest `seq` wins; a tombstone (highest seq, `valid_until` in the past) SHALL
-remove the name. Two different owner keys for the same label SHALL fail closed.
+highest `seq` wins; equal `seq` with different payloads SHALL fail closed. A
+tombstone (highest seq, `valid_until` in the past) SHALL stop answering that
+owner+fqdn. The full owner public key SHALL remain in a per-label collision
+set across expiry, tombstone, compaction and restart. Two different owner
+keys for the same 16-character label SHALL fail closed.
 
 #### Scenario: Internet unplugged
 
@@ -77,14 +82,15 @@ private key SHALL remain on the serving host and SHALL NOT be the owner
 authorization key. The DNS adapter SHALL publish a challenge record only for a
 `mjolnir-https-issuance:v1` authorization whose Ed25519 signature verifies
 against the full owner public key the label derives from. Signed bytes SHALL be
-the domain line `mjolnir-https-issuance:v1\n` plus canonical JSON with keys in
-this order: `fqdn` (lowercase ASCII, no trailing dot), `txt_digest` (unpadded
-base64url SHA-256 of the ACME key authorization), `acme_account` (ACME account
-URL), `csr_spki_sha256` (64 lowercase hex SHA-256 of the CSR SPKI DER),
-`nonce` (32 lowercase hex chars), `expires_at` (decimal unix seconds, ≤ now+3600).
+the domain line `mjolnir-https-issuance:v1\n` plus compact JSON (UTF-8, no
+whitespace, keys in this order, unescaped `/`, shortest-decimal integers):
+`fqdn`, `txt_digest`, `acme_account`, `csr_spki_sha256`, `nonce`,
+`expires_at`. The transport envelope SHALL be three LF lines:
+`owner_pubkey=<64hex>`, `payload=<compact JSON>`, `sig=<128hex>`.
 The adapter SHALL reject replayed nonces, expired authorizations, wrong-owner
-signatures, FQDNs whose label is not derived from the signing key, and CSRs
-whose SPKI hash is not `csr_spki_sha256`. The system SHALL NOT issue or
+signatures, FQDNs whose label is not derived from the signing key, CSRs
+whose SPKI hash is not `csr_spki_sha256`, and any owner key whose 16-character
+label collides with a retained key in the durable collision set. The system SHALL NOT issue or
 distribute wildcard keys or share a TLS private key between hosts.
 
 #### Scenario: Authorization for someone else's name
