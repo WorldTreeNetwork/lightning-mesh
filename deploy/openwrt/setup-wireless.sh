@@ -63,6 +63,15 @@ DISTANCE="${DISTANCE:-}"                  # metres to the farthest mesh peer; se
 FT_KEY="${FT_KEY:-}"                         # 256-bit hex string (64 hex chars), shared mesh-wide — the r0kh/r1kh key-holder push secret
 FT_MOBILITY_DOMAIN="${FT_MOBILITY_DOMAIN:-a1b2}" # 2-octet hex MDID, shared mesh-wide (must match on every node/band the client roams across)
 
+# z3th: this template has no station/uplink role. A live STA (m3000-b
+# `wireless.uplink` onto Symbio) would be destroyed by the generic projection.
+for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface/\1/p'); do
+	if [ "$(uci -q get wireless.$s.mode)" = sta ]; then
+		echo "FATAL: station uplink present (wireless.$s mode=sta). setup-wireless.sh cannot preserve it; refuse rather than clobber. (z3th)"
+		exit 1
+	fi
+done
+
 # Discover which radio is 2.4 vs 5 GHz by its 'band' option.
 radio_2g=""; radio_5g=""
 for r in $(uci show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-device/\1/p'); do
