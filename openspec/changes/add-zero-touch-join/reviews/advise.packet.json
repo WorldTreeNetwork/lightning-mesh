@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-zero-touch-join-advise-fable",
+  "node_id": "add-zero-touch-join-advise-fable",
+  "capability": "identity-peering",
+  "change_id": "add-zero-touch-join",
+  "goal": "Advise add-zero-touch-join. You are Fable 5.1, other-family reader. Conductor is Grok (authored the change this session). Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-zero-touch-join/reviews/2026-09-16-advise.md (that exact name).\n\nBLIND PASS first. From Why, living specs, and cited code/docs only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md or tasks.md until that take is written. Then open those files and the spec delta, compare, steelman against your take.\n\nWhy (from proposal.md, not the design):\nA factory Lightning Mesh router still needs a laptop and a hand-edited list peer on every box. The operator wants plug-in, wait, find nearby Lightning Mesh with no peer file. iroh already authenticates iroh traffic; it does not authenticate 802.11s or babel. Treating association as membership would let a stranger in RF range inject routes, poison claims, and reach overlay SSH. The product move is automatic discovery, not automatic trust.\nWhat: Name capability identity-peering. Association is not authority. Unknown identities quarantine. Signed capability beacon is a locator not a ticket. Enrollment offer plus met QR. Control plane waits on quarantine + authenticated babel neighbor/session/freshness + identity-authorized CRDT writes. Trusted-fleet installs get full peer sets from fleet-nodes.conf. RF neighbors never ingested into list peer. Untrusted/incompatible degrade to isolated L3/NAT without overlay management.\nBanner ACTIVE BUILD. Human said activate all 2026-09-16 after steer (all three recommended forks).\n\nCited (read before design.md):\n- docs/network-coordination/identity-peering-requirements.md — Gating open backhaul (661 + CRDT authz); R1–R6\n- docs/network-coordination/island-formation.md — membership is authorized set not RF fact\n- docs/join/node/03-join-the-mesh.md — no membership gate today; MESH_KEY if it matters\n- crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs peer set resolved from UCI list peer (~L914)\n- openspec/specs/ has no living identity-peering spec yet. Proposed SHALLs: openspec/changes/add-zero-touch-join/specs/identity-peering/spec.md — AFTER the take.\n\nPersist exactly:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** fable-5.1-arch-review\n> **SPAWN:** <this spawn dir>\nNotes in the body. If send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": [
+    "Implement join/quarantine/babel-auth",
+    "Fold",
+    "Flip the change banner",
+    "Auto-ingest 802.11s neighbors into list peer"
+  ],
+  "anchors": [
+    {
+      "symbol": "docs/network-coordination/identity-peering-requirements.md",
+      "invariant": "Open backhaul is acceptable only after authenticated babel and identity-authorized CRDT writes."
+    },
+    {
+      "symbol": "crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs",
+      "invariant": "Gossip bootstrap today is the UCI peer list, not RF membership."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Plug-and-wait finds a mesh without granting babel/CRDT/overlay SSH; inventory installs still get full fleet-nodes.conf peer sets.",
+    "if_false": "Association is treated as membership, or RF neighbors are provisioned into list peer, or iroh is claimed to authenticate babel."
+  },
+  "out_of_scope": [
+    {"item": "local-EVM transit", "tracked_as": "mjolnir-mesh-9u5y"},
+    {"item": "VXLAN islands", "tracked_as": "mjolnir-mesh-3kd"},
+    {"item": "user IdentiKey", "tracked_as": "mjolnir-mesh-rp9"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-zero-touch-join/reviews/",
+      "openspec/changes/add-zero-touch-join/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-fable-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-fable-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
