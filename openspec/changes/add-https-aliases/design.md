@@ -23,10 +23,12 @@ a-<app-key-label>.<mesh-label>.<zone>     app host (storage node, Pi, laptop)
 n-<node-key-label>.<mesh-label>.<zone>    router front desk (mjolnir-hello)
 ```
 
-- **`<app-key-label>`** is the base32 (lowercase, no padding) of the first N
-  bits of blake3 over the owner's Ed25519 public key. N is chosen at advise;
-  proposal: 80 bits, 16 chars. The same function with the node identity key
-  gives `<node-key-label>`.
+- **`<app-key-label>`** is RFC 4648 base32 (lowercase, no padding, alphabet
+  `a-z2-7`) of the first **80 bits** of blake3 over the owner's Ed25519 public
+  key: 16 characters. The same function with the node identity key gives
+  `<node-key-label>`. 80 bits is collision-resistant for household-scale keys
+  and short enough for a DNS label; a longer label does not buy a recycled
+  origin (owner change already mints a new one).
 - **Labels are key-bound.** An owner change means a new label, so browser
   storage, approvals and cookies never carry over.
 - **`<mesh-label>`** derives from the house identity in
@@ -100,15 +102,12 @@ expires_at=<unix secs, ≤ 1 h ahead>
 
 ## Router front desks
 
-mjolnir-hello is `tiny_http` today, with no TLS. Options for advise:
+mjolnir-hello is `tiny_http` today, with no TLS. **Pin 3:** `tiny_http` plus
+rustls (ring). Measure RAM, flash and handshake on one aarch64 fleet node
+before calling that slice done. A separate terminator is fallback only if
+that measurement fails the router budget.
 
-| Option | For | Against |
-|---|---|---|
-| `tiny_http` `ssl-rustls` feature with the ring provider | One binary, already rustls-capable (mini-app fetcher uses ring) | tiny_http TLS maturity; handshake cost on small routers |
-| Separate lightweight terminator (uhttpd-mod-ustream / nginx) in front of hello on :443 | Mature TLS | Another OpenWrt package, config reconcile, and a key file readable by it |
-
-Proposal: tiny_http plus rustls (ring), measured on the aarch64 routers. The
-certificate key lives in `/etc/mjolnir/` next to the node secret, is never
+The certificate key lives in `/etc/mjolnir/` next to the node secret, is never
 exported, and is added to sysupgrade keep. Walk-up `http://hello.mesh` on :80
 stays. Anycast is unchanged; each router's HTTPS front desk is its own origin.
 Shared browser-keystore roaming across routers is lost by design; the installed
@@ -125,11 +124,27 @@ signer is the portable identity.
 | Long offline expiry | Visible offline validity; renewal through any gateway; plain `.mesh` still works |
 | CT name leakage | Labels are opaque key hashes. The mesh label is still correlatable (accepted) |
 
-## Open questions for advise
+## Pins (activation 2026-09-15, decide-for-me)
 
-1. Label length (80 bits proposed) and the base32 alphabet.
-2. Is `ai0.9`'s signed-record scope enough for resolution records, or do we need
-   a sibling change first?
-3. `tiny_http` + rustls versus a separate terminator on routers (RAM, flash,
-   handshake latency).
-4. Who runs the default adapter, and its availability expectations.
+Closes the four advise questions. Steer 2026-09-15 already decided zone and
+HTTPS scope; these are the remaining implementation pins.
+
+1. **Label.** 80-bit blake3 prefix, RFC 4648 base32 lowercase no padding
+   (`a-z2-7`), 16 characters. Shared function, shared test vectors, used by
+   meshd, mjolnir-hello and hello-mesh-web.
+2. **Resolution records vs `ai0.9`.** `ai0.9` is admin-record integrity.
+   HTTPS alias **resolution** records (label → mesh address, owner-signed,
+   verified by every consumer) stay in **this** change, as the b6j steer
+   split it. Do not wait for a third sibling. AliasTable MUST refuse
+   unverified records. Issuance authorization is also this change.
+3. **Router TLS.** `tiny_http` with the `ssl-rustls` feature, rustls **ring**
+   provider (already in mjolnir-hello for the mini-app fetcher). Measure RAM,
+   flash and handshake on one aarch64 fleet node before calling the adapter
+   slice done. A separate terminator is the fallback only if that measurement
+   fails the router budget. Cert key in `/etc/mjolnir/`, sysupgrade-kept.
+4. **Default adapter operator.** World Tree Network runs the convenience
+   ACME DNS adapter for `mesh.worldtree.network` as **best-effort
+   infrastructure**, not a mesh availability dependency. A mesh with no
+   adapter (or a down adapter) still has `.mesh` HTTP and local AliasTable
+   resolution. Bring-your-own zone means your own adapter. The adapter holds
+   no mesh authority and no private keys.

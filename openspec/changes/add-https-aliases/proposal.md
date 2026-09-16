@@ -1,6 +1,6 @@
 # add-https-aliases
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-mesh-b6j.1` (epic `mjolnir-mesh-b6j`). Direction from steer
 2026-09-15 (Duke), recorded in
