@@ -11,10 +11,11 @@ postcard.workspace = true
 # JSON serialization for the read-only directory.json projection (bead avs) —
 # mjolnir-hello reads this file, so it needs a human/JS-friendly format rather
 # than the postcard binary encoding used for the daemon's own CRDT persistence.
-serde_json = { version = "1", optional = true }
+serde_json = "1"
 ipnet = { workspace = true }
 blake3.workspace = true
 thiserror.workspace = true
+ed25519-dalek = "=2.2.0"
 async-trait = "0.1"
 bytes.workspace = true
 tokio.workspace = true
@@ -44,7 +45,7 @@ tracing-subscriber = { workspace = true, optional = true }
 simple-dns = { version = "0.11", optional = true }
 
 [features]
-daemon = ["dep:iroh", "dep:iroh-mdns-address-lookup", "dep:iroh-gossip", "dep:futures-lite", "dep:clap", "dep:anyhow", "dep:data-encoding", "dep:rand", "dep:tracing-subscriber", "dep:serde_json", "dep:simple-dns"]
+daemon = ["dep:iroh", "dep:iroh-mdns-address-lookup", "dep:iroh-gossip", "dep:futures-lite", "dep:clap", "dep:anyhow", "dep:data-encoding", "dep:rand", "dep:tracing-subscriber", "dep:simple-dns"]
 
 # buw.1 spike: a minimal single-overlay-TUN node that stands a UDP socket in for
 # the iroh DatagramConn seam, so babel-over-overlay can be validated with real

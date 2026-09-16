@@ -848,10 +848,12 @@ async fn run_mesh(
     // (FR14) — first thing in `run_mesh` so dnsmasq's `.mesh` upstream
     // (`server=/mesh/127.0.0.1#5335`) is answerable the instant it's
     // configured, however early that reconcile step lands. `CompositeTable`
-    // (e21.1.2) stacks the well-known table ahead of the CRDT-projected v2
-    // service table (e21.1.3), which reads straight from `service_book_v2`.
+    // checks verified HTTPS aliases, then the well-known and CRDT-projected
+    // `.mesh` tables. The latter reads straight from `service_book_v2`.
+    let https_aliases = Arc::new(mjolnir_mesh::https_alias::AliasTable::default());
     let dns_table: Arc<dyn mjolnir_mesh::dns_responder::NameTable> =
         Arc::new(mjolnir_mesh::dns_responder::CompositeTable::new(vec![
+            https_aliases,
             Arc::new(mjolnir_mesh::dns_responder::WellKnownTable::new(
                 gateway_handle.clone(),
             )),
@@ -3191,7 +3193,10 @@ fn parse_if_inet6_link_local(body: &str, iface: &str) -> Option<Ipv6Addr> {
         let mut bytes = [0u8; 16];
         let mut ok = true;
         for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
-            match std::str::from_utf8(chunk).ok().and_then(|s| u8::from_str_radix(s, 16).ok()) {
+            match std::str::from_utf8(chunk)
+                .ok()
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+            {
                 Some(b) => bytes[i] = b,
                 None => {
                     ok = false;
@@ -6597,11 +6602,41 @@ async fn reconcile_dnsmasq_uci() {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
+    let mesh_label = Command::new("uci")
+        .args(["-q", "get", "mjolnir.https.mesh_label"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let https_zone = Command::new("uci")
+        .args(["-q", "get", "mjolnir.https.zone"])
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let https_config = match mjolnir_mesh::https_alias::https_dnsmasq_config(
+        mesh_label.as_deref(),
+        https_zone.as_deref(),
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            warn!(%error, "ignoring invalid mjolnir HTTPS DNS suffix");
+            None
+        }
+    };
+    let https_plan = mjolnir_mesh::https_alias::https_dnsmasq_plan(
+        &current_server_list,
+        &current_rebind_domains,
+        https_config.as_ref(),
+    );
     if dnsmasq_uci_is_current(
         &current_server_list,
         &current_dhcp_options,
         &current_rebind_domains,
-    ) {
+    ) && https_plan.is_empty()
+    {
         return;
     }
     info!(
@@ -6640,6 +6675,22 @@ async fn reconcile_dnsmasq_uci() {
     if !rebinds.contains(&MESH_REBIND_DOMAIN) {
         script.push_str(&format!(
             "uci add_list dhcp.@dnsmasq[0].rebind_domain='{MESH_REBIND_DOMAIN}'; "
+        ));
+    }
+    for entry in &https_plan.delete_servers {
+        script.push_str(&format!("uci del_list dhcp.@dnsmasq[0].server='{entry}'; "));
+    }
+    for entry in &https_plan.add_servers {
+        script.push_str(&format!("uci add_list dhcp.@dnsmasq[0].server='{entry}'; "));
+    }
+    for entry in &https_plan.delete_rebind_domains {
+        script.push_str(&format!(
+            "uci del_list dhcp.@dnsmasq[0].rebind_domain='{entry}'; "
+        ));
+    }
+    for entry in &https_plan.add_rebind_domains {
+        script.push_str(&format!(
+            "uci add_list dhcp.@dnsmasq[0].rebind_domain='{entry}'; "
         ));
     }
     script.push_str("uci commit dhcp && /etc/init.d/dnsmasq restart");
@@ -6759,23 +6810,27 @@ async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
     None
 }
 
-/// AP3000 connectivity LEDs (849.5). No-ops on SKUs without `amber:status`.
+/// Connectivity LEDs (849.5 AP3000, 849.6 M3000). No-ops on other SKUs.
 #[cfg(target_os = "linux")]
 async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
     use mjolnir_mesh::led::{
-        APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LED_AMBER, LED_BLUE, LED_PHY, LED_RED,
-        LedAction, LedFacts, classify, default_via_mesh, is_local_egress, mesh_has_estab,
-        mix_for_phase, parse_mesh_ifaces,
+        APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LED_AMBER, LED_BLUE, LED_M3000_RED,
+        LED_M3000_WHITE, LED_PHY, LED_RED, LedAction, LedFacts, LedSku, classify, default_via_mesh,
+        detect_sku, is_local_egress, mesh_has_estab, mix_ap3000, mix_for_phase, mix_m3000,
+        mix_red_white_for_phase, parse_mesh_ifaces,
     };
     use mjolnir_mesh::roam::parse_ap_ifaces;
     use std::path::Path;
     use std::time::{Instant, SystemTime};
 
     let led_root = Path::new("/sys/class/leds");
-    if !led_root.join(LED_AMBER).join("brightness").exists() {
+    let Some(sku) = detect_sku(|name| led_root.join(name).join("brightness").exists()) else {
         return;
+    };
+    match sku {
+        LedSku::Ap3000 => info!("led: AP3000 status lamps (849.5)"),
+        LedSku::M3000 => info!("led: M3000 status lamps (849.6)"),
     }
-    info!("led: AP3000 status lamps (849.5)");
     let set_trigger_none = |name: &str| {
         let _ = std::fs::write(led_root.join(name).join("trigger"), "none\n");
     };
@@ -6785,7 +6840,11 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
             if on { "1\n" } else { "0\n" },
         );
     };
-    for name in [LED_AMBER, LED_RED, LED_BLUE] {
+    let topology_lamps: &[&str] = match sku {
+        LedSku::Ap3000 => &[LED_AMBER, LED_RED, LED_BLUE],
+        LedSku::M3000 => &[LED_M3000_RED, LED_M3000_WHITE],
+    };
+    for name in topology_lamps {
         set_trigger_none(name);
     }
     for name in LED_PHY {
@@ -6850,10 +6909,9 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
                     break;
                 }
             }
-            let oper = std::fs::read_to_string(format!(
-                "/sys/class/net/{backhaul_iface}/operstate"
-            ))
-            .unwrap_or_default();
+            let oper =
+                std::fs::read_to_string(format!("/sys/class/net/{backhaul_iface}/operstate"))
+                    .unwrap_or_default();
             let routes = read_default_routes().await;
             let identify = std::fs::metadata(IDENTIFY_PATH)
                 .ok()
@@ -6875,19 +6933,30 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
         match classify(facts) {
             LedAction::Hold => {}
             LedAction::Drive(render) => {
-                for name in [LED_AMBER, LED_RED, LED_BLUE] {
+                for name in topology_lamps {
                     set_trigger_none(name);
                 }
                 let on = match render.flash_ms {
                     None => true,
-                    Some(ms) => {
-                        (started.elapsed().as_millis() as u64 / ms.max(50)) % 2 == 0
-                    }
+                    Some(ms) => (started.elapsed().as_millis() as u64 / ms.max(50)) % 2 == 0,
                 };
-                let mix = mix_for_phase(render, on);
-                set_bright(LED_AMBER, mix.amber);
-                set_bright(LED_RED, mix.red);
-                set_bright(LED_BLUE, mix.blue);
+                match sku {
+                    LedSku::Ap3000 => {
+                        let mix = mix_for_phase(mix_ap3000(render.tone), render.flash_ms, on);
+                        set_bright(LED_AMBER, mix.amber);
+                        set_bright(LED_RED, mix.red);
+                        set_bright(LED_BLUE, mix.blue);
+                    }
+                    LedSku::M3000 => {
+                        let mix = mix_red_white_for_phase(
+                            mix_m3000(render.tone),
+                            render.flash_ms,
+                            on,
+                        );
+                        set_bright(LED_M3000_RED, mix.red);
+                        set_bright(LED_M3000_WHITE, mix.white);
+                    }
+                }
             }
         }
     }
@@ -10779,7 +10848,10 @@ fe80000000000000000000000000a1b2 04 40 20 80    mjolnir0
         assert_eq!(mesh, "fe80::bb".parse::<Ipv6Addr>().unwrap());
         let tun = parse_if_inet6_link_local(body, "mjolnir0").unwrap();
         assert_eq!(tun, "fe80::a1b2".parse::<Ipv6Addr>().unwrap());
-        assert!(parse_if_inet6_link_local(body, "br-lan") != parse_if_inet6_link_local(body, "mjolnir0"));
+        assert!(
+            parse_if_inet6_link_local(body, "br-lan")
+                != parse_if_inet6_link_local(body, "mjolnir0")
+        );
         assert!(parse_if_inet6_link_local(body, "missing").is_none());
     }
 

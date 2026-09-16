@@ -31,6 +31,7 @@ mod dns_conformance_tests;
 #[cfg(feature = "daemon")]
 pub mod dns_responder;
 pub mod heal;
+pub mod https_alias;
 mod https_label;
 pub mod led;
 pub mod radio;
