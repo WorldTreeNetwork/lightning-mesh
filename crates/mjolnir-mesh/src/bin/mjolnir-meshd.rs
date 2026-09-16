@@ -406,6 +406,11 @@ async fn main() -> Result<()> {
             tokio::spawn(assign_ula_addr(iface.clone(), ula));
             tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip, ula));
         }
+        // LED loop does not wait on assign: overlay-sick is exactly "iface
+        // up, address missing" (849.5 / esz).
+        if let Command::Mesh { backhaul_iface, .. } = &cli.command {
+            tokio::spawn(led_status_loop(backhaul_iface.clone(), backhaul_ip));
+        }
     }
     // Pin the iroh socket to the derived backhaul address in LAN/mesh mode so
     // peers can dial us at a fully-derived address with no discovery lookup
@@ -6753,6 +6758,143 @@ async fn assign_backhaul_addr(iface: &str, addr: Ipv4Addr) -> Option<String> {
 async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
     None
 }
+
+/// AP3000 connectivity LEDs (849.5). No-ops on SKUs without `amber:status`.
+#[cfg(target_os = "linux")]
+async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
+    use mjolnir_mesh::led::{
+        APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LED_AMBER, LED_BLUE, LED_PHY, LED_RED,
+        LedAction, LedFacts, classify, default_via_mesh, is_local_egress, mesh_has_estab,
+        mix_for_phase, parse_mesh_ifaces,
+    };
+    use mjolnir_mesh::roam::parse_ap_ifaces;
+    use std::path::Path;
+    use std::time::{Instant, SystemTime};
+
+    let led_root = Path::new("/sys/class/leds");
+    if !led_root.join(LED_AMBER).join("brightness").exists() {
+        return;
+    }
+    info!("led: AP3000 status lamps (849.5)");
+    let set_trigger_none = |name: &str| {
+        let _ = std::fs::write(led_root.join(name).join("trigger"), "none\n");
+    };
+    let set_bright = |name: &str, on: bool| {
+        let _ = std::fs::write(
+            led_root.join(name).join("brightness"),
+            if on { "1\n" } else { "0\n" },
+        );
+    };
+    for name in [LED_AMBER, LED_RED, LED_BLUE] {
+        set_trigger_none(name);
+    }
+    for name in LED_PHY {
+        set_trigger_none(name);
+        set_bright(name, false);
+    }
+
+    let started = Instant::now();
+    let mut facts = LedFacts::default();
+    let mut last_collect = Instant::now()
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or_else(Instant::now);
+    let mut interval = tokio::time::interval(Duration::from_millis(200));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        if last_collect.elapsed() >= Duration::from_secs(1) {
+            last_collect = Instant::now();
+            let iface = backhaul_iface.clone();
+            let addr_show = tokio::task::spawn_blocking({
+                let iface = iface.clone();
+                move || {
+                    std::process::Command::new("ip")
+                        .args(["-4", "-o", "addr", "show", "dev", &iface])
+                        .output()
+                        .ok()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                        .unwrap_or_default()
+                }
+            })
+            .await
+            .unwrap_or_else(|_| String::new());
+            let iw = tokio::task::spawn_blocking(|| {
+                std::process::Command::new("iw")
+                    .args(["dev"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_else(|_| String::new());
+            let mesh_ifaces = parse_mesh_ifaces(&iw);
+            let mut estab = false;
+            for mesh in &mesh_ifaces {
+                let dump = tokio::task::spawn_blocking({
+                    let mesh = mesh.clone();
+                    move || {
+                        std::process::Command::new("iw")
+                            .args(["dev", &mesh, "station", "dump"])
+                            .output()
+                            .ok()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                            .unwrap_or_default()
+                    }
+                })
+                .await
+                .unwrap_or_else(|_| String::new());
+                if mesh_has_estab(&dump) {
+                    estab = true;
+                    break;
+                }
+            }
+            let oper = std::fs::read_to_string(format!(
+                "/sys/class/net/{backhaul_iface}/operstate"
+            ))
+            .unwrap_or_default();
+            let routes = read_default_routes().await;
+            let identify = std::fs::metadata(IDENTIFY_PATH)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| SystemTime::now().duration_since(t).ok())
+                .is_some_and(|d| d.as_secs() < IDENTIFY_FRESH_SECS);
+            facts = LedFacts {
+                identify,
+                apply_in_progress: Path::new(APPLY_LOCK).exists()
+                    || Path::new("/tmp/sysupgrade").exists(),
+                overlay_addr_present: mjolnir_mesh::heal::iface_has_ipv4(&addr_show, overlay),
+                mesh_estab: estab,
+                mesh_l2_up: oper.trim() == "up" || !mesh_ifaces.is_empty(),
+                local_egress: is_local_egress(&routes),
+                default_via_mesh: default_via_mesh(&routes),
+                radios_up: !parse_ap_ifaces(&iw).is_empty() || !mesh_ifaces.is_empty(),
+            };
+        }
+        match classify(facts) {
+            LedAction::Hold => {}
+            LedAction::Drive(render) => {
+                for name in [LED_AMBER, LED_RED, LED_BLUE] {
+                    set_trigger_none(name);
+                }
+                let on = match render.flash_ms {
+                    None => true,
+                    Some(ms) => {
+                        (started.elapsed().as_millis() as u64 / ms.max(50)) % 2 == 0
+                    }
+                };
+                let mix = mix_for_phase(render, on);
+                set_bright(LED_AMBER, mix.amber);
+                set_bright(LED_RED, mix.red);
+                set_bright(LED_BLUE, mix.blue);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn led_status_loop(_backhaul_iface: String, _overlay: Ipv4Addr) {}
 
 /// Keep the derived backhaul address present when netifd recreates or flushes
 /// the L2 device during a wifi reload. The interface name is stable across that
