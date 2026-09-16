@@ -1,0 +1,17 @@
+[
+	{
+		"name": "BLAKE3 empty input",
+		"owner_pubkey_hex": "",
+		"label": "v4jutopv7gq2nica"
+	},
+	{
+		"name": "RFC 8032 Ed25519 test vector 1 public key",
+		"owner_pubkey_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+		"label": "nqyqieti6rywbhdz"
+	},
+	{
+		"name": "sequential 32-byte key",
+		"owner_pubkey_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+		"label": "4uuosv4yan67iecu"
+	}
+]

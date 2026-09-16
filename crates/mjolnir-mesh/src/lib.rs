@@ -31,6 +31,7 @@ mod dns_conformance_tests;
 #[cfg(feature = "daemon")]
 pub mod dns_responder;
 pub mod heal;
+mod https_label;
 pub mod led;
 pub mod radio;
 pub mod roam;
@@ -69,4 +70,5 @@ pub use crdt::{
     sync::{GossipError, GossipSync, GossipTransport},
     users::{UserBook, UserEntry},
 };
+pub use https_label::https_label;
 pub use roster::{PeerEntry, PeerRoster, RosterError};

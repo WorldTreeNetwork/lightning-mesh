@@ -7,7 +7,7 @@ this change owes once activated.
 - [x] Advise by an independent non-Claude reader (Sol, Astra-6 or Grok); accept before act
   - r1 send-back, r2 send-back, r3 **accept** (`reviews/2026-09-15-advise-r3.md`, READER sol-arch-review)
 - [x] Resolve advise open questions: 80-bit RFC 4648 base32; resolution records in this change (not ai0.9); tiny_http+rustls/ring measured on aarch64; WTN best-effort adapter for the project zone (`design.md` Pins)
-- [ ] Label function shared by meshd, mjolnir-hello and hello-mesh-web, with test vectors
+- [x] Label function shared by meshd, mjolnir-hello and hello-mesh-web, with test vectors
 - [ ] meshd: forward and rebind-exempt only `<mesh-label>.<zone>`; `AliasTable` answering from verified owner-signed records; negative tests (forged record, parent zone)
 - [ ] Issuance authorization format (`mjolnir-https-issuance:v1`), signer side and verifier side, with replay, expiry and wrong-key vectors
 - [ ] DNS adapter (replaceable; runs for `mesh.worldtree.network` and for bring-your-own zones)
