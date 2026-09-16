@@ -270,6 +270,79 @@ pub fn islands(
     out
 }
 
+/// Island-member addresses sit in `.2`..=`.99`. DHCP for phones starts at
+/// `.100` (OpenWrt `dhcp.lan.start`). The claim owner is always `.1`.
+pub const ISLAND_HOST_MIN: u32 = 2;
+pub const ISLAND_HOST_MAX: u32 = 99;
+
+/// One client-subnet claim, stripped to what [`join_island`] needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IslandClaim<'a> {
+    pub owner_id: &'a str,
+    pub subnet: Ipv4Net,
+    /// Smaller is older. Caller maps HLC to a monotonic integer.
+    pub claimed_at: u64,
+}
+
+/// How this node should sit on a household client island.
+///
+/// Same function on every node — no `ROLE=core`. The claim owner (first
+/// writer) vends DHCP and holds `.1`; everyone else is a unique host in the
+/// same `/24` and still runs meshd. `stitch_l2` means put the 802.11s
+/// mesh-point in the client bridge so roam is one broadcast domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IslandJoin {
+    pub subnet: Ipv4Net,
+    pub owner_id: String,
+    pub local_addr: Ipv4Addr,
+    pub run_dhcp: bool,
+    pub stitch_l2: bool,
+}
+
+/// Pick the island `/24` (oldest client claim) and this node's address on it.
+///
+/// Empty input → `None` (caller claims a unique `/24` as today). One claim
+/// we own, no peers → stay the unique-`/24` node, do not stitch. Two or more
+/// owners, or a single foreign claim → join the winner and stitch L2.
+pub fn join_island(self_id: &str, claims: &[IslandClaim<'_>]) -> Option<IslandJoin> {
+    let winner = claims
+        .iter()
+        .min_by(|a, b| a.claimed_at.cmp(&b.claimed_at).then(a.owner_id.cmp(b.owner_id)))?;
+    let owners: BTreeSet<&str> = claims.iter().map(|c| c.owner_id).collect();
+    let stitch_l2 = owners.len() >= 2 || winner.owner_id != self_id;
+    let run_dhcp = winner.owner_id == self_id;
+    let local_addr = island_member_addr(winner.subnet, self_id, winner.owner_id);
+    Some(IslandJoin {
+        subnet: winner.subnet,
+        owner_id: winner.owner_id.to_string(),
+        local_addr,
+        run_dhcp,
+        stitch_l2,
+    })
+}
+
+/// Address this node holds on `subnet`. Owner is `.1`; others hash into
+/// [`ISLAND_HOST_MIN`]..=[`ISLAND_HOST_MAX`].
+pub fn island_member_addr(subnet: Ipv4Net, node_id: &str, owner_id: &str) -> Ipv4Addr {
+    let base = u32::from(subnet.network());
+    let gateway = Ipv4Addr::from(base + 1);
+    if node_id == owner_id {
+        return gateway;
+    }
+    let hash = blake3::hash(node_id.as_bytes());
+    let bytes = hash.as_bytes();
+    let span = ISLAND_HOST_MAX - ISLAND_HOST_MIN + 1;
+    let mut off = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % span;
+    for _ in 0..span {
+        let addr = Ipv4Addr::from(base + ISLAND_HOST_MIN + off);
+        if addr != gateway {
+            return addr;
+        }
+        off = (off + 1) % span;
+    }
+    Ipv4Addr::from(base + ISLAND_HOST_MIN)
+}
+
 #[cfg(test)]
 mod island_tests {
     use super::*;
@@ -354,6 +427,87 @@ mod island_tests {
     #[test]
     fn empty_fleet_has_no_islands() {
         assert!(islands(&[], &[], IslandConfig::default()).is_empty());
+    }
+
+    fn net(s: &str) -> Ipv4Net {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn lone_owner_keeps_unique_slash24_and_does_not_stitch() {
+        let claims = [IslandClaim {
+            owner_id: "wr3000s-a",
+            subnet: net("10.42.242.0/24"),
+            claimed_at: 1,
+        }];
+        let got = join_island("wr3000s-a", &claims).unwrap();
+        assert_eq!(got.local_addr, "10.42.242.1".parse::<Ipv4Addr>().unwrap());
+        assert!(got.run_dhcp);
+        assert!(!got.stitch_l2, "a single node is not an island yet");
+    }
+
+    #[test]
+    fn two_owners_join_the_oldest_claim_and_stitch() {
+        let claims = [
+            IslandClaim {
+                owner_id: "indoor-c",
+                subnet: net("10.42.203.0/24"),
+                claimed_at: 200,
+            },
+            IslandClaim {
+                owner_id: "wr3000s-a",
+                subnet: net("10.42.242.0/24"),
+                claimed_at: 100,
+            },
+        ];
+        let core = join_island("wr3000s-a", &claims).unwrap();
+        assert_eq!(core.subnet, net("10.42.242.0/24"));
+        assert_eq!(core.local_addr, "10.42.242.1".parse::<Ipv4Addr>().unwrap());
+        assert!(core.run_dhcp);
+        assert!(core.stitch_l2);
+
+        let leaf = join_island("indoor-c", &claims).unwrap();
+        assert_eq!(leaf.subnet, net("10.42.242.0/24"));
+        assert_eq!(leaf.owner_id, "wr3000s-a");
+        assert!(!leaf.run_dhcp, "only the claim owner vends DHCP");
+        assert!(leaf.stitch_l2);
+        assert_ne!(leaf.local_addr, core.local_addr);
+        let host = u32::from(leaf.local_addr) & 0xff;
+        assert!(
+            (ISLAND_HOST_MIN..=ISLAND_HOST_MAX).contains(&host),
+            "member host {host} outside .2-.99"
+        );
+    }
+
+    #[test]
+    fn newcomer_with_no_own_claim_joins_foreign_and_stitches() {
+        let claims = [IslandClaim {
+            owner_id: "wr3000s-a",
+            subnet: net("10.42.242.0/24"),
+            claimed_at: 1,
+        }];
+        let got = join_island("indoor-b", &claims).unwrap();
+        assert!(got.stitch_l2);
+        assert!(!got.run_dhcp);
+        assert_eq!(got.local_addr, island_member_addr(got.subnet, "indoor-b", "wr3000s-a"));
+    }
+
+    #[test]
+    fn island_member_addr_is_stable_and_not_gateway() {
+        let subnet = net("10.42.242.0/24");
+        let a = island_member_addr(subnet, "indoor-c", "wr3000s-a");
+        let b = island_member_addr(subnet, "indoor-c", "wr3000s-a");
+        assert_eq!(a, b);
+        assert_ne!(a, "10.42.242.1".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(
+            island_member_addr(subnet, "wr3000s-a", "wr3000s-a"),
+            "10.42.242.1".parse::<Ipv4Addr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn empty_claims_mean_pick_a_unique_slash24() {
+        assert!(join_island("me", &[]).is_none());
     }
 }
 
