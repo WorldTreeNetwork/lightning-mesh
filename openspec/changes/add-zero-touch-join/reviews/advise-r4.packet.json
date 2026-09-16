@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-zero-touch-join-advise-r4-fable",
+  "node_id": "add-zero-touch-join-advise-r4-fable",
+  "capability": "identity-peering",
+  "change_id": "add-zero-touch-join",
+  "goal": "Re-advise add-zero-touch-join after r3 S6 amendment. You are Fable 5.1, other-family reader. Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-zero-touch-join/reviews/2026-09-16-advise-r4.md (that exact name).\n\nr3 S6 claimed answered as option (a): mobility host /32s (sz9 proto 158) originated by an enrolled visited node still install; scenario present; enrolled-insider /32 hijack is R5 residual; no signed mobility lane. Also design: versioned domain-tagged canonical bytes; frozen variants decode-and-drop; leased_name is wire precedent not merge-time verify at HEAD.\n\nBLIND PASS then open design/tasks/spec and r1–r3.\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** fable-5.1-arch-review\n> **SPAWN:** <this spawn dir>\nIf send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": ["Implement", "Fold", "Flip the banner"],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "S6 sz9 carve-out is in the delta; origin binding does not blackhole roam.",
+    "if_false": "661 still drops visited-node proto 158 /32s."
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-zero-touch-join/reviews/",
+      "openspec/changes/add-zero-touch-join/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-fable-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-fable-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

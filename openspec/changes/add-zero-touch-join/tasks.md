@@ -4,7 +4,7 @@ Authoritative owed work is epic `mjolnir-mesh-fyby` and children.
 These boxes mirror what this change owes once activated.
 
 - [x] Human activation (banner to ACTIVE BUILD) — Duke said "activate all" 2026-09-16
-- [ ] Advise by an independent non-Grok reader (Fable 5.1); accept before act
+- [x] Advise by an independent non-Grok reader (Fable 5.1); accept before act — r1–r3 send-back, r4 **accept** (`reviews/2026-09-16-advise-r4.md`, READER fable-5.1-arch-review)
 - [ ] `m4a`: `install-node.sh` / `update-fleet.sh` render full peer sets from `fleet-nodes.conf` onto the target; never from `iw station dump`
 - [ ] `e5u`: signed capability beacon (protocol generation, node id, channel plan, bootstrap); nonce-bound iroh handshake; replay of a captured beacon does not authorize
 - [ ] `fyby.2`: unknown id after association has no babel adjacency, no production CRDT writes, no subnet claim merge, no overlay SSH
