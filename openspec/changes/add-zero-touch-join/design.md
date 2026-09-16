@@ -22,13 +22,28 @@ Cross-cutting trust boundary. Security-sensitive. Steer 2026-09-16.
   L3/NAT. That path must not expose `10.254` SSH or unrestricted relay.
 - **Residual RF risk** (DoS, airtime theft, traffic analysis, parser
   surface) is a named product choice, not "solved by iroh".
+  **HWMP:** `mesh_fwding=1` makes an associated station an L2 forwarder
+  for the segment. A quarantined stranger can relay or black-hole
+  frames. That is accepted **DoS-only** exposure: iroh stays E2E and
+  babel is authenticated per identity after `661`.
+- **CRDT authz is subject signatures**, not a hop allow-list. iroh
+  authenticates the delivering neighbor; gossip is epidemic. Merge
+  verifies Ed25519 by the record subject plus lane grant (`leased_name`
+  already does this). Coordinate-lane stamper signs and holds stamp grant.
+- **Babel keys are per node identity**, not one fleet HMAC (RFC 8967
+  shared key would recreate SAE insider-complete). Prefixes bind to
+  the announcer's authorized claims; default needs a gateway grant.
+- **Grant is per accepting node** (`membership-enrollment.md` local
+  K / allow / block), not a mesh-wide instant.
 
 ## Why not the operator's first instinct
 
-iroh authenticates the gossip/tunnel ALPN. babel hellos, 802.11s
-payloads, and dropbear on the mesh/LAN zone do not ride that ALPN.
-Sol (2026-09-15, caution): origin-only babel validation still leaves
-replay, forged withdrawal, metric games, and exhaustion.
+iroh authenticates the gossip/tunnel **hop**, not the record **author**.
+babel hellos, 802.11s payloads, and dropbear on the mesh/LAN zone do
+not ride that ALPN. Sol (2026-09-15, caution): origin-only babel
+validation still leaves replay, forged withdrawal, metric games, and
+exhaustion. Fable (2026-09-16, send-back): hop allow-list and
+fleet-wide babel HMAC are both insufficient.
 
 ## Slice order (act, after advise)
 

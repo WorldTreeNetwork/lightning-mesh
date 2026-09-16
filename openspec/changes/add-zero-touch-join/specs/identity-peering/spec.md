@@ -73,7 +73,8 @@ A compatible untrusted node SHALL receive an enrollment offer on the
 quarantine lane. An operator SHALL still be able to enroll by scanning
 the new node's QR on an existing member (`met`). Threshold
 countersignatures and revocation SHALL apply to both paths. Completing
-the offer or QR SHALL NOT skip K-of-N or revocation.
+the offer or QR SHALL NOT skip K-of-N or revocation. Acceptance is each
+device's local policy, not a mesh-wide instant.
 
 #### Scenario: Beacon offer
 
@@ -91,9 +92,14 @@ the offer or QR SHALL NOT skip K-of-N or revocation.
 ### Requirement: Babel neighbor sessions are authenticated
 
 Babel updates used for mesh routing SHALL be bound to an authenticated
-neighbor session with freshness. The system SHALL reject a default
-route, prefix, or withdrawal that is not from that session. Origin-id
-stamping without session freshness SHALL NOT satisfy this requirement.
+neighbor session with freshness **and** to the announcer's node
+identity. Neighbor admission or session keys SHALL be per node
+identity: revoking one identity SHALL NOT require rekeying other
+nodes. A single fleet-wide babeld HMAC key SHALL NOT satisfy this
+requirement. Announced prefixes SHALL be prefixes the announcer is
+authorized to claim; `0.0.0.0/0` SHALL require a gateway grant.
+Origin-id stamping without session freshness SHALL NOT satisfy this
+requirement.
 
 #### Scenario: Stranger cannot steal the default
 
@@ -107,12 +113,25 @@ stamping without session freshness SHALL NOT satisfy this requirement.
 - WHEN it is replayed after the session nonce or window has moved
 - THEN it is not applied
 
+#### Scenario: Enrolled neighbor cannot announce a prefix it does not own
+
+- GIVEN node E is enrolled and has a session
+- AND E's authorized claim is `10.42.12.0/24`, not the default route
+- WHEN E announces `10.42.99.0/24` or `0.0.0.0/0`
+- THEN other nodes do not install that route
+
 ### Requirement: CRDT writes are identity-authorized
 
-Production CRDT merges for subnet claims, address book, services, and
-name-lane writes SHALL accept only writers whose identity holds a
-grant for that lane. HLC first-writer-wins SHALL NOT admit an
-unauthorized identity.
+Production CRDT records for subnet claims, address book, services, and
+name-lane writes SHALL carry an Ed25519 signature by the **subject**
+identity over the canonical record (the same shape as leased-name
+claims). Merge SHALL verify that signature **and** that the subject
+holds a grant for that lane. Checking only the delivering hop's grant
+SHALL NOT satisfy this requirement. HLC first-writer-wins SHALL apply
+only among identities that pass both checks.
+
+The coordinate lane is a named carve-out: the stamper may differ from
+the subject; the stamper SHALL sign and SHALL hold the stamp grant.
 
 #### Scenario: Unauthorized claim is ignored
 
@@ -120,9 +139,15 @@ unauthorized identity.
 - WHEN S gossips a subnet claim for a `10.42.0.0/16` slice
 - THEN members do not install or persist that claim
 
+#### Scenario: Enrolled member cannot forge another identity's record
+
+- GIVEN node E is enrolled and holds a claim-write grant for itself
+- WHEN E gossips a subnet claim or addr-book entry whose subject is node V
+- THEN members reject it (signature is not V's, or V did not grant E)
+
 #### Scenario: Authorized claim still FWW among grantees
 
-- GIVEN two identities both hold claim-write grants
+- GIVEN two identities both hold claim-write grants and sign their own records
 - WHEN they conflict on a prefix
 - THEN existing HLC first-writer-wins among those identities still applies
 
@@ -132,15 +157,19 @@ The system SHALL treat an open (unencrypted, join-anyone) 802.11s
 backhaul as a hostile underlay. It SHALL NOT carry trusted babel,
 production CRDT, or overlay management until quarantine, authenticated
 babel sessions, and identity-authorized CRDT writes are all in effect.
-Until then, trusted-fleet operation SHALL use inventory bootstrap
-and/or a shared mesh key rather than RF association as the trust
-boundary.
+Until those gates exist, association SHALL NOT be documented or
+implemented as membership. The live fleet's empty `MESH_KEY` is a
+current fact; this change does not owe flipping it. `docs/join/node/03-join-the-mesh.md`
+SHALL state that the membership gate is absent until the three gates
+land. Trusted-fleet gossip bootstrap remains inventory `list peer`
+(`m4a`), not RF association.
 
-#### Scenario: Today-shaped fleet stays honest
+#### Scenario: Association is not a control-plane peer
 
 - GIVEN the three gates are not all in effect
 - WHEN a new node associates on open `mjolnir-mesh`
-- THEN it does not become a control-plane peer by that association alone
+- THEN operators are not told it has joined the control plane
+- AND this change does not add RF neighbors to `list peer`
 
 ### Requirement: Trusted-fleet bootstrap uses inventory peer sets
 
