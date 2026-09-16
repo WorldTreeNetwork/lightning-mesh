@@ -3,10 +3,11 @@
 // Lightning Mesh is dual-licensed (AGPL-3.0-or-later or commercial); see LICENSE
 // and COMMERCIAL-LICENSE.md at the repository root.
 
-//! AP3000 connectivity LED language (mjolnir-mesh-849.5).
+//! Connectivity LED language (mjolnir-mesh-849.5 AP3000, 849.6 M3000).
 //!
-//! Pure classifier: facts in, mix out. The daemon writes sysfs. Other SKUs
-//! have different LED names — the writer no-ops when `amber:status` is absent.
+//! Pure classifier: facts in, tone out. The daemon maps tone onto SKU lamps
+//! and writes sysfs. Probe `amber:status` first (AP3000); else M3000
+//! `red:wan-online` + `white:wan-online`. Other SKUs no-op.
 
 use crate::crdt::egress::{DefaultRoute, EXCLUDED_EGRESS_IFACES, classify_egress};
 
@@ -15,6 +16,10 @@ pub const LED_AMBER: &str = "amber:status";
 pub const LED_RED: &str = "red:wlan-2ghz";
 pub const LED_BLUE: &str = "blue:wlan-5ghz";
 pub const LED_PHY: &[&str] = &["mt76-phy0", "mt76-phy1"];
+
+/// Cudy M3000 front bicolor. Do not write `green:wan` / `green:lan` (port lamps).
+pub const LED_M3000_RED: &str = "red:wan-online";
+pub const LED_M3000_WHITE: &str = "white:wan-online";
 
 /// Admin identify pulse: touch this file; meshd blinks while mtime is fresh.
 pub const IDENTIFY_PATH: &str = "/tmp/mjolnir-identify";
@@ -25,7 +30,24 @@ pub const IDENTIFY_FLASH_MS: u64 = 200;
 pub const OVERLAY_SICK_FLASH_MS: u64 = 500;
 pub const IDENTIFY_FRESH_SECS: u64 = 15;
 
-/// Which lamps are on. Solid blue is not a topology color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedSku {
+    Ap3000,
+    M3000,
+}
+
+/// Highest-wins topology. SKU maps this onto lamps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedTone {
+    Off,
+    Alone,
+    MeshNoNet,
+    ViaMesh,
+    Egress,
+    OverlaySick,
+}
+
+/// AP3000 lamps. Solid blue is not a topology color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedMix {
     pub amber: bool,
@@ -69,9 +91,36 @@ impl LedMix {
     };
 }
 
+/// M3000 front red/white. Via-mesh and local egress are both white.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RedWhiteMix {
+    pub red: bool,
+    pub white: bool,
+}
+
+impl RedWhiteMix {
+    pub const OFF: Self = Self {
+        red: false,
+        white: false,
+    };
+    pub const ALONE: Self = Self {
+        red: true,
+        white: false,
+    };
+    /// Mesh, no internet (pink).
+    pub const MESH_NO_NET: Self = Self {
+        red: true,
+        white: true,
+    };
+    pub const INTERNET: Self = Self {
+        red: false,
+        white: true,
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LedRender {
-    pub mix: LedMix,
+    pub tone: LedTone,
     /// `None` = solid. Identify 200ms, overlay-sick 500ms.
     pub flash_ms: Option<u64>,
 }
@@ -97,51 +146,92 @@ pub struct LedFacts {
     pub radios_up: bool,
 }
 
-/// Highest-wins ladder from 849.5.
+/// `brightness` exists under `/sys/class/leds/<name>/`. AP3000 wins if both match.
+pub fn detect_sku(brightness_exists: impl Fn(&str) -> bool) -> Option<LedSku> {
+    if brightness_exists(LED_AMBER) {
+        Some(LedSku::Ap3000)
+    } else if brightness_exists(LED_M3000_RED) && brightness_exists(LED_M3000_WHITE) {
+        Some(LedSku::M3000)
+    } else {
+        None
+    }
+}
+
+/// Highest-wins ladder from 849.5 (SKU-agnostic tone).
 pub fn classify(f: LedFacts) -> LedAction {
     if f.apply_in_progress {
         return LedAction::Hold;
     }
-    let base = classify_topology(f);
+    let (tone, flash_ms) = classify_tone(f);
     if f.identify {
         return LedAction::Drive(LedRender {
-            mix: match base {
-                LedAction::Drive(r) => r.mix,
-                LedAction::Hold => LedMix::OFF,
-            },
+            tone,
             flash_ms: Some(IDENTIFY_FLASH_MS),
         });
     }
-    base
+    LedAction::Drive(LedRender { tone, flash_ms })
 }
 
-fn classify_topology(f: LedFacts) -> LedAction {
-    let drive = |mix: LedMix, flash_ms: Option<u64>| {
-        LedAction::Drive(LedRender { mix, flash_ms })
-    };
+fn classify_tone(f: LedFacts) -> (LedTone, Option<u64>) {
     if !f.overlay_addr_present && (f.mesh_estab || f.mesh_l2_up) {
-        return drive(LedMix::OVERLAY_SICK, Some(OVERLAY_SICK_FLASH_MS));
+        return (LedTone::OverlaySick, Some(OVERLAY_SICK_FLASH_MS));
     }
     if f.local_egress {
-        return drive(LedMix::EGRESS, None);
+        return (LedTone::Egress, None);
     }
     if f.default_via_mesh {
-        return drive(LedMix::VIA_MESH, None);
+        return (LedTone::ViaMesh, None);
     }
     if f.mesh_estab {
-        return drive(LedMix::MESH_NO_NET, None);
+        return (LedTone::MeshNoNet, None);
     }
     if f.radios_up {
-        return drive(LedMix::ALONE, None);
+        return (LedTone::Alone, None);
     }
-    drive(LedMix::OFF, None)
+    (LedTone::Off, None)
+}
+
+pub fn mix_ap3000(tone: LedTone) -> LedMix {
+    match tone {
+        LedTone::Off => LedMix::OFF,
+        LedTone::Alone | LedTone::OverlaySick => LedMix::ALONE,
+        LedTone::MeshNoNet => LedMix::MESH_NO_NET,
+        LedTone::ViaMesh => LedMix::VIA_MESH,
+        LedTone::Egress => LedMix::EGRESS,
+    }
+}
+
+pub fn mix_m3000(tone: LedTone) -> RedWhiteMix {
+    match tone {
+        LedTone::Off => RedWhiteMix::OFF,
+        LedTone::Alone | LedTone::OverlaySick => RedWhiteMix::ALONE,
+        LedTone::MeshNoNet => RedWhiteMix::MESH_NO_NET,
+        LedTone::ViaMesh | LedTone::Egress => RedWhiteMix::INTERNET,
+    }
+}
+
+/// Brightness for one flash phase. `on` is the first half of the period.
+pub fn mix_for_phase(mix: LedMix, flash_ms: Option<u64>, on: bool) -> LedMix {
+    if flash_ms.is_some() && !on {
+        LedMix::OFF
+    } else {
+        mix
+    }
+}
+
+pub fn mix_red_white_for_phase(mix: RedWhiteMix, flash_ms: Option<u64>, on: bool) -> RedWhiteMix {
+    if flash_ms.is_some() && !on {
+        RedWhiteMix::OFF
+    } else {
+        mix
+    }
 }
 
 /// Babel-learned or backhaul-dev default — satellite internet, not local WAN.
 pub fn default_via_mesh(routes: &[DefaultRoute]) -> bool {
-    routes.iter().any(|r| {
-        r.proto_babel || EXCLUDED_EGRESS_IFACES.contains(&r.oif.as_str())
-    })
+    routes
+        .iter()
+        .any(|r| r.proto_babel || EXCLUDED_EGRESS_IFACES.contains(&r.oif.as_str()))
 }
 
 pub fn is_local_egress(routes: &[DefaultRoute]) -> bool {
@@ -176,15 +266,6 @@ pub fn mesh_has_estab(station_dump: &str) -> bool {
     })
 }
 
-/// Brightness for one flash phase. `on` is the first half of the period.
-pub fn mix_for_phase(render: LedRender, on: bool) -> LedMix {
-    match render.flash_ms {
-        None => render.mix,
-        Some(_) if on => render.mix,
-        Some(_) => LedMix::OFF,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +282,14 @@ mod tests {
 
     fn mix(f: LedFacts) -> LedMix {
         match classify(f) {
-            LedAction::Drive(r) => r.mix,
+            LedAction::Drive(r) => mix_ap3000(r.tone),
+            LedAction::Hold => panic!("hold"),
+        }
+    }
+
+    fn tone(f: LedFacts) -> LedTone {
+        match classify(f) {
+            LedAction::Drive(r) => r.tone,
             LedAction::Hold => panic!("hold"),
         }
     }
@@ -224,8 +312,10 @@ mod tests {
         });
         match classify(f) {
             LedAction::Drive(r) => {
-                assert_eq!(r.mix, LedMix::OVERLAY_SICK);
+                assert_eq!(r.tone, LedTone::OverlaySick);
                 assert_eq!(r.flash_ms, Some(OVERLAY_SICK_FLASH_MS));
+                assert_eq!(mix_ap3000(r.tone), LedMix::OVERLAY_SICK);
+                assert_eq!(mix_m3000(r.tone), RedWhiteMix::ALONE);
             }
             other => panic!("{other:?}"),
         }
@@ -258,10 +348,7 @@ mod tests {
 
     #[test]
     fn mesh_no_internet_is_amber_red() {
-        assert_eq!(
-            mix(facts(|f| f.mesh_estab = true)),
-            LedMix::MESH_NO_NET
-        );
+        assert_eq!(mix(facts(|f| f.mesh_estab = true)), LedMix::MESH_NO_NET);
         assert!(!LedMix::MESH_NO_NET.blue);
     }
 
@@ -271,16 +358,14 @@ mod tests {
             LedAction::Drive(r) => r,
             LedAction::Hold => panic!(),
         };
-        assert_eq!(r.mix, LedMix::ALONE);
+        assert_eq!(r.tone, LedTone::Alone);
+        assert_eq!(mix_ap3000(r.tone), LedMix::ALONE);
         assert_eq!(r.flash_ms, None);
     }
 
     #[test]
     fn radios_idle_is_off() {
-        assert_eq!(
-            mix(facts(|f| f.radios_up = false)),
-            LedMix::OFF
-        );
+        assert_eq!(mix(facts(|f| f.radios_up = false)), LedMix::OFF);
     }
 
     #[test]
@@ -290,7 +375,7 @@ mod tests {
             f.mesh_estab = true;
         })) {
             LedAction::Drive(r) => {
-                assert_eq!(r.mix, LedMix::MESH_NO_NET);
+                assert_eq!(r.tone, LedTone::MeshNoNet);
                 assert_eq!(r.flash_ms, Some(IDENTIFY_FLASH_MS));
             }
             other => panic!("{other:?}"),
@@ -313,10 +398,61 @@ mod tests {
             }),
         ] {
             if let LedAction::Drive(r) = classify(f) {
-                let blue_only = r.mix.blue && !r.mix.red && !r.mix.amber;
+                let m = mix_ap3000(r.tone);
+                let blue_only = m.blue && !m.red && !m.amber;
                 assert!(!blue_only, "solid blue leaked: {r:?}");
             }
         }
+    }
+
+    #[test]
+    fn m3000_internet_is_white_for_via_mesh_and_egress() {
+        assert_eq!(
+            mix_m3000(tone(facts(|f| {
+                f.default_via_mesh = true;
+                f.mesh_estab = true;
+            }))),
+            RedWhiteMix::INTERNET
+        );
+        assert_eq!(
+            mix_m3000(tone(facts(|f| {
+                f.local_egress = true;
+                f.mesh_estab = true;
+            }))),
+            RedWhiteMix::INTERNET
+        );
+        assert!(!RedWhiteMix::INTERNET.red);
+        assert!(RedWhiteMix::INTERNET.white);
+    }
+
+    #[test]
+    fn m3000_mesh_no_internet_is_pink() {
+        assert_eq!(
+            mix_m3000(tone(facts(|f| f.mesh_estab = true))),
+            RedWhiteMix::MESH_NO_NET
+        );
+        assert!(RedWhiteMix::MESH_NO_NET.red && RedWhiteMix::MESH_NO_NET.white);
+    }
+
+    #[test]
+    fn m3000_alone_is_red_only() {
+        assert_eq!(mix_m3000(tone(facts(|_| {}))), RedWhiteMix::ALONE);
+        assert!(!RedWhiteMix::ALONE.white);
+    }
+
+    #[test]
+    fn detect_sku_prefers_ap3000() {
+        assert_eq!(detect_sku(|n| n == LED_AMBER), Some(LedSku::Ap3000));
+        assert_eq!(
+            detect_sku(|n| n == LED_AMBER || n == LED_M3000_RED || n == LED_M3000_WHITE),
+            Some(LedSku::Ap3000)
+        );
+        assert_eq!(
+            detect_sku(|n| n == LED_M3000_RED || n == LED_M3000_WHITE),
+            Some(LedSku::M3000)
+        );
+        assert_eq!(detect_sku(|n| n == LED_M3000_RED), None);
+        assert_eq!(detect_sku(|_| false), None);
     }
 
     #[test]
@@ -357,16 +493,22 @@ Station 82:af:ca:e7:bd:01 (on phy1-mesh0)
 
     #[test]
     fn flash_phase_goes_dark() {
-        let r = LedRender {
-            mix: LedMix::EGRESS,
-            flash_ms: Some(200),
-        };
-        assert_eq!(mix_for_phase(r, true), LedMix::EGRESS);
-        assert_eq!(mix_for_phase(r, false), LedMix::OFF);
-        let solid = LedRender {
-            mix: LedMix::VIA_MESH,
-            flash_ms: None,
-        };
-        assert_eq!(mix_for_phase(solid, false), LedMix::VIA_MESH);
+        assert_eq!(
+            mix_for_phase(LedMix::EGRESS, Some(200), true),
+            LedMix::EGRESS
+        );
+        assert_eq!(mix_for_phase(LedMix::EGRESS, Some(200), false), LedMix::OFF);
+        assert_eq!(
+            mix_for_phase(LedMix::VIA_MESH, None, false),
+            LedMix::VIA_MESH
+        );
+        assert_eq!(
+            mix_red_white_for_phase(RedWhiteMix::INTERNET, Some(200), false),
+            RedWhiteMix::OFF
+        );
+        assert_eq!(
+            mix_red_white_for_phase(RedWhiteMix::MESH_NO_NET, None, false),
+            RedWhiteMix::MESH_NO_NET
+        );
     }
 }
