@@ -129,6 +129,15 @@ requirement.
 - AND a jump node re-announcing V's authorized `10.42.12.0/24` with V's
   router-id still installs
 
+#### Scenario: Roamed client /32 from an enrolled visited node still installs
+
+- GIVEN phone P holds `10.42.12.50` from home node H
+- AND P is associated at enrolled visited node V
+- AND V originates `10.42.12.50/32` proto 158 under V's router-id
+- WHEN other nodes receive that update
+- THEN they install the `/32` so inbound follows P
+- AND this does not authorize V to originate H's whole `/24`
+
 ### Requirement: CRDT writes are identity-authorized
 
 Production CRDT records for subnet claims, address book, services, and
