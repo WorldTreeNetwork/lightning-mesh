@@ -74,6 +74,7 @@ scp -O "$DIR/files/etc/hotplug.d/usb/70-mjolnir-dongle" "$HOST:$STAGE/hotplug-us
 scp -O "$DIR/files/etc/init.d/mjolnir-hello"   "$HOST:$STAGE/init.d-mjolnir-hello"
 scp -O "$DIR/files/etc/init.d/iperf3-server"   "$HOST:$STAGE/init.d-iperf3-server"
 scp -O "$DIR/files/usr/sbin/mjolnir-wan-admin" "$HOST:$STAGE/mjolnir-wan-admin"
+scp -O "$DIR/files/usr/libexec/mjolnir-dhcp-event" "$HOST:$STAGE/mjolnir-dhcp-event"
 scp -O "$DIR/files/etc/rc.wps/00-mjolnir-wan-admin" "$HOST:$STAGE/rc.wps-00-mjolnir-wan-admin"
 scp -O "$DIR/files/etc/dropbear/authorized_keys" "$HOST:$STAGE/authorized_keys"
 ssh "$HOST" "chmod +x $STAGE/mjolnir-apply $STAGE/mjolnir-txn"

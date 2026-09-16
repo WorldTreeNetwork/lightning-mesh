@@ -331,6 +331,12 @@ if [ -f "$STAGE/mjolnir-wan-admin" ]; then
 		&& chmod +x /usr/sbin/mjolnir-wan-admin \
 		|| rollback "installing /usr/sbin/mjolnir-wan-admin failed"
 fi
+if [ -f "$STAGE/mjolnir-dhcp-event" ]; then
+	mkdir -p /usr/libexec
+	cp "$STAGE/mjolnir-dhcp-event" /usr/libexec/mjolnir-dhcp-event \
+		&& chmod +x /usr/libexec/mjolnir-dhcp-event \
+		|| rollback "installing /usr/libexec/mjolnir-dhcp-event failed"
+fi
 if [ -f "$STAGE/rc.wps-00-mjolnir-wan-admin" ]; then
 	mkdir -p /etc/rc.wps
 	cp "$STAGE/rc.wps-00-mjolnir-wan-admin" /etc/rc.wps/00-mjolnir-wan-admin \

@@ -41,14 +41,14 @@ use mjolnir_mesh::tun::{
 };
 use mjolnir_mesh::{
     AddrBook, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport, HLC,
-    LeasedName, LeasedNameBook, LivenessTracker, LostNameMap, MergeResult, NodeNameBook,
-    NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome, ServiceBook,
+    LeaseBook, LeaseEntry, LeasedName, LeasedNameBook, LivenessTracker, LostNameMap, MergeResult,
+    NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome, ServiceBook,
     ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError, ServiceTombstone,
     ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
-    apply_coordinate, apply_leased_name, apply_service_publish_v2_tracking_loss,
+    apply_coordinate, apply_lease, apply_leased_name, apply_service_publish_v2_tracking_loss,
     apply_service_unpublish_v2, device_service_key, merge_node_name, merge_peer_addr,
-    merge_service, merge_subnet_claim, merge_user, name_owned_by, parse_host_mac,
-    project_coordinate, publish_service_v2,
+    merge_service, merge_subnet_claim, merge_user, name_owned_by, parse_host_mac, parse_mac,
+    project_coordinate, publish_service_v2, render_hostsfile, render_roam_conf,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -1003,6 +1003,19 @@ async fn run_mesh(
     }
     let addr_book: Arc<Mutex<AddrBook>> = Arc::new(Mutex::new(restored_book));
 
+    // Client DHCP leases (wvg.4): MAC → first IP. Seeded from disk so a
+    // rebooting node still OFFERs the same address before gossip catches up.
+    let lease_book_file = lease_book_path(&claims_file);
+    let restored_leases = load_lease_book(&lease_book_file);
+    if !restored_leases.is_empty() {
+        info!(
+            count = restored_leases.len(),
+            path = %lease_book_file.display(),
+            "restored DHCP lease book from disk"
+        );
+    }
+    let lease_book: Arc<Mutex<LeaseBook>> = Arc::new(Mutex::new(restored_leases));
+
     // User directory (mjolnir-mesh-2xd / p6u): username → user identity record,
     // the first hello.mesh front-desk record type. Same persistence pattern as
     // the address book — a sibling `users.state`, tolerant load, tmp+rename
@@ -1199,6 +1212,8 @@ async fn run_mesh(
                     let node_name_book_path = node_name_book_file.clone();
                     let coordinate_book = coordinate_book.clone();
                     let coordinate_book_path = coordinate_book_file.clone();
+                    let leases = lease_book.clone();
+                    let leases_path = lease_book_file.clone();
                     let service_book = service_book.clone();
                     let service_book_path = service_book_file.clone();
                     let service_book_v2 = service_book_v2.clone();
@@ -1236,6 +1251,22 @@ async fn run_mesh(
                             // dropped by apply_peer_addr_message. Handled first
                             // with an early return so a PeerAddrUpdate never takes
                             // the claim-store lock below.
+                            if matches!(
+                                msg,
+                                GossipMessage::LeaseUpdate(_) | GossipMessage::LeaseRelease { .. }
+                            ) {
+                                let changed = {
+                                    let mut b = leases.lock().expect("lease book poisoned");
+                                    apply_lease_message(&mut b, &msg)
+                                };
+                                if changed {
+                                    let snapshot =
+                                        leases.lock().expect("lease book poisoned").clone();
+                                    persist_lease_book(&snapshot, &leases_path);
+                                    info!(count = snapshot.len(), "gossip: DHCP lease book updated");
+                                }
+                                return;
+                            }
                             if matches!(msg, GossipMessage::PeerAddrUpdate { .. }) {
                                 let learned = {
                                     let mut b = book.lock().expect("address book poisoned");
@@ -1594,6 +1625,18 @@ async fn run_mesh(
                     self_id_str.clone(),
                     client_iface.clone(),
                 ));
+
+                // CRDT DHCP roam (wvg.4): ingest dnsmasq spool, gossip MAC→IP,
+                // project dhcp-hostsfile so a foreign AP OFFERs the first lease.
+                {
+                    let sync = sync.clone();
+                    let leases = lease_book.clone();
+                    let leases_path = lease_book_file.clone();
+                    let me = self_id_str.clone();
+                    tokio::spawn(async move {
+                        dhcp_roam_loop(sync, leases, leases_path, me).await
+                    });
+                }
 
                 // Control API (S3.1, bead e21.2.5): needs `sync` for the immediate
                 // publish/unpublish gossip broadcast (FR25), so — like the tasks
@@ -2366,6 +2409,74 @@ fn persist_claims(snapshot: &HashMap<String, SubnetClaim>, path: &Path) {
 /// file was configured.
 fn addr_book_path(claims_file: &Path) -> PathBuf {
     claims_file.with_file_name("addrbook.state")
+}
+
+fn lease_book_path(claims_file: &Path) -> PathBuf {
+    claims_file.with_file_name("leases.state")
+}
+
+fn load_lease_book(path: &Path) -> LeaseBook {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LeaseBook::new(),
+        Err(e) => {
+            warn!(path = %path.display(), "failed to read persisted lease book: {e}");
+            return LeaseBook::new();
+        }
+    };
+    match postcard::from_bytes(&bytes) {
+        Ok(book) => book,
+        Err(e) => {
+            warn!(path = %path.display(), "failed to decode persisted lease book: {e}");
+            LeaseBook::new()
+        }
+    }
+}
+
+fn persist_lease_book(snapshot: &LeaseBook, path: &Path) {
+    let bytes = match postcard::to_allocvec(snapshot) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("failed to encode lease book for persistence: {e}");
+            return;
+        }
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), "failed to create lease book dir: {e}");
+        return;
+    }
+    let tmp_path = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+        warn!(path = %tmp_path.display(), "failed to write lease book tmp file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        warn!(path = %path.display(), "failed to rename lease book tmp file into place: {e}");
+    }
+}
+
+fn apply_lease_message(book: &mut LeaseBook, msg: &GossipMessage) -> bool {
+    match msg {
+        GossipMessage::LeaseUpdate(entry) => {
+            let key = mjolnir_mesh::mac_key(&entry.mac);
+            let before = book.get(&key).cloned();
+            apply_lease(book, entry.clone());
+            book.get(&key) != before.as_ref()
+        }
+        GossipMessage::LeaseRelease { mac, hlc } => {
+            let key = mjolnir_mesh::mac_key(mac);
+            match book.get(&key) {
+                Some(existing) if hlc >= &existing.hlc => {
+                    book.remove(&key);
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Load the persisted address book from `path`. Returns an empty book (not an
@@ -3718,6 +3829,181 @@ async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
 
 // --- roaming: mobility /32s for clients that kept another node's address ----
 // (mjolnir-mesh-sz9; parsers and guest-route selection live in `roam.rs`)
+
+const DHCP_ROAM_INTERVAL: Duration = Duration::from_secs(2);
+const DHCP_EVENT_SPOOL: &str = "/tmp/mjolnir/dhcp-events";
+const DHCP_HOSTSFILE: &str = "/tmp/mjolnir/reservations";
+const DHCP_SCRIPT: &str = "/usr/libexec/mjolnir-dhcp-event";
+
+/// Ingest dnsmasq spool + gossip MAC→IP + project dhcp-hostsfile (wvg.4).
+async fn dhcp_roam_loop<T: GossipTransport>(
+    sync: Arc<GossipSync<T>>,
+    lease_book: Arc<Mutex<LeaseBook>>,
+    lease_book_file: PathBuf,
+    self_id: String,
+) {
+    reconcile_dhcp_roam_uci().await;
+    let mut last_hosts = String::new();
+    let mut ticks: u8 = 0;
+    let mut ticker = tokio::time::interval(DHCP_ROAM_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let ingested = ingest_dhcp_event_spool(&lease_book, &self_id);
+        for entry in &ingested {
+            if let Err(e) = sync
+                .publish(GossipMessage::LeaseUpdate(entry.clone()))
+                .await
+            {
+                warn!(mac = %mjolnir_mesh::mac_key(&entry.mac), "dhcp roam: gossip publish failed: {e}");
+            }
+        }
+        ticks = ticks.saturating_add(1);
+        if ticks >= 10 {
+            ticks = 0;
+            let snapshot = lease_book.lock().expect("lease book poisoned").clone();
+            for entry in snapshot.values() {
+                if let Err(e) = sync
+                    .publish(GossipMessage::LeaseUpdate(entry.clone()))
+                    .await
+                {
+                    warn!("dhcp roam: anti-entropy publish failed: {e}");
+                }
+            }
+        }
+        let snapshot = lease_book.lock().expect("lease book poisoned").clone();
+        if !ingested.is_empty() {
+            persist_lease_book(&snapshot, &lease_book_file);
+        }
+        let hosts = render_hostsfile(&snapshot);
+        if hosts != last_hosts {
+            project_dhcp_hosts(&snapshot, &hosts);
+            last_hosts = hosts;
+        }
+    }
+}
+
+fn ingest_dhcp_event_spool(
+    lease_book: &Arc<Mutex<LeaseBook>>,
+    self_id: &str,
+) -> Vec<LeaseEntry> {
+    let dir = Path::new(DHCP_EVENT_SPOOL);
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let mut applied = Vec::new();
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut parts = text.split_whitespace();
+        let Some(_action) = parts.next() else { continue };
+        let Some(mac_s) = parts.next() else { continue };
+        let Some(ip_s) = parts.next() else { continue };
+        let host = parts.next().map(str::to_string).filter(|s| !s.is_empty() && s != "*");
+        let Some(mac) = parse_mac(mac_s) else { continue };
+        let Ok(ip) = ip_s.parse::<std::net::IpAddr>() else { continue };
+        let incoming = LeaseEntry {
+            mac,
+            ip,
+            hostname: host,
+            router_id: self_id.to_string(),
+            expiry: now_secs.saturating_add(12 * 3600),
+            hlc: now_hlc(self_id),
+        };
+        let keep = {
+            let mut book = lease_book.lock().expect("lease book poisoned");
+            matches!(
+                apply_lease(&mut book, incoming.clone()),
+                MergeResult::Inserted | MergeResult::Updated
+            )
+        };
+        if keep {
+            applied.push(incoming);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    applied
+}
+
+fn project_dhcp_hosts(book: &LeaseBook, hosts: &str) {
+    let dir = Path::new("/tmp/mjolnir");
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        warn!("dhcp roam: mkdir {dir:?}: {e}");
+        return;
+    }
+    let tmp = dir.join("reservations.tmp");
+    if let Err(e) = std::fs::write(&tmp, hosts.as_bytes()) {
+        warn!("dhcp roam: write hostsfile: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, DHCP_HOSTSFILE) {
+        warn!("dhcp roam: rename hostsfile: {e}");
+        return;
+    }
+    let conf = render_roam_conf(book);
+    for confdir in dnsmasq_conf_dirs() {
+        let _ = std::fs::create_dir_all(&confdir);
+        let dest = confdir.join("mjolnir-roam.conf");
+        let tmp = confdir.join("mjolnir-roam.conf.tmp");
+        if std::fs::write(&tmp, conf.as_bytes()).is_ok() {
+            let _ = std::fs::rename(&tmp, dest);
+        }
+    }
+    match std::process::Command::new("killall")
+        .args(["-HUP", "dnsmasq"])
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            info!(count = book.len(), "dhcp roam: projected hostsfile, HUP dnsmasq")
+        }
+        Ok(o) => warn!(
+            "dhcp roam: killall -HUP dnsmasq: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => warn!("dhcp roam: could not HUP dnsmasq: {e}"),
+    }
+}
+
+fn dnsmasq_conf_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/tmp/mjolnir/dnsmasq.d")];
+    if let Ok(rd) = std::fs::read_dir("/tmp") {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with("dnsmasq") && s.ends_with(".d") {
+                dirs.push(e.path());
+            }
+        }
+    }
+    dirs
+}
+
+async fn reconcile_dhcp_roam_uci() {
+    use tokio::process::Command;
+    let script = format!(
+        "uci set dhcp.@dnsmasq[0].dhcpscript='{DHCP_SCRIPT}'; \
+         uci set dhcp.@dnsmasq[0].dhcphostsfile='{DHCP_HOSTSFILE}'; \
+         uci commit dhcp && /etc/init.d/dnsmasq reload"
+    );
+    let run = Command::new("sh").args(["-c", &script]).output();
+    match tokio::time::timeout(Duration::from_secs(20), run).await {
+        Ok(Ok(o)) if o.status.success() => {
+            info!("dhcp roam: dnsmasq hostsfile + dhcp-script UCI set")
+        }
+        Ok(Ok(o)) => warn!(
+            "dhcp roam: UCI reconcile failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Ok(Err(e)) => warn!("dhcp roam: UCI reconcile could not run: {e}"),
+        Err(_) => warn!("dhcp roam: UCI reconcile timed out"),
+    }
+}
 
 /// Reconcile cadence for roamed-client host routes. Faster than
 /// [`RADIO_INTERVAL`] because this is the roam-latency path: it bounds how long

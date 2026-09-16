@@ -48,7 +48,10 @@ pub use crdt::{
     egress::{DefaultRoute, EXCLUDED_EGRESS_IFACES, EgressAd, ProbeHysteresis, classify_egress},
     gossip::GossipMessage,
     hlc::HLC,
-    lease::LeaseEntry,
+    lease::{
+        LeaseBook, LeaseEntry, apply_lease, gateway_v4, mac_key, merge_lease, parse_mac,
+        render_hostsfile, render_roam_conf,
+    },
     leased_name::{LEASE_TTL_MS, LeasedName, LeasedNameBook, apply_leased_name, name_owned_by},
     liveness::{LivenessTracker, monotonic_now_ms},
     merge::{

@@ -1,0 +1,22 @@
+#!/bin/sh
+# dnsmasq dhcp-script. Spools add/old for meshd; never del (roam must keep
+# the CRDT reservation). meshd's dhcp_roam_loop ingests /tmp/mjolnir/dhcp-events.
+# Args: <add|old|del> <mac> <ip> [hostname]
+set -e
+action="${1:-}"
+mac="${2:-}"
+ip="${3:-}"
+host="${4:-}"
+[ -n "$mac" ] && [ -n "$ip" ] || exit 0
+case "$action" in
+	add|old) ;;
+	*) exit 0 ;;
+esac
+case "$ip" in
+	10.42.*) ;;
+	*) exit 0 ;;
+esac
+dir=/tmp/mjolnir/dhcp-events
+mkdir -p "$dir"
+key=$(printf '%s' "$mac" | tr 'A-F' 'a-f' | tr -d ':-')
+printf '%s %s %s %s\n' "$action" "$mac" "$ip" "$host" >"$dir/$key"
