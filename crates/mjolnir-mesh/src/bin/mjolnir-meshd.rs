@@ -7264,32 +7264,26 @@ async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
     None
 }
 
-/// Connectivity LEDs (849.5–849.7). No-ops on unknown SKUs.
+/// Connectivity LEDs. Hardware row from [`mjolnir_mesh::led::HARDWARE`].
 #[cfg(target_os = "linux")]
 async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
     use mjolnir_mesh::led::{
-        APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LED_AMBER, LED_BLUE, LED_M3000_RED,
-        LED_M3000_WHITE, LED_OUTDOOR_GREEN, LED_PHY, LED_RED, LED_RED_POWER, LED_TR3000_WHITE,
-        LED_WR3000S_STATUS, LED_WR3000S_WAN, LED_WR3000S_WLAN2, LED_WR3000S_WLAN5, LedAction,
-        LedFacts, LedSku, classify, default_via_mesh, detect_sku, is_local_egress, mesh_has_estab,
-        mix_ap3000, mix_for_phase, mix_m3000, mix_outdoor, mix_red_green_for_phase,
-        mix_red_white_for_phase, mix_wr3000s, mix_wr3000s_for_phase, parse_mesh_ifaces,
+        APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LedAction, LedFacts, classify,
+        default_via_mesh, detect_hardware, is_local_egress, mesh_has_estab, parse_mesh_ifaces,
+        phase_on,
     };
     use mjolnir_mesh::roam::parse_ap_ifaces;
     use std::path::Path;
     use std::time::{Instant, SystemTime};
 
     let led_root = Path::new("/sys/class/leds");
-    let Some(sku) = detect_sku(|name| led_root.join(name).join("brightness").exists()) else {
+    let board = std::fs::read_to_string("/tmp/sysinfo/board_name").ok();
+    let Some(map) = detect_hardware(board.as_deref(), |name| {
+        led_root.join(name).join("brightness").exists()
+    }) else {
         return;
     };
-    match sku {
-        LedSku::Ap3000 => info!("led: AP3000 indoor status lamps (849.5)"),
-        LedSku::M3000 => info!("led: M3000 status lamps (849.6)"),
-        LedSku::Tr3000 => info!("led: TR3000 status lamps (849.7)"),
-        LedSku::Wr3000s => info!("led: WR3000S status lamps (849.7)"),
-        LedSku::Ap3000Outdoor => info!("led: AP3000 Outdoor status lamps (849.7)"),
-    }
+    info!(hw = map.id, board = board.as_deref().map(str::trim), "led: {}", map.label);
     let set_trigger_none = |name: &str| {
         let _ = std::fs::write(led_root.join(name).join("trigger"), "none\n");
     };
@@ -7299,23 +7293,11 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
             if on { "1\n" } else { "0\n" },
         );
     };
-    let topology_lamps: &[&str] = match sku {
-        LedSku::Ap3000 => &[LED_AMBER, LED_RED, LED_BLUE],
-        LedSku::M3000 => &[LED_M3000_RED, LED_M3000_WHITE],
-        LedSku::Tr3000 => &[LED_RED_POWER, LED_TR3000_WHITE],
-        LedSku::Wr3000s => &[LED_WR3000S_STATUS, LED_WR3000S_WAN, LED_WR3000S_WLAN5],
-        LedSku::Ap3000Outdoor => &[LED_RED_POWER, LED_OUTDOOR_GREEN],
-    };
-    for name in topology_lamps {
+    for name in map.drive.iter().chain(map.silence) {
         set_trigger_none(name);
-    }
-    for name in LED_PHY {
-        set_trigger_none(name);
-        set_bright(name, false);
-    }
-    if sku == LedSku::Wr3000s {
-        set_trigger_none(LED_WR3000S_WLAN2);
-        set_bright(LED_WR3000S_WLAN2, false);
+        if map.silence.iter().any(|s| *s == *name) {
+            set_bright(name, false);
+        }
     }
 
     let started = Instant::now();
@@ -7399,52 +7381,14 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
         match classify(facts) {
             LedAction::Hold => {}
             LedAction::Drive(render) => {
-                for name in topology_lamps {
-                    set_trigger_none(name);
-                }
                 let on = match render.flash_ms {
                     None => true,
                     Some(ms) => (started.elapsed().as_millis() as u64 / ms.max(50)) % 2 == 0,
                 };
-                match sku {
-                    LedSku::Ap3000 => {
-                        let mix = mix_for_phase(mix_ap3000(render.tone), render.flash_ms, on);
-                        set_bright(LED_AMBER, mix.amber);
-                        set_bright(LED_RED, mix.red);
-                        set_bright(LED_BLUE, mix.blue);
-                    }
-                    LedSku::M3000 | LedSku::Tr3000 => {
-                        let mix = mix_red_white_for_phase(
-                            mix_m3000(render.tone),
-                            render.flash_ms,
-                            on,
-                        );
-                        let (red, white) = match sku {
-                            LedSku::M3000 => (LED_M3000_RED, LED_M3000_WHITE),
-                            _ => (LED_RED_POWER, LED_TR3000_WHITE),
-                        };
-                        set_bright(red, mix.red);
-                        set_bright(white, mix.white);
-                    }
-                    LedSku::Ap3000Outdoor => {
-                        let mix = mix_red_green_for_phase(
-                            mix_outdoor(render.tone),
-                            render.flash_ms,
-                            on,
-                        );
-                        set_bright(LED_RED_POWER, mix.red);
-                        set_bright(LED_OUTDOOR_GREEN, mix.green);
-                    }
-                    LedSku::Wr3000s => {
-                        let mix = mix_wr3000s_for_phase(
-                            mix_wr3000s(render.tone),
-                            render.flash_ms,
-                            on,
-                        );
-                        set_bright(LED_WR3000S_STATUS, mix.status);
-                        set_bright(LED_WR3000S_WAN, mix.wan_online);
-                        set_bright(LED_WR3000S_WLAN5, mix.wlan_5ghz);
-                    }
+                let phase = phase_on(render.flash_ms, on);
+                for name in map.drive {
+                    set_trigger_none(name);
+                    set_bright(name, map.lamp_on(render.tone, name, phase));
                 }
             }
         }

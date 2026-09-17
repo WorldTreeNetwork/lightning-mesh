@@ -3,36 +3,13 @@
 // Lightning Mesh is dual-licensed (AGPL-3.0-or-later or commercial); see LICENSE
 // and COMMERCIAL-LICENSE.md at the repository root.
 
-//! Connectivity LED language (849.5 indoor AP3000, 849.6 M3000, 849.7 rest).
+//! Connectivity LED language (849.5–849.8).
 //!
-//! Pure classifier: facts in, tone out. The daemon maps tone onto SKU lamps
-//! and writes sysfs. Probe order is in [`detect_sku`]. Unknown SKUs no-op.
+//! Facts → [`LedTone`]. Hardware is a row in [`HARDWARE`]: OpenWrt
+//! `board_name` first, else sysfs probe. Each row lists which
+//! `/sys/class/leds` names light for each tone. Adding a box is a row.
 
 use crate::crdt::egress::{DefaultRoute, EXCLUDED_EGRESS_IFACES, classify_egress};
-
-/// Sysfs directory names on Cudy AP3000 v1 (indoor). Mix by brightness.
-pub const LED_AMBER: &str = "amber:status";
-pub const LED_RED: &str = "red:wlan-2ghz";
-pub const LED_BLUE: &str = "blue:wlan-5ghz";
-pub const LED_PHY: &[&str] = &["mt76-phy0", "mt76-phy1"];
-
-/// Cudy M3000 front bicolor. Do not write `green:wan` / `green:lan` (port lamps).
-pub const LED_M3000_RED: &str = "red:wan-online";
-pub const LED_M3000_WHITE: &str = "white:wan-online";
-
-/// Shared by TR3000 (`white:status` mate) and AP3000 Outdoor (`green:status` mate).
-pub const LED_RED_POWER: &str = "red:power";
-/// Cudy TR3000 front bicolor. Same mix as M3000.
-pub const LED_TR3000_WHITE: &str = "white:status";
-/// Cudy AP3000 Outdoor front bicolor.
-pub const LED_OUTDOOR_GREEN: &str = "green:status";
-
-/// Cudy WR3000S — all-white which-lamp. Do not write `white:wps` (wan-admin).
-pub const LED_WR3000S_STATUS: &str = "white:status";
-pub const LED_WR3000S_WAN: &str = "white:wan-online";
-pub const LED_WR3000S_WLAN5: &str = "white:wlan-5ghz";
-/// Kill phy-tpt only; not a topology lamp.
-pub const LED_WR3000S_WLAN2: &str = "white:wlan-2ghz";
 
 /// Admin identify pulse: touch this file; meshd blinks while mtime is fresh.
 pub const IDENTIFY_PATH: &str = "/tmp/mjolnir-identify";
@@ -43,16 +20,7 @@ pub const IDENTIFY_FLASH_MS: u64 = 200;
 pub const OVERLAY_SICK_FLASH_MS: u64 = 500;
 pub const IDENTIFY_FRESH_SECS: u64 = 15;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LedSku {
-    Ap3000,
-    M3000,
-    Tr3000,
-    Wr3000s,
-    Ap3000Outdoor,
-}
-
-/// Highest-wins topology. SKU maps this onto lamps.
+/// Highest-wins topology. Hardware maps this onto lamps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedTone {
     Off,
@@ -63,133 +31,132 @@ pub enum LedTone {
     OverlaySick,
 }
 
-/// AP3000 lamps. Solid blue is not a topology color.
+/// One hardware row. `drive` is every lamp we write; `silence` is forced off
+/// (phy-tpt). Tones pick a subset of `drive`. Lamps not listed are never written
+/// (port LEDs, WPS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LedMix {
-    pub amber: bool,
-    pub red: bool,
-    pub blue: bool,
+pub struct HardwareMap {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// OpenWrt `/tmp/sysinfo/board_name` values.
+    pub boards: &'static [&'static str],
+    /// All must exist under `/sys/class/leds` when board_name is missing.
+    pub probe: &'static [&'static str],
+    pub drive: &'static [&'static str],
+    pub silence: &'static [&'static str],
+    pub off: &'static [&'static str],
+    pub alone: &'static [&'static str],
+    pub mesh_no_net: &'static [&'static str],
+    pub via_mesh: &'static [&'static str],
+    pub egress: &'static [&'static str],
 }
 
-impl LedMix {
-    pub const OFF: Self = Self {
-        amber: false,
-        red: false,
-        blue: false,
-    };
-    pub const ALONE: Self = Self {
-        amber: false,
-        red: true,
-        blue: false,
-    };
-    /// Mesh, no internet (reads orange).
-    pub const MESH_NO_NET: Self = Self {
-        amber: true,
-        red: true,
-        blue: false,
-    };
-    /// Internet via mesh (pale purple).
-    pub const VIA_MESH: Self = Self {
-        amber: true,
-        red: false,
-        blue: true,
-    };
-    /// Local egress / gateway / STA (dark purple).
-    pub const EGRESS: Self = Self {
-        amber: false,
-        red: true,
-        blue: true,
-    };
-    pub const OVERLAY_SICK: Self = Self {
-        amber: false,
-        red: true,
-        blue: false,
-    };
+impl HardwareMap {
+    pub fn lit(&self, tone: LedTone) -> &'static [&'static str] {
+        match tone {
+            LedTone::Off => self.off,
+            LedTone::Alone | LedTone::OverlaySick => self.alone,
+            LedTone::MeshNoNet => self.mesh_no_net,
+            LedTone::ViaMesh => self.via_mesh,
+            LedTone::Egress => self.egress,
+        }
+    }
+
+    /// Brightness for one drive lamp. `phase_on` is false on the dark half of a flash.
+    pub fn lamp_on(&self, tone: LedTone, name: &str, phase_on: bool) -> bool {
+        phase_on && self.lit(tone).iter().any(|n| *n == name)
+    }
 }
 
-/// M3000 / TR3000 front red/white. Via-mesh and local egress are both white.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RedWhiteMix {
-    pub red: bool,
-    pub white: bool,
+const PHY: &[&str] = &["mt76-phy0", "mt76-phy1"];
+
+/// Probe order matters for sysfs fallback (outdoor before TR3000: both have
+/// `red:power`). Board_name skips that.
+pub static HARDWARE: &[HardwareMap] = &[
+    HardwareMap {
+        id: "ap3000-indoor",
+        label: "AP3000 indoor status lamps (849.5)",
+        boards: &["cudy,ap3000-v1"],
+        probe: &["amber:status"],
+        drive: &["amber:status", "red:wlan-2ghz", "blue:wlan-5ghz"],
+        silence: PHY,
+        off: &[],
+        alone: &["red:wlan-2ghz"],
+        mesh_no_net: &["amber:status", "red:wlan-2ghz"],
+        via_mesh: &["amber:status", "blue:wlan-5ghz"],
+        egress: &["red:wlan-2ghz", "blue:wlan-5ghz"],
+    },
+    HardwareMap {
+        id: "m3000",
+        label: "M3000 status lamps (849.6)",
+        boards: &["cudy,m3000-v1", "cudy,m3000-v2"],
+        probe: &["red:wan-online", "white:wan-online"],
+        drive: &["red:wan-online", "white:wan-online"],
+        silence: PHY,
+        off: &[],
+        alone: &["red:wan-online"],
+        mesh_no_net: &["red:wan-online", "white:wan-online"],
+        via_mesh: &["white:wan-online"],
+        egress: &["white:wan-online"],
+    },
+    HardwareMap {
+        id: "ap3000-outdoor",
+        label: "AP3000 Outdoor status lamps (849.7)",
+        boards: &["cudy,ap3000outdoor-v1"],
+        probe: &["red:power", "green:status"],
+        drive: &["red:power", "green:status"],
+        silence: PHY,
+        off: &[],
+        alone: &["red:power"],
+        mesh_no_net: &["red:power", "green:status"],
+        via_mesh: &["green:status"],
+        egress: &["green:status"],
+    },
+    HardwareMap {
+        id: "tr3000",
+        label: "TR3000 status lamps (849.7)",
+        boards: &["cudy,tr3000-v1"],
+        probe: &["red:power", "white:status"],
+        drive: &["red:power", "white:status"],
+        silence: PHY,
+        off: &[],
+        alone: &["red:power"],
+        mesh_no_net: &["red:power", "white:status"],
+        via_mesh: &["white:status"],
+        egress: &["white:status"],
+    },
+    HardwareMap {
+        id: "wr3000s",
+        label: "WR3000S status lamps (849.7)",
+        boards: &["cudy,wr3000s-v1"],
+        probe: &["white:status", "white:wan-online", "white:wlan-5ghz"],
+        drive: &["white:status", "white:wan-online", "white:wlan-5ghz"],
+        silence: &["mt76-phy0", "mt76-phy1", "white:wlan-2ghz"],
+        off: &[],
+        alone: &["white:status"],
+        mesh_no_net: &["white:status", "white:wlan-5ghz"],
+        via_mesh: &["white:wan-online"],
+        egress: &["white:wan-online"],
+    },
+];
+
+pub fn hardware(id: &str) -> Option<&'static HardwareMap> {
+    HARDWARE.iter().find(|m| m.id == id)
 }
 
-impl RedWhiteMix {
-    pub const OFF: Self = Self {
-        red: false,
-        white: false,
-    };
-    pub const ALONE: Self = Self {
-        red: true,
-        white: false,
-    };
-    /// Mesh, no internet (pink).
-    pub const MESH_NO_NET: Self = Self {
-        red: true,
-        white: true,
-    };
-    pub const INTERNET: Self = Self {
-        red: false,
-        white: true,
-    };
-}
-
-/// AP3000 Outdoor front red/green. Via-mesh and local egress are both green.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RedGreenMix {
-    pub red: bool,
-    pub green: bool,
-}
-
-impl RedGreenMix {
-    pub const OFF: Self = Self {
-        red: false,
-        green: false,
-    };
-    pub const ALONE: Self = Self {
-        red: true,
-        green: false,
-    };
-    /// Mesh, no internet (yellow).
-    pub const MESH_NO_NET: Self = Self {
-        red: true,
-        green: true,
-    };
-    pub const INTERNET: Self = Self {
-        red: false,
-        green: true,
-    };
-}
-
-/// WR3000S which-lamp. No WPS, no 2.4 GHz topology.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Wr3000sMix {
-    pub status: bool,
-    pub wan_online: bool,
-    pub wlan_5ghz: bool,
-}
-
-impl Wr3000sMix {
-    pub const OFF: Self = Self {
-        status: false,
-        wan_online: false,
-        wlan_5ghz: false,
-    };
-    pub const ALONE: Self = Self {
-        status: true,
-        wan_online: false,
-        wlan_5ghz: false,
-    };
-    pub const MESH_NO_NET: Self = Self {
-        status: true,
-        wan_online: false,
-        wlan_5ghz: true,
-    };
-    pub const INTERNET: Self = Self {
-        status: false,
-        wan_online: true,
-        wlan_5ghz: false,
-    };
+/// Board_name wins. Else first row whose `probe` lamps all exist.
+pub fn detect_hardware(
+    board: Option<&str>,
+    brightness_exists: impl Fn(&str) -> bool,
+) -> Option<&'static HardwareMap> {
+    if let Some(b) = board.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(m) = HARDWARE.iter().find(|m| m.boards.iter().any(|x| *x == b)) {
+            return Some(m);
+        }
+    }
+    HARDWARE
+        .iter()
+        .find(|m| m.probe.iter().copied().all(|n| brightness_exists(n)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,26 +185,6 @@ pub struct LedFacts {
     pub local_egress: bool,
     pub default_via_mesh: bool,
     pub radios_up: bool,
-}
-
-/// `brightness` exists under `/sys/class/leds/<name>/`. First match wins.
-pub fn detect_sku(brightness_exists: impl Fn(&str) -> bool) -> Option<LedSku> {
-    if brightness_exists(LED_AMBER) {
-        Some(LedSku::Ap3000)
-    } else if brightness_exists(LED_M3000_RED) && brightness_exists(LED_M3000_WHITE) {
-        Some(LedSku::M3000)
-    } else if brightness_exists(LED_RED_POWER) && brightness_exists(LED_OUTDOOR_GREEN) {
-        Some(LedSku::Ap3000Outdoor)
-    } else if brightness_exists(LED_RED_POWER) && brightness_exists(LED_TR3000_WHITE) {
-        Some(LedSku::Tr3000)
-    } else if brightness_exists(LED_WR3000S_STATUS)
-        && brightness_exists(LED_WR3000S_WAN)
-        && brightness_exists(LED_WR3000S_WLAN5)
-    {
-        Some(LedSku::Wr3000s)
-    } else {
-        None
-    }
 }
 
 /// Highest-wins ladder from 849.5 (SKU-agnostic tone).
@@ -274,74 +221,8 @@ fn classify_tone(f: LedFacts) -> (LedTone, Option<u64>) {
     (LedTone::Off, None)
 }
 
-pub fn mix_ap3000(tone: LedTone) -> LedMix {
-    match tone {
-        LedTone::Off => LedMix::OFF,
-        LedTone::Alone | LedTone::OverlaySick => LedMix::ALONE,
-        LedTone::MeshNoNet => LedMix::MESH_NO_NET,
-        LedTone::ViaMesh => LedMix::VIA_MESH,
-        LedTone::Egress => LedMix::EGRESS,
-    }
-}
-
-pub fn mix_m3000(tone: LedTone) -> RedWhiteMix {
-    match tone {
-        LedTone::Off => RedWhiteMix::OFF,
-        LedTone::Alone | LedTone::OverlaySick => RedWhiteMix::ALONE,
-        LedTone::MeshNoNet => RedWhiteMix::MESH_NO_NET,
-        LedTone::ViaMesh | LedTone::Egress => RedWhiteMix::INTERNET,
-    }
-}
-
-pub fn mix_outdoor(tone: LedTone) -> RedGreenMix {
-    match tone {
-        LedTone::Off => RedGreenMix::OFF,
-        LedTone::Alone | LedTone::OverlaySick => RedGreenMix::ALONE,
-        LedTone::MeshNoNet => RedGreenMix::MESH_NO_NET,
-        LedTone::ViaMesh | LedTone::Egress => RedGreenMix::INTERNET,
-    }
-}
-
-pub fn mix_wr3000s(tone: LedTone) -> Wr3000sMix {
-    match tone {
-        LedTone::Off => Wr3000sMix::OFF,
-        LedTone::Alone | LedTone::OverlaySick => Wr3000sMix::ALONE,
-        LedTone::MeshNoNet => Wr3000sMix::MESH_NO_NET,
-        LedTone::ViaMesh | LedTone::Egress => Wr3000sMix::INTERNET,
-    }
-}
-
-/// Brightness for one flash phase. `on` is the first half of the period.
-pub fn mix_for_phase(mix: LedMix, flash_ms: Option<u64>, on: bool) -> LedMix {
-    if flash_ms.is_some() && !on {
-        LedMix::OFF
-    } else {
-        mix
-    }
-}
-
-pub fn mix_red_white_for_phase(mix: RedWhiteMix, flash_ms: Option<u64>, on: bool) -> RedWhiteMix {
-    if flash_ms.is_some() && !on {
-        RedWhiteMix::OFF
-    } else {
-        mix
-    }
-}
-
-pub fn mix_red_green_for_phase(mix: RedGreenMix, flash_ms: Option<u64>, on: bool) -> RedGreenMix {
-    if flash_ms.is_some() && !on {
-        RedGreenMix::OFF
-    } else {
-        mix
-    }
-}
-
-pub fn mix_wr3000s_for_phase(mix: Wr3000sMix, flash_ms: Option<u64>, on: bool) -> Wr3000sMix {
-    if flash_ms.is_some() && !on {
-        Wr3000sMix::OFF
-    } else {
-        mix
-    }
+pub fn phase_on(flash_ms: Option<u64>, on: bool) -> bool {
+    flash_ms.is_none() || on
 }
 
 /// Babel-learned or backhaul-dev default — satellite internet, not local WAN.
@@ -397,18 +278,20 @@ mod tests {
         f
     }
 
-    fn mix(f: LedFacts) -> LedMix {
-        match classify(f) {
-            LedAction::Drive(r) => mix_ap3000(r.tone),
-            LedAction::Hold => panic!("hold"),
-        }
-    }
-
     fn tone(f: LedFacts) -> LedTone {
         match classify(f) {
             LedAction::Drive(r) => r.tone,
             LedAction::Hold => panic!("hold"),
         }
+    }
+
+    fn lit(id: &str, f: LedFacts) -> &'static [&'static str] {
+        hardware(id).unwrap().lit(tone(f))
+    }
+
+    fn exists(have: &[&str]) -> impl Fn(&str) -> bool {
+        let have: Vec<String> = have.iter().map(|s| (*s).to_string()).collect();
+        move |n| have.iter().any(|h| h == n)
     }
 
     #[test]
@@ -431,58 +314,48 @@ mod tests {
             LedAction::Drive(r) => {
                 assert_eq!(r.tone, LedTone::OverlaySick);
                 assert_eq!(r.flash_ms, Some(OVERLAY_SICK_FLASH_MS));
-                assert_eq!(mix_ap3000(r.tone), LedMix::OVERLAY_SICK);
-                assert_eq!(mix_m3000(r.tone), RedWhiteMix::ALONE);
+                assert_eq!(
+                    hardware("ap3000-indoor").unwrap().lit(r.tone),
+                    &["red:wlan-2ghz"]
+                );
+                assert_eq!(hardware("m3000").unwrap().lit(r.tone), &["red:wan-online"]);
             }
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn egress_beats_via_mesh() {
+    fn indoor_egress_vs_via_mesh() {
         assert_eq!(
-            mix(facts(|f| {
-                f.local_egress = true;
-                f.default_via_mesh = true;
-                f.mesh_estab = true;
-            })),
-            LedMix::EGRESS
+            lit(
+                "ap3000-indoor",
+                facts(|f| {
+                    f.local_egress = true;
+                    f.default_via_mesh = true;
+                    f.mesh_estab = true;
+                })
+            ),
+            ["red:wlan-2ghz", "blue:wlan-5ghz"].as_slice()
         );
-    }
-
-    #[test]
-    fn satellite_internet_is_amber_blue() {
         assert_eq!(
-            mix(facts(|f| {
-                f.default_via_mesh = true;
-                f.mesh_estab = true;
-            })),
-            LedMix::VIA_MESH
+            lit(
+                "ap3000-indoor",
+                facts(|f| {
+                    f.default_via_mesh = true;
+                    f.mesh_estab = true;
+                })
+            ),
+            ["amber:status", "blue:wlan-5ghz"].as_slice()
         );
-        assert!(!LedMix::VIA_MESH.red);
-        assert!(LedMix::VIA_MESH.amber && LedMix::VIA_MESH.blue);
-    }
-
-    #[test]
-    fn mesh_no_internet_is_amber_red() {
-        assert_eq!(mix(facts(|f| f.mesh_estab = true)), LedMix::MESH_NO_NET);
-        assert!(!LedMix::MESH_NO_NET.blue);
-    }
-
-    #[test]
-    fn alone_is_solid_red() {
-        let r = match classify(facts(|_| {})) {
-            LedAction::Drive(r) => r,
-            LedAction::Hold => panic!(),
-        };
-        assert_eq!(r.tone, LedTone::Alone);
-        assert_eq!(mix_ap3000(r.tone), LedMix::ALONE);
-        assert_eq!(r.flash_ms, None);
-    }
-
-    #[test]
-    fn radios_idle_is_off() {
-        assert_eq!(mix(facts(|f| f.radios_up = false)), LedMix::OFF);
+        assert_eq!(
+            lit("ap3000-indoor", facts(|f| f.mesh_estab = true)),
+            ["amber:status", "red:wlan-2ghz"].as_slice()
+        );
+        assert_eq!(
+            lit("ap3000-indoor", facts(|_| {})),
+            ["red:wlan-2ghz"].as_slice()
+        );
+        assert!(lit("ap3000-indoor", facts(|f| f.radios_up = false)).is_empty());
     }
 
     #[test]
@@ -501,159 +374,136 @@ mod tests {
 
     #[test]
     fn solid_blue_is_not_a_topology_mix() {
-        for f in [
-            facts(|_| {}),
-            facts(|f| f.mesh_estab = true),
-            facts(|f| {
-                f.mesh_estab = true;
-                f.default_via_mesh = true;
-            }),
-            facts(|f| f.local_egress = true),
-            facts(|f| {
-                f.overlay_addr_present = false;
-                f.mesh_l2_up = true;
-            }),
+        let m = hardware("ap3000-indoor").unwrap();
+        for tone in [
+            LedTone::Off,
+            LedTone::Alone,
+            LedTone::MeshNoNet,
+            LedTone::ViaMesh,
+            LedTone::Egress,
+            LedTone::OverlaySick,
         ] {
-            if let LedAction::Drive(r) = classify(f) {
-                let m = mix_ap3000(r.tone);
-                let blue_only = m.blue && !m.red && !m.amber;
-                assert!(!blue_only, "solid blue leaked: {r:?}");
-            }
+            assert_ne!(m.lit(tone), &["blue:wlan-5ghz"]);
         }
     }
 
     #[test]
     fn m3000_internet_is_white_for_via_mesh_and_egress() {
         assert_eq!(
-            mix_m3000(tone(facts(|f| {
-                f.default_via_mesh = true;
-                f.mesh_estab = true;
-            }))),
-            RedWhiteMix::INTERNET
+            lit(
+                "m3000",
+                facts(|f| {
+                    f.default_via_mesh = true;
+                    f.mesh_estab = true;
+                })
+            ),
+            ["white:wan-online"].as_slice()
         );
         assert_eq!(
-            mix_m3000(tone(facts(|f| {
-                f.local_egress = true;
-                f.mesh_estab = true;
-            }))),
-            RedWhiteMix::INTERNET
+            lit(
+                "m3000",
+                facts(|f| {
+                    f.local_egress = true;
+                    f.mesh_estab = true;
+                })
+            ),
+            ["white:wan-online"].as_slice()
         );
-        assert!(!RedWhiteMix::INTERNET.red);
-        assert!(RedWhiteMix::INTERNET.white);
+        assert_eq!(
+            lit("m3000", facts(|f| f.mesh_estab = true)),
+            ["red:wan-online", "white:wan-online"].as_slice()
+        );
+        assert_eq!(lit("m3000", facts(|_| {})), ["red:wan-online"].as_slice());
     }
 
     #[test]
-    fn m3000_mesh_no_internet_is_pink() {
-        assert_eq!(
-            mix_m3000(tone(facts(|f| f.mesh_estab = true))),
-            RedWhiteMix::MESH_NO_NET
-        );
-        assert!(RedWhiteMix::MESH_NO_NET.red && RedWhiteMix::MESH_NO_NET.white);
+    fn board_name_wins_over_sysfs() {
+        let m = detect_hardware(Some("cudy,m3000-v1"), exists(&["amber:status"])).unwrap();
+        assert_eq!(m.id, "m3000");
     }
 
     #[test]
-    fn m3000_alone_is_red_only() {
-        assert_eq!(mix_m3000(tone(facts(|_| {}))), RedWhiteMix::ALONE);
-        assert!(!RedWhiteMix::ALONE.white);
+    fn probe_fallback_order() {
+        assert_eq!(
+            detect_hardware(None, exists(&["amber:status"])).unwrap().id,
+            "ap3000-indoor"
+        );
+        assert_eq!(
+            detect_hardware(None, exists(&["red:wan-online", "white:wan-online"]))
+                .unwrap()
+                .id,
+            "m3000"
+        );
+        assert_eq!(
+            detect_hardware(None, exists(&["red:power", "green:status"]))
+                .unwrap()
+                .id,
+            "ap3000-outdoor"
+        );
+        assert_eq!(
+            detect_hardware(None, exists(&["red:power", "white:status"]))
+                .unwrap()
+                .id,
+            "tr3000"
+        );
+        assert_eq!(
+            detect_hardware(None, exists(&["red:power", "green:status", "white:status"]))
+                .unwrap()
+                .id,
+            "ap3000-outdoor"
+        );
+        assert_eq!(
+            detect_hardware(
+                None,
+                exists(&["white:status", "white:wan-online", "white:wlan-5ghz"])
+            )
+            .unwrap()
+            .id,
+            "wr3000s"
+        );
+        assert!(detect_hardware(None, exists(&["white:status", "white:wan-online"])).is_none());
+        assert!(detect_hardware(None, exists(&[])).is_none());
     }
 
     #[test]
-    fn detect_sku_prefers_ap3000() {
-        assert_eq!(detect_sku(|n| n == LED_AMBER), Some(LedSku::Ap3000));
+    fn outdoor_internet_is_green() {
         assert_eq!(
-            detect_sku(|n| n == LED_AMBER || n == LED_M3000_RED || n == LED_M3000_WHITE),
-            Some(LedSku::Ap3000)
+            lit("ap3000-outdoor", facts(|f| f.default_via_mesh = true)),
+            ["green:status"].as_slice()
         );
         assert_eq!(
-            detect_sku(|n| n == LED_M3000_RED || n == LED_M3000_WHITE),
-            Some(LedSku::M3000)
-        );
-        assert_eq!(detect_sku(|n| n == LED_M3000_RED), None);
-        assert_eq!(detect_sku(|_| false), None);
-    }
-
-    #[test]
-    fn detect_sku_outdoor_beats_tr3000() {
-        assert_eq!(
-            detect_sku(|n| n == LED_RED_POWER || n == LED_OUTDOOR_GREEN),
-            Some(LedSku::Ap3000Outdoor)
+            lit("ap3000-outdoor", facts(|f| f.local_egress = true)),
+            ["green:status"].as_slice()
         );
         assert_eq!(
-            detect_sku(|n| n == LED_RED_POWER || n == LED_TR3000_WHITE),
-            Some(LedSku::Tr3000)
+            lit("ap3000-outdoor", facts(|f| f.mesh_estab = true)),
+            ["red:power", "green:status"].as_slice()
         );
-        assert_eq!(
-            detect_sku(|n| n == LED_RED_POWER || n == LED_OUTDOOR_GREEN || n == LED_TR3000_WHITE),
-            Some(LedSku::Ap3000Outdoor)
-        );
-    }
-
-    #[test]
-    fn detect_sku_wr3000s() {
-        assert_eq!(
-            detect_sku(|n| {
-                n == LED_WR3000S_STATUS || n == LED_WR3000S_WAN || n == LED_WR3000S_WLAN5
-            }),
-            Some(LedSku::Wr3000s)
-        );
-        assert_eq!(
-            detect_sku(|n| n == LED_WR3000S_STATUS || n == LED_WR3000S_WAN),
-            None
-        );
-    }
-
-    #[test]
-    fn outdoor_internet_is_green_for_via_mesh_and_egress() {
-        assert_eq!(
-            mix_outdoor(tone(facts(|f| {
-                f.default_via_mesh = true;
-                f.mesh_estab = true;
-            }))),
-            RedGreenMix::INTERNET
-        );
-        assert_eq!(
-            mix_outdoor(tone(facts(|f| f.local_egress = true))),
-            RedGreenMix::INTERNET
-        );
-        assert_eq!(
-            mix_outdoor(tone(facts(|f| f.mesh_estab = true))),
-            RedGreenMix::MESH_NO_NET
-        );
-        assert_eq!(mix_outdoor(tone(facts(|_| {}))), RedGreenMix::ALONE);
     }
 
     #[test]
     fn wr3000s_which_lamp_and_not_wps() {
-        assert_eq!(mix_wr3000s(tone(facts(|_| {}))), Wr3000sMix::ALONE);
+        let m = hardware("wr3000s").unwrap();
+        assert_eq!(m.lit(LedTone::Alone), &["white:status"]);
         assert_eq!(
-            mix_wr3000s(tone(facts(|f| f.mesh_estab = true))),
-            Wr3000sMix::MESH_NO_NET
+            m.lit(LedTone::MeshNoNet),
+            &["white:status", "white:wlan-5ghz"]
         );
-        assert_eq!(
-            mix_wr3000s(tone(facts(|f| {
-                f.default_via_mesh = true;
-                f.mesh_estab = true;
-            }))),
-            Wr3000sMix::INTERNET
-        );
-        assert_eq!(
-            mix_wr3000s(tone(facts(|f| f.local_egress = true))),
-            Wr3000sMix::INTERNET
-        );
-        assert!(Wr3000sMix::INTERNET.wan_online && !Wr3000sMix::INTERNET.status);
-        assert!(Wr3000sMix::MESH_NO_NET.status && Wr3000sMix::MESH_NO_NET.wlan_5ghz);
-        assert!(!Wr3000sMix::MESH_NO_NET.wan_online);
+        assert_eq!(m.lit(LedTone::ViaMesh), &["white:wan-online"]);
+        assert_eq!(m.lit(LedTone::Egress), &["white:wan-online"]);
+        assert!(!m.drive.iter().any(|n| *n == "white:wps"));
+        assert!(!m.silence.iter().any(|n| *n == "white:wps"));
     }
 
     #[test]
-    fn tr3000_shares_m3000_mix() {
+    fn tr3000_shares_m3000_language_on_its_lamps() {
         assert_eq!(
-            mix_m3000(tone(facts(|f| f.mesh_estab = true))),
-            RedWhiteMix::MESH_NO_NET
+            lit("tr3000", facts(|f| f.mesh_estab = true)),
+            ["red:power", "white:status"].as_slice()
         );
         assert_eq!(
-            mix_m3000(tone(facts(|f| f.local_egress = true))),
-            RedWhiteMix::INTERNET
+            lit("tr3000", facts(|f| f.local_egress = true)),
+            ["white:status"].as_slice()
         );
     }
 
@@ -695,30 +545,30 @@ Station 82:af:ca:e7:bd:01 (on phy1-mesh0)
 
     #[test]
     fn flash_phase_goes_dark() {
-        assert_eq!(
-            mix_for_phase(LedMix::EGRESS, Some(200), true),
-            LedMix::EGRESS
-        );
-        assert_eq!(mix_for_phase(LedMix::EGRESS, Some(200), false), LedMix::OFF);
-        assert_eq!(
-            mix_for_phase(LedMix::VIA_MESH, None, false),
-            LedMix::VIA_MESH
-        );
-        assert_eq!(
-            mix_red_white_for_phase(RedWhiteMix::INTERNET, Some(200), false),
-            RedWhiteMix::OFF
-        );
-        assert_eq!(
-            mix_red_white_for_phase(RedWhiteMix::MESH_NO_NET, None, false),
-            RedWhiteMix::MESH_NO_NET
-        );
-        assert_eq!(
-            mix_red_green_for_phase(RedGreenMix::INTERNET, Some(200), false),
-            RedGreenMix::OFF
-        );
-        assert_eq!(
-            mix_wr3000s_for_phase(Wr3000sMix::MESH_NO_NET, Some(200), false),
-            Wr3000sMix::OFF
-        );
+        let m = hardware("m3000").unwrap();
+        assert!(m.lamp_on(LedTone::Egress, "white:wan-online", true));
+        assert!(!m.lamp_on(LedTone::Egress, "white:wan-online", false));
+        assert!(phase_on(None, false));
+        assert!(!phase_on(Some(200), false));
+    }
+
+    #[test]
+    fn adding_a_box_is_a_row() {
+        assert_eq!(HARDWARE.len(), 5);
+        for m in HARDWARE {
+            for lamp in m
+                .alone
+                .iter()
+                .chain(m.mesh_no_net)
+                .chain(m.via_mesh)
+                .chain(m.egress)
+            {
+                assert!(
+                    m.drive.iter().any(|d| d == lamp),
+                    "{} tone lamp {lamp} not in drive",
+                    m.id
+                );
+            }
+        }
     }
 }
