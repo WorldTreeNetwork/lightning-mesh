@@ -36,18 +36,25 @@ add a second, incompatible signing scheme.
   `path: "/"`. Directory omits `txt.path` when the stored path is `/`.
 - **Directory projection:** `app` becomes `txt.app = "v1"`, plus `txt.path`
   when the path isn't `/`.
-- **Control API:** `txt.app` and `txt.path` are validated by the same function.
-  The CLI `--app` and `--app-path` flags set them.
+- **Control API:** the marker is present iff TXT `app` is present. Then
+  `app` must be `v1` byte-exact and `path`, if present, is validated by
+  the shared function. Without `app`, `path` and all other TXT keys are
+  opaque (plain `publish --txt path=print` still works). The CLI
+  `--app` and `--app-path` flags set the marker; `--app-path` alone is
+  invalid.
 
 ## Validation (one function, shared vectors)
 
 It's the same rules as `contract.ts` `appPath`/`isMiniApp` (no extra
-publish-time length ceiling — living consumer has none):
-- `v == 1`
+publish-time length ceiling — living consumer has none), and they
+apply **only when the marker is present** (`app` object on a name
+claim, or TXT `app` on the control API):
+- `v == 1` / TXT `app=v1` byte-exact
 - omitted `path` canonicalizes to `/`
 - `path` starts with `/`
 - `path` contains no `//`, `\`, scheme, or control characters
 - CLI `--app-path` is invalid without `--app`
+- without `app`, do not run path validation
 
 It's implemented once in `mjolnir-mesh` as a library function, used by
 mjolnir-hello and meshd, and tested against JSON fixtures shared with

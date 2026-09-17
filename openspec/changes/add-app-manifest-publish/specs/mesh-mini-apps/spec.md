@@ -6,8 +6,12 @@ The system SHALL accept the mini-app marker (version `1` and an optional entry
 path) on every path that publishes a name. That covers key-owned name claims
 (`POST /api/name-claim`, as an optional `app` object outside the signed message)
 and the node control API (`POST /v0/publish` and the `mjolnir-meshd publish`
-command, as TXT `app` and `path`). All paths SHALL validate the marker with one
-shared rule set, the same as the living `App marker on service records`
+command). On the control API the marker is present if and only if the TXT
+key `app` is present. When `app` is absent, `path` and every other TXT key
+SHALL be opaque and untouched (plain services may publish `--txt path=print`
+today). When `app` is present it SHALL be `v1` byte-exact, and `path`, if
+present, SHALL pass the shared rule set. All paths SHALL validate the marker
+with one shared rule set, the same as the living `App marker on service records`
 requirement and `contract.ts` `appPath`:
 - version equals `1`
 - the path begins with `/`
@@ -51,6 +55,13 @@ still re-validate the marker.
 - GIVEN an app holding a valid key-owned lease
 - WHEN it claims with `"app":{"v":1}` and no `path` field
 - THEN the request is accepted and the directory lists TXT `app=v1` without `path=`
+
+#### Scenario: Plain service with path TXT and no app still publishes
+
+- GIVEN an operator on a router
+- WHEN they run `mjolnir-meshd publish printer --port 631 --txt path=print` with no `app` TXT key
+- THEN the publish succeeds and the directory lists `printer` with TXT `path=print` and no `app`
+- AND the service is not a mini-app
 
 #### Scenario: --app-path requires --app
 
