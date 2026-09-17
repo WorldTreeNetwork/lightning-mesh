@@ -3,7 +3,7 @@
 Authoritative owed work is bead `mjolnir-mesh-ncy.2`.
 
 - [x] Human activation (banner to ACTIVE BUILD) — Duke 2026-09-15
-- [ ] Advise by an independent non-Claude reader; accept before act
+- [x] Advise by an independent non-Claude reader; accept before act — Sol r1 send-back, Fable r2 send-back, Sol r3 **accept** (`reviews/2026-09-17-advise-r3.md`, READER sol-arch-review)
 - [x] Advise send-back: drop the 256-byte path ceiling so publish matches living `appPath` / `contract.ts` (pinned 2026-09-16)
 - [x] Advise send-back: omitted `app.path` is `/`; `{"app":{"v":1}}` accepted; `--app-path` requires `--app` (pinned 2026-09-16; vectors on implement boxes)
 - [x] Advise r2 send-back (Fable 2026-09-16): marker present iff TXT `app`; `path` validated only under `app`; plain `--txt path=print` still publishes (pinned 2026-09-17)

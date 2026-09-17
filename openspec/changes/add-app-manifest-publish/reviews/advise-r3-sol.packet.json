@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-app-manifest-publish-advise-r3-sol",
+  "node_id": "add-app-manifest-publish-advise-r3-sol",
+  "capability": "mesh-mini-apps",
+  "change_id": "add-app-manifest-publish",
+  "goal": "Re-advise add-app-manifest-publish after Fable r2 send-back amendment. You are Sol, other-family reader (Fable spawn infra-red: OAuth expired). Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-app-manifest-publish/reviews/2026-09-17-advise-r3.md (that exact name).\n\nr2 claimed answered: control API marker present iff TXT app is present; without app, path and other TXT are opaque; scenario plain --txt path=print with no app still publishes; design Validation and publish_service task reworded so path is validated only under app.\n\nBLIND PASS from Why + living mesh-mini-apps spec + contract.ts appPath, then open design/tasks/delta and r1/r2.\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** sol-arch-review\n> **SPAWN:** <this spawn dir>\nIf send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": ["Implement", "Fold", "Flip the banner"],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "Plain --txt path=print without app still publishes; path is validated only when app is present; same rules as contract.ts appPath.",
+    "if_false": "Publish rejects a plain service path TXT, or validates path without app."
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-app-manifest-publish/reviews/",
+      "openspec/changes/add-app-manifest-publish/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-sol-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
