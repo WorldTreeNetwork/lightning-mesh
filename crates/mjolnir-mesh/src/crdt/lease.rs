@@ -56,29 +56,15 @@ pub fn gateway_v4(ip: Ipv4Addr) -> Option<Ipv4Addr> {
     }
 }
 
-/// Merge one MAC's lease. Same IP → last-writer-wins (router_id/expiry).
-/// Different IP → first-writer-wins (the first allocation is the roam IP).
+/// Merge one MAC's lease. Last-writer-wins on HLC: the latest ACK is the
+/// address other APs must OFFER (keep-current, not first-ever).
 pub fn merge_lease(local: Option<&LeaseEntry>, incoming: &LeaseEntry) -> MergeResult<LeaseEntry> {
     match local {
         None => MergeResult::Inserted,
-        Some(existing) => {
-            if existing.ip == incoming.ip {
-                match incoming.hlc.cmp(&existing.hlc) {
-                    std::cmp::Ordering::Greater => MergeResult::Updated,
-                    _ => MergeResult::Unchanged,
-                }
-            } else {
-                let (winner, loser) = if incoming.hlc < existing.hlc {
-                    (incoming, existing)
-                } else {
-                    (existing, incoming)
-                };
-                MergeResult::Conflict {
-                    winner: winner.clone(),
-                    loser: loser.clone(),
-                }
-            }
-        }
+        Some(existing) => match incoming.hlc.cmp(&existing.hlc) {
+            std::cmp::Ordering::Greater => MergeResult::Updated,
+            _ => MergeResult::Unchanged,
+        },
     }
 }
 
@@ -90,10 +76,7 @@ pub fn apply_lease(book: &mut LeaseBook, incoming: LeaseEntry) -> MergeResult<Le
         MergeResult::Inserted | MergeResult::Updated => {
             book.insert(key, incoming);
         }
-        MergeResult::Conflict { winner, .. } => {
-            book.insert(key, winner.clone());
-        }
-        MergeResult::Unchanged => {}
+        MergeResult::Unchanged | MergeResult::Conflict { .. } => {}
     }
     result
 }
@@ -150,6 +133,21 @@ pub fn render_roam_conf(book: &LeaseBook) -> String {
     }
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// Drop leases whose `expiry` is at or before `now_unix`. Returns the removed
+/// keys so the caller can gossip `LeaseRelease`.
+pub fn reap_expired(book: &mut LeaseBook, now_unix: u64) -> Vec<LeaseEntry> {
+    let mut gone = Vec::new();
+    book.retain(|_, e| {
+        if e.expiry <= now_unix {
+            gone.push(e.clone());
+            false
+        } else {
+            true
+        }
+    });
+    gone
 }
 
 #[cfg(test)]
@@ -216,24 +214,46 @@ mod tests {
     }
 
     #[test]
-    fn first_ip_for_a_mac_wins_on_roam_race() {
+    fn latest_ack_wins_even_when_the_ip_changed() {
         let mac = [0xde, 0x45, 0x53, 0xf5, 0xf7, 0x74];
-        let home = lease(mac, "10.42.203.146", "indoor-c", 100);
-        let raced = lease(mac, "10.42.242.150", "wr3000s-a", 200);
+        let home = lease(mac, "10.42.242.243", "wr3000s-a", 100);
+        let current = lease(mac, "10.42.203.246", "indoor-c", 200);
         let mut book = LeaseBook::new();
         assert!(matches!(apply_lease(&mut book, home), MergeResult::Inserted));
-        let got = apply_lease(&mut book, raced);
-        match got {
-            MergeResult::Conflict { winner, loser } => {
-                assert_eq!(winner.ip, "10.42.203.146".parse::<IpAddr>().unwrap());
-                assert_eq!(loser.ip, "10.42.242.150".parse::<IpAddr>().unwrap());
-            }
-            other => panic!("expected conflict, got {other:?}"),
-        }
+        assert!(matches!(
+            apply_lease(&mut book, current),
+            MergeResult::Updated
+        ));
         assert_eq!(
             book[&mac_key(&mac)].ip,
-            "10.42.203.146".parse::<IpAddr>().unwrap()
+            "10.42.203.246".parse::<IpAddr>().unwrap()
         );
+    }
+
+    #[test]
+    fn stale_ack_does_not_roll_the_ip_back() {
+        let mac = [0xde, 0x45, 0x53, 0xf5, 0xf7, 0x74];
+        let mut book = LeaseBook::new();
+        apply_lease(&mut book, lease(mac, "10.42.203.246", "indoor-c", 200));
+        apply_lease(&mut book, lease(mac, "10.42.242.243", "wr3000s-a", 100));
+        assert_eq!(
+            book[&mac_key(&mac)].ip,
+            "10.42.203.246".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn reap_expired_drops_only_old_rows() {
+        let mut book = LeaseBook::new();
+        let mut live = lease([1u8; 6], "10.42.1.10", "a", 1);
+        live.expiry = 200;
+        let mut dead = lease([2u8; 6], "10.42.1.11", "a", 1);
+        dead.expiry = 50;
+        apply_lease(&mut book, live);
+        apply_lease(&mut book, dead);
+        let gone = reap_expired(&mut book, 100);
+        assert_eq!(gone.len(), 1);
+        assert_eq!(book.len(), 1);
     }
 
     #[test]

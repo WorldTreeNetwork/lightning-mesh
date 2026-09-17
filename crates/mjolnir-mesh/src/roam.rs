@@ -286,10 +286,10 @@ pub struct IslandClaim<'a> {
 
 /// How this node should sit on a household client island.
 ///
-/// Same function on every node — no `ROLE=core`. The claim owner (first
-/// writer) vends DHCP and holds `.1`; everyone else is a unique host in the
-/// same `/24` and still runs meshd. `stitch_l2` means put the 802.11s
-/// mesh-point in the client bridge so roam is one broadcast domain.
+/// Same function on every node — no `ROLE=core`. **Not the live DHCP path.**
+/// Live roam DHCP is LWW [`crate::crdt::lease::LeaseEntry`] (wvg.4): every
+/// node still runs dnsmasq. `run_dhcp` on the oldest claim is an election;
+/// do not wire it. `stitch_l2` is the later shared-L2 option, also unwired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IslandJoin {
     pub subnet: Ipv4Net,

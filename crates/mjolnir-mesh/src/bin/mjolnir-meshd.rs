@@ -47,8 +47,8 @@ use mjolnir_mesh::{
     ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
     apply_coordinate, apply_lease, apply_leased_name, apply_service_publish_v2_tracking_loss,
     apply_service_unpublish_v2, device_service_key, merge_node_name, merge_peer_addr,
-    merge_service, merge_subnet_claim, merge_user, name_owned_by, parse_host_mac, parse_mac,
-    project_coordinate, publish_service_v2, render_hostsfile, render_roam_conf,
+    merge_service, merge_subnet_claim, merge_user, name_owned_by, observe_hlc, parse_host_mac,
+    parse_mac, project_coordinate, publish_service_v2, reap_expired, render_roam_conf, tick_hlc,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -1255,6 +1255,9 @@ async fn run_mesh(
                                 msg,
                                 GossipMessage::LeaseUpdate(_) | GossipMessage::LeaseRelease { .. }
                             ) {
+                                if let GossipMessage::LeaseUpdate(entry) = &msg {
+                                    observe_hlc(&entry.hlc);
+                                }
                                 let changed = {
                                     let mut b = leases.lock().expect("lease book poisoned");
                                     apply_lease_message(&mut b, &msg)
@@ -1626,8 +1629,9 @@ async fn run_mesh(
                     client_iface.clone(),
                 ));
 
-                // CRDT DHCP roam (wvg.4): ingest dnsmasq spool, gossip MAC→IP,
-                // project dhcp-hostsfile so a foreign AP OFFERs the first lease.
+                // CRDT DHCP roam (wvg.4): ingest dnsmasq spool, gossip MAC→IP
+                // LWW, project one dnsmasq conf so a foreign AP OFFERs the
+                // latest ACK.
                 {
                     let sync = sync.clone();
                     let leases = lease_book.clone();
@@ -1949,17 +1953,10 @@ fn set_system_hostname(name: &str) {
     }
 }
 
-/// Build an HLC stamped with the current wall clock for `node_id`.
+/// Next HLC for `node_id`. Uses the process [`tick_hlc`] clock so two stamps
+/// in the same millisecond get distinct counters (LWW can see the second write).
 fn now_hlc(node_id: &str) -> HLC {
-    let wall_clock = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    HLC {
-        wall_clock,
-        counter: 0,
-        node_id: node_id.to_string(),
-    }
+    tick_hlc(node_id)
 }
 
 /// Apply an inbound subnet CRDT message to the claim store. Returns the /24
@@ -3832,10 +3829,10 @@ async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
 
 const DHCP_ROAM_INTERVAL: Duration = Duration::from_secs(2);
 const DHCP_EVENT_SPOOL: &str = "/tmp/mjolnir/dhcp-events";
-const DHCP_HOSTSFILE: &str = "/tmp/mjolnir/reservations";
 const DHCP_SCRIPT: &str = "/usr/libexec/mjolnir-dhcp-event";
+const DHCP_ROAM_CONF_NAME: &str = "mjolnir-roam.conf";
 
-/// Ingest dnsmasq spool + gossip MAC→IP + project dhcp-hostsfile (wvg.4).
+/// Ingest dnsmasq spool + gossip MAC→IP (LWW) + one dnsmasq conf-dir file.
 async fn dhcp_roam_loop<T: GossipTransport>(
     sync: Arc<GossipSync<T>>,
     lease_book: Arc<Mutex<LeaseBook>>,
@@ -3843,11 +3840,15 @@ async fn dhcp_roam_loop<T: GossipTransport>(
     self_id: String,
 ) {
     reconcile_dhcp_roam_uci().await;
-    let mut last_hosts = String::new();
+    let mut last_conf = String::new();
     let mut ticks: u8 = 0;
     let mut ticker = tokio::time::interval(DHCP_ROAM_INTERVAL);
     loop {
         ticker.tick().await;
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let ingested = ingest_dhcp_event_spool(&lease_book, &self_id);
         for entry in &ingested {
             if let Err(e) = sync
@@ -3857,11 +3858,29 @@ async fn dhcp_roam_loop<T: GossipTransport>(
                 warn!(mac = %mjolnir_mesh::mac_key(&entry.mac), "dhcp roam: gossip publish failed: {e}");
             }
         }
+        let reaped = {
+            let mut book = lease_book.lock().expect("lease book poisoned");
+            reap_expired(&mut book, now_secs)
+        };
+        for entry in &reaped {
+            if let Err(e) = sync
+                .publish(GossipMessage::LeaseRelease {
+                    mac: entry.mac,
+                    hlc: now_hlc(&self_id),
+                })
+                .await
+            {
+                warn!("dhcp roam: lease release publish failed: {e}");
+            }
+        }
         ticks = ticks.saturating_add(1);
         if ticks >= 10 {
             ticks = 0;
             let snapshot = lease_book.lock().expect("lease book poisoned").clone();
             for entry in snapshot.values() {
+                if entry.expiry <= now_secs {
+                    continue;
+                }
                 if let Err(e) = sync
                     .publish(GossipMessage::LeaseUpdate(entry.clone()))
                     .await
@@ -3871,13 +3890,13 @@ async fn dhcp_roam_loop<T: GossipTransport>(
             }
         }
         let snapshot = lease_book.lock().expect("lease book poisoned").clone();
-        if !ingested.is_empty() {
+        if !ingested.is_empty() || !reaped.is_empty() {
             persist_lease_book(&snapshot, &lease_book_file);
         }
-        let hosts = render_hostsfile(&snapshot);
-        if hosts != last_hosts {
-            project_dhcp_hosts(&snapshot, &hosts);
-            last_hosts = hosts;
+        let conf = render_roam_conf(&snapshot);
+        if conf != last_conf {
+            project_dhcp_roam_conf(&conf);
+            last_conf = conf;
         }
     }
 }
@@ -3931,70 +3950,132 @@ fn ingest_dhcp_event_spool(
     applied
 }
 
-fn project_dhcp_hosts(book: &LeaseBook, hosts: &str) {
-    let dir = Path::new("/tmp/mjolnir");
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        warn!("dhcp roam: mkdir {dir:?}: {e}");
+fn project_dhcp_roam_conf(conf: &str) {
+    let Some(dir) = live_dnsmasq_confdir() else {
+        warn!("dhcp roam: no dnsmasq conf-dir yet; will retry");
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        warn!(path = %dir.display(), "dhcp roam: mkdir conf-dir: {e}");
         return;
     }
-    let tmp = dir.join("reservations.tmp");
-    if let Err(e) = std::fs::write(&tmp, hosts.as_bytes()) {
-        warn!("dhcp roam: write hostsfile: {e}");
+    let dest = dir.join(DHCP_ROAM_CONF_NAME);
+    let tmp = dir.join(format!("{DHCP_ROAM_CONF_NAME}.tmp"));
+    if let Err(e) = std::fs::write(&tmp, conf.as_bytes()) {
+        warn!("dhcp roam: write conf: {e}");
         return;
     }
-    if let Err(e) = std::fs::rename(&tmp, DHCP_HOSTSFILE) {
-        warn!("dhcp roam: rename hostsfile: {e}");
+    if let Err(e) = std::fs::rename(&tmp, &dest) {
+        warn!("dhcp roam: rename conf: {e}");
         return;
     }
-    let conf = render_roam_conf(book);
-    for confdir in dnsmasq_conf_dirs() {
-        let _ = std::fs::create_dir_all(&confdir);
-        let dest = confdir.join("mjolnir-roam.conf");
-        let tmp = confdir.join("mjolnir-roam.conf.tmp");
-        if std::fs::write(&tmp, conf.as_bytes()).is_ok() {
-            let _ = std::fs::rename(&tmp, dest);
-        }
-    }
-    match std::process::Command::new("killall")
-        .args(["-HUP", "dnsmasq"])
-        .output()
-    {
-        Ok(o) if o.status.success() => {
-            info!(count = book.len(), "dhcp roam: projected hostsfile, HUP dnsmasq")
-        }
-        Ok(o) => warn!(
-            "dhcp roam: killall -HUP dnsmasq: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Err(e) => warn!("dhcp roam: could not HUP dnsmasq: {e}"),
+    match hup_dnsmasq() {
+        Ok(n) if n > 0 => info!(path = %dest.display(), pids = n, "dhcp roam: projected conf, HUP dnsmasq"),
+        Ok(_) => warn!("dhcp roam: wrote conf but found no dnsmasq pid file"),
+        Err(e) => warn!("dhcp roam: HUP dnsmasq: {e}"),
     }
 }
 
-fn dnsmasq_conf_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("/tmp/mjolnir/dnsmasq.d")];
-    if let Ok(rd) = std::fs::read_dir("/tmp") {
-        for e in rd.flatten() {
-            let name = e.file_name();
-            let s = name.to_string_lossy();
-            if s.starts_with("dnsmasq") && s.ends_with(".d") {
-                dirs.push(e.path());
+/// OpenWrt's generated `conf-dir=` from `/var/etc/dnsmasq.conf.*`. One dir only.
+fn live_dnsmasq_confdir() -> Option<PathBuf> {
+    let rd = std::fs::read_dir("/var/etc").ok()?;
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let name = path.file_name()?.to_string_lossy();
+        if !name.starts_with("dnsmasq.conf") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).ok()?;
+        for line in text.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("conf-dir=") else {
+                continue;
+            };
+            let dir = rest.split(',').next()?.trim();
+            if !dir.is_empty() {
+                return Some(PathBuf::from(dir));
             }
         }
     }
-    dirs
+    None
+}
+
+fn hup_dnsmasq() -> std::io::Result<usize> {
+    let mut n = 0usize;
+    let rd = match std::fs::read_dir("/var/run/dnsmasq") {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return hup_dnsmasq_pidfile(Path::new("/var/run/dnsmasq.pid"))
+        }
+        Err(e) => return Err(e),
+    };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        if path.extension().is_some_and(|ext| ext == "pid")
+            || path.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".pid"))
+        {
+            n += hup_dnsmasq_pidfile(&path)?;
+        }
+    }
+    Ok(n)
+}
+
+fn hup_dnsmasq_pidfile(path: &Path) -> std::io::Result<usize> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(0);
+    };
+    let pid = text.trim();
+    if pid.is_empty() {
+        return Ok(0);
+    }
+    match std::process::Command::new("kill")
+        .args(["-HUP", pid])
+        .output()
+    {
+        Ok(o) if o.status.success() => Ok(1),
+        Ok(o) => {
+            warn!(
+                pid,
+                "dhcp roam: kill -HUP: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            Ok(0)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 async fn reconcile_dhcp_roam_uci() {
     use tokio::process::Command;
+    let get = |opt: &str| {
+        Command::new("uci")
+            .args(["-q", "get", opt])
+            .output()
+    };
+    let script_now = get("dhcp.@dnsmasq[0].dhcpscript")
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let hosts_now = get("dhcp.@dnsmasq[0].dhcphostsfile")
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if script_now == DHCP_SCRIPT && hosts_now.is_empty() {
+        return;
+    }
     let script = format!(
         "uci set dhcp.@dnsmasq[0].dhcpscript='{DHCP_SCRIPT}'; \
-         uci set dhcp.@dnsmasq[0].dhcphostsfile='{DHCP_HOSTSFILE}'; \
+         uci -q delete dhcp.@dnsmasq[0].dhcphostsfile; \
          uci commit dhcp && /etc/init.d/dnsmasq reload"
     );
     let run = Command::new("sh").args(["-c", &script]).output();
     match tokio::time::timeout(Duration::from_secs(20), run).await {
         Ok(Ok(o)) if o.status.success() => {
-            info!("dhcp roam: dnsmasq hostsfile + dhcp-script UCI set")
+            info!("dhcp roam: dnsmasq dhcp-script UCI set (hostsfile cleared)")
         }
         Ok(Ok(o)) => warn!(
             "dhcp roam: UCI reconcile failed: {}",
