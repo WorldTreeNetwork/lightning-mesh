@@ -2,11 +2,20 @@
 
 > Step-by-step instructions for joining a Lightning Mesh network: a decentralized router mesh (OpenWrt routers, 802.11s backhaul, babel routing, CRDT coordination, iroh transport) with a local front desk at http://hello.mesh. Written for people and agents from one Markdown source. Every page has YAML frontmatter (id, path, status: built|partial|coming-soon, requires, next_step, verified_against) and every step is Do / Expect / If not. Only `built` and `partial` pages describe deployed behavior. Paths below are relative to this file (docs/join/ in https://github.com/WorldTreeNetwork/lightning-mesh).
 
-Verified against commit 503cd17 (2026-09-13).
+Verified against commit 723b308 (2026-09-19).
 
 ## Start
 
 - [Overview](index.md): choose a path; what works today vs not yet
+
+## New house, pre-flashed router (read in order)
+
+- [Unbox](house/01-unbox.md): power; optional WAN ethernet; join factory `⚡` or `Lightning Mesh`; ignore `mjolnir-mesh` backhaul SSID
+- [First hour](house/02-first-hour.md): confirm `10.42.x`; http://hello.mesh; identity optional; identity ≠ admin
+- [How it works](house/03-how-it-works.md): client AP vs 802.11s backhaul; `10.42` / `10.254` / `192.168.1.1`; directory as service mesh; gaps (roles, private SSID, roam)
+- [Administer](house/04-administer.md): overlay SSH; WPS WAN window; Lightning Admin = client SSID only; uci name + gateway auto/never
+- [Share a service](house/05-services.md): hello.mesh Services; `mjolnir-meshd publish` on-router
+- [Add another router](house/06-add-router.md): matching wireless.env + manual peer ids; or full flash path
 
 ## Join with a phone or laptop (read in order)
 

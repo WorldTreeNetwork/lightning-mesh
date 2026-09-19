@@ -8,8 +8,8 @@ audience: [person, operator, developer, agent]
 status: built
 time: reference
 requires: []
-next_step: person.connect
-verified_against: 3b862d5 (2026-09-14)
+next_step: house.unbox
+verified_against: 723b308 (2026-09-19)
 ---
 
 # Join Lightning Mesh
@@ -20,10 +20,20 @@ doesn't. Pick how you're joining:
 
 | I want to… | Start here | Time |
 |---|---|---|
+| I just got a pre-flashed router | [Unbox a pre-flashed router](house/01-unbox.md) | 10 min |
 | Use the mesh from my phone or laptop | [Connect to the Wi-Fi](person/01-connect.md) | 10 min |
-| Add my own router to a mesh | [Choose a router and flash OpenWrt](node/01-hardware-and-flash.md) | 1–2 h |
+| Flash my own hardware | [Choose a router and flash OpenWrt](node/01-hardware-and-flash.md) | 1–2 h |
 | Share an app or device on the mesh | [Publish a service](publish/01-publish-a-service.md) | 10 min |
 | Help build it | [Contribute](contribute.md) | |
+
+## The path for a new house (pre-flashed box)
+
+1. [Unbox](house/01-unbox.md): power, optional WAN, join the client Wi-Fi.
+2. [First hour](house/02-first-hour.md): `http://hello.mesh`, optional identity.
+3. [How it works](house/03-how-it-works.md): client Wi-Fi vs backhaul, addresses, directory.
+4. [Administer](house/04-administer.md): names, internet sharing, SSH, Lightning Admin.
+5. [Share a service](house/05-services.md): `.mesh` names on the house network.
+6. [Add another router](house/06-add-router.md): second box, or flash your own.
 
 ## The path for a new person
 

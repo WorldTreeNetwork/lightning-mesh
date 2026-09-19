@@ -64,7 +64,7 @@ Every page has YAML frontmatter:
 | Field | Meaning |
 |---|---|
 | `id` | Stable page id, used in `next_step` and `requires` |
-| `path` | `person`, `node`, `publish` or `contribute` |
+| `path` | `house`, `person`, `node`, `publish` or `contribute` |
 | `status` | `built`, `partial` or `coming-soon`, matching what's deployed |
 | `requires` / `next_step` | Reading order for people and agents |
 | `verified_against` | Commit the steps were checked against |
