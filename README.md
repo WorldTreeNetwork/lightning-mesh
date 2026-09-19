@@ -94,7 +94,7 @@ and AI agents all coexist on the same fabric.
 - [Join Lightning Mesh](docs/join/index.md): step-by-step guide for a new
   person (Wi-Fi, hello.mesh, IdentiKey), adding a router, and publishing a
   service. Agent index: [`docs/join/llms.txt`](docs/join/llms.txt). Build
-  the website with `bunx vitepress build docs/join`.
+  the website with `cd docs-web && bun run build` (SvelteKit static SSG).
 
 ### Vision
 - [Philosophical outcomes of the architecture](docs/vision/philosophical-outcomes.md)

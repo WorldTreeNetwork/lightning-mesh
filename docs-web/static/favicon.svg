@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>hello.mesh</title>
+  <g fill="none" stroke="#3b82f6" stroke-width="3" stroke-linecap="round">
+    <path d="M16 6 L7 20"/>
+    <path d="M16 6 L25 20"/>
+    <path d="M7 20 L25 20"/>
+    <path d="M7 20 L16 26"/>
+    <path d="M25 20 L16 26"/>
+  </g>
+  <g>
+    <circle cx="7" cy="20" r="4" fill="#2563eb" stroke="#fff" stroke-width="1.25"/>
+    <circle cx="25" cy="20" r="4" fill="#2563eb" stroke="#fff" stroke-width="1.25"/>
+    <circle cx="16" cy="26" r="4" fill="#2563eb" stroke="#fff" stroke-width="1.25"/>
+    <circle cx="16" cy="6" r="4.6" fill="#f59e0b" stroke="#fff" stroke-width="1.25"/>
+  </g>
+</svg>

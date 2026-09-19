@@ -68,4 +68,4 @@ planned.
   - **If not**: the diagnosis
 - Treat `status: coming-soon` pages as design, not as working features.
 
-To build this guide as a website, run `bunx vitepress build docs/join`.
+To build this guide as a website, run `cd docs-web && bun run build`.

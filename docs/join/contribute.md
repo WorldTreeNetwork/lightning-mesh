@@ -71,4 +71,4 @@ Every page has YAML frontmatter:
 
 Steps use the same shape everywhere: **Do**, **Expect**, **If not**.
 When behaviour changes, update the step and `verified_against` in the same
-commit. Preview the human site with `bunx vitepress dev docs/join`.
+commit. Preview the human site with `cd docs-web && bun run dev`.
