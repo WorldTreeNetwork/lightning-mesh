@@ -14,3 +14,21 @@ bun run preview
 Join pages (`docs/join/`) keep YAML frontmatter (`id`, `status`, `next_step`).
 Relative `.md` links are rewritten to site paths. Archive and sprint notes
 are omitted from the nav.
+
+## Live site (IdentiKey Sites)
+
+Public URL: [https://lightning.worldtree.network/](https://lightning.worldtree.network/)
+
+This is **Sites**, not `mj deploy`. Build locally, upload `build/`. The
+signing key is `~/.config/mjolnir/identikey.json` (do not commit it).
+
+```sh
+cd docs-web
+./scripts/publish.sh
+```
+
+| | |
+|---|---|
+| Site name | `lightning-mesh` |
+| IdentiKey fingerprint | `7PfGe1Dsx176UjgvTSaQd9Bc6hXBiCaJrNz3Tcd2noWL` |
+| Domain | `lightning.worldtree.network` (A → `45.76.77.97`, DNS-only) |

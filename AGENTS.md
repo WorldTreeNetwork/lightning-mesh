@@ -120,6 +120,14 @@ ERRAND='ssh -o BatchMode=yes -o ConnectTimeout=5 root@$GW logread | tail -40' \
 (`trap` EXIT/INT/TERM). `GATEWAY_BLACKHOLE` = lease but `.1` silent (dual
 `192.168.1.1/24` on `br-lan`).
 
+## Docs site (IdentiKey Sites)
+
+Public: https://lightning.worldtree.network/ — static SSG from `docs-web/`,
+served by Mjolnir Sites (no VM). Publish with `docs-web/scripts/publish.sh`.
+Keypair `~/.config/mjolnir/identikey.json`, fingerprint
+`7PfGe1Dsx176UjgvTSaQd9Bc6hXBiCaJrNz3Tcd2noWL`, site name `lightning-mesh`.
+Not `mj deploy`.
+
 ## Lightning Admin Windows build (morphist-win11)
 
 Recipe: [`admin/scripts/windows-build/README.md`](admin/scripts/windows-build/README.md).

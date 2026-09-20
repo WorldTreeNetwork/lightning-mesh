@@ -95,6 +95,8 @@ and AI agents all coexist on the same fabric.
   person (Wi-Fi, hello.mesh, IdentiKey), adding a router, and publishing a
   service. Agent index: [`docs/join/llms.txt`](docs/join/llms.txt). Build
   the website with `cd docs-web && bun run build` (SvelteKit static SSG).
+  Live: [https://lightning.worldtree.network/](https://lightning.worldtree.network/)
+  (`docs-web/scripts/publish.sh` → IdentiKey Sites).
 
 ### Vision
 - [Philosophical outcomes of the architecture](docs/vision/philosophical-outcomes.md)

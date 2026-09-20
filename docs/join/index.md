@@ -78,4 +78,5 @@ planned.
   - **If not**: the diagnosis
 - Treat `status: coming-soon` pages as design, not as working features.
 
-To build this guide as a website, run `cd docs-web && bun run build`.
+The human site is [https://lightning.worldtree.network/](https://lightning.worldtree.network/).
+To rebuild it, run `cd docs-web && bun run build`. To publish, `docs-web/scripts/publish.sh`.
