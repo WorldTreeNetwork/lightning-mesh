@@ -11,9 +11,10 @@ bun run build    # writes docs-web/build/
 bun run preview
 ```
 
-Join pages (`docs/join/`) keep YAML frontmatter (`id`, `status`, `next_step`).
-Relative `.md` links are rewritten to site paths. Archive and sprint notes
-are omitted from the nav.
+Only the user guide (`docs/join/`) is published. Architecture, vision, and
+research stay in the repo. Join pages keep YAML frontmatter (`id`, `status`,
+`next_step`). Relative `.md` links inside the guide become site paths; links
+to other docs go to GitHub.
 
 ## Live site (IdentiKey Sites)
 

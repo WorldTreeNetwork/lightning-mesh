@@ -17,9 +17,9 @@
 <a href="#main" class="skip">Skip to content</a>
 
 <div class="flex min-h-screen flex-col lg:flex-row">
-	<header
-		class="border-border bg-bg-2 flex items-center justify-between border-b px-4 py-3 lg:hidden"
-	>
+	<header class="bg-bg-2 lg:hidden">
+		<div class="hazard" aria-hidden="true"></div>
+		<div class="flex items-center justify-between px-4 py-3">
 		<a href="/" class="font-display text-sm tracking-widest text-[var(--color-bolt)] uppercase"
 			>Lightning Mesh</a
 		>
@@ -32,6 +32,7 @@
 		>
 			{open ? '✕' : '☰'}
 		</button>
+		</div>
 	</header>
 
 	<aside
@@ -39,12 +40,15 @@
 			? 'block'
 			: 'hidden lg:block'}"
 	>
+		<div class="hazard" aria-hidden="true"></div>
 		<div class="px-5 py-6">
 			<a href="/" class="block">
 				<p class="font-display text-[0.7rem] tracking-[0.28em] text-[var(--color-bolt)]">
 					LIGHTNING MESH
 				</p>
-				<p class="mt-1 text-sm text-[var(--color-ink-muted)]">Documentation</p>
+				<p class="font-hud mt-2 text-[0.65rem] tracking-[0.22em] text-[var(--color-ink-muted)] uppercase">
+					User manual
+				</p>
 			</a>
 		</div>
 		<nav class="px-3 pb-10" aria-label="Docs">

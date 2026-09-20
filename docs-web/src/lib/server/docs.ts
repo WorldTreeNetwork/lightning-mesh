@@ -4,6 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { marked, type Tokens } from 'marked';
 import GithubSlugger from 'github-slugger';
 import {
+	navKey,
 	relToSlug,
 	rewriteDocHref,
 	sectionOf,
@@ -111,7 +112,7 @@ export async function navBySection(): Promise<Record<string, NavItem[]>> {
 	const docs = await loadDocs();
 	const grouped: Record<string, NavItem[]> = {};
 	for (const d of docs) {
-		const key = d.section;
+		const key = navKey(d.slug, d.meta.path);
 		(grouped[key] ??= []).push({
 			slug: d.slug,
 			title: d.title,
@@ -119,10 +120,8 @@ export async function navBySection(): Promise<Record<string, NavItem[]>> {
 			status: d.meta.status
 		});
 	}
-	for (const [key, items] of Object.entries(grouped)) {
-		items.sort((a, b) =>
-			key === 'join' ? a.slug.localeCompare(b.slug) : a.order - b.order || a.slug.localeCompare(b.slug)
-		);
+	for (const items of Object.values(grouped)) {
+		items.sort((a, b) => a.order - b.order || a.slug.localeCompare(b.slug));
 	}
 	return grouped;
 }

@@ -1,13 +1,7 @@
 import { posix as path } from 'node:path';
 
-const SKIP_PREFIXES = [
-	'archive/',
-	'sprints/',
-	'storage-node/consults/',
-	'research/openwrt-mesh-hardware/hypotheses/',
-	'research/openwrt-mesh-hardware/pass2/',
-	'research/openwrt-mesh-hardware/pass3-budget/'
-];
+/** User-facing guide only. Everything else in docs/ stays in git. */
+const USER_PREFIX = 'join/';
 
 export type DocMeta = {
 	id?: string;
@@ -36,8 +30,7 @@ export type DocRecord = {
 
 export function shouldSkip(rel: string): boolean {
 	if (!rel.endsWith('.md')) return true;
-	if (rel.endsWith('LEARNINGS.md')) return true;
-	return SKIP_PREFIXES.some((p) => rel.startsWith(p));
+	return !rel.startsWith(USER_PREFIX);
 }
 
 export function relToSlug(rel: string): string {
@@ -73,18 +66,29 @@ export function rewriteDocHref(href: string, fromRel: string): string {
 
 	const fromDir = path.dirname(fromRel);
 	const resolved = path.normalize(path.join(fromDir === '.' ? '' : fromDir, bare));
-	const cleaned = resolved.replace(/^\.\//, '');
-	const slug = relToSlug(cleaned.endsWith('.md') ? cleaned : `${cleaned}.md`);
+	const cleaned = resolved.replace(/^\.\//, '').replace(/^(\.\.\/)+/, '');
+	const relMd = cleaned.endsWith('.md') ? cleaned : `${cleaned}.md`;
+	if (!relMd.startsWith(USER_PREFIX)) {
+		return `https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/${relMd}${hash}`;
+	}
+	const slug = relToSlug(relMd);
 	return `/${slug}${hash}`;
 }
 
+export function navKey(slug: string, pathField?: string): string {
+	if (pathField && pathField !== 'index') return pathField;
+	const parts = slug.split('/');
+	if (parts[0] === 'join' && parts[1]) return parts[1];
+	return 'start';
+}
+
 export const SECTION_LABELS: Record<string, string> = {
-	join: 'Join',
-	vision: 'Vision',
-	'network-coordination': 'Architecture',
-	deploy: 'Deploy',
-	products: 'Products',
-	'storage-node': 'Storage node',
-	research: 'Research',
-	transfer: 'Transfer'
+	start: 'Start',
+	person: 'On the Wi-Fi',
+	house: 'Your house',
+	node: 'Add a router',
+	publish: 'Publish',
+	contribute: 'Contribute'
 };
+
+export const SECTION_ORDER = ['start', 'person', 'house', 'node', 'publish', 'contribute'];

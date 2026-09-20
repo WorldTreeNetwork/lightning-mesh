@@ -43,20 +43,22 @@
 
 @theme {
 	--font-display: 'Space Age', ui-sans-serif, system-ui, sans-serif;
+	--font-heading: 'Tactic Sans', ui-sans-serif, system-ui, sans-serif;
 	--font-sans: 'Tactic Sans', ui-sans-serif, system-ui, sans-serif;
 	--font-hud: 'Tactic Sans Extra Extended', 'Tactic Sans', ui-sans-serif, sans-serif;
 	--font-mono: ui-monospace, 'IBM Plex Mono', Menlo, monospace;
 
-	--color-bg: #0c0b09;
-	--color-bg-2: #161310;
-	--color-ink: #f4efe6;
-	--color-ink-muted: #b7ad9e;
-	--color-border: #2c261f;
-	--color-bolt: #f5c14a;
-	--color-link: #7eb8ff;
-	--color-built: #6fbf87;
-	--color-partial: #e0a43b;
-	--color-soon: #a89b8c;
+	--color-bg: #08090c;
+	--color-bg-2: #12141a;
+	--color-ink: #ece7dc;
+	--color-ink-muted: #9aa0a8;
+	--color-border: #2a3140;
+	--color-bolt: #ff7a18;
+	--color-eva-red: #c41e3a;
+	--color-link: #6ec8ff;
+	--color-built: #8fbf3f;
+	--color-partial: #ff7a18;
+	--color-soon: #c41e3a;
 }
 
 html {
@@ -67,6 +69,17 @@ html {
 
 body {
 	min-height: 100vh;
+}
+
+.hazard {
+	height: 8px;
+	background: repeating-linear-gradient(
+		-45deg,
+		#ff7a18,
+		#ff7a18 8px,
+		#12141a 8px,
+		#12141a 16px
+	);
 }
 
 .prose-docs {
@@ -81,14 +94,26 @@ body {
 	--tw-prose-td-borders: var(--color-border);
 	--tw-prose-hr: var(--color-border);
 	--tw-prose-counters: var(--color-ink-muted);
-	--tw-prose-bullets: var(--color-ink-muted);
+	--tw-prose-bullets: var(--color-bolt);
 }
 
-.prose-docs h1,
-.prose-docs h2 {
+.prose-docs h1 {
 	font-family: var(--font-display);
-	letter-spacing: 0.04em;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
+	font-weight: 400;
+	line-height: 1.25;
+	color: var(--color-bolt);
+}
+
+.prose-docs h2,
+.prose-docs h3,
+.prose-docs h4 {
+	font-family: var(--font-heading);
+	font-weight: 700;
+	letter-spacing: 0.01em;
+	text-transform: none;
+	color: var(--color-ink);
 }
 
 .prose-docs .heading-anchor {

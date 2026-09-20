@@ -32,12 +32,19 @@ describe('rewriteDocHref', () => {
 			'https://example.com/foo.md'
 		);
 	});
+	it('sends non-user docs to GitHub', () => {
+		expect(rewriteDocHref('../../vision/why-decentralized-mesh.md', 'join/index.md')).toBe(
+			'https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/vision/why-decentralized-mesh.md'
+		);
+	});
 });
 
 describe('shouldSkip', () => {
-	it('skips archive and sprints', () => {
-		expect(shouldSkip('archive/foo.md')).toBe(true);
-		expect(shouldSkip('sprints/001-hello-mesh/plan.md')).toBe(true);
+	it('keeps the join guide and drops speculative docs', () => {
 		expect(shouldSkip('join/index.md')).toBe(false);
+		expect(shouldSkip('join/person/01-connect.md')).toBe(false);
+		expect(shouldSkip('vision/why-decentralized-mesh.md')).toBe(true);
+		expect(shouldSkip('network-coordination/network-architecture.md')).toBe(true);
+		expect(shouldSkip('research/manet-dynamic-addressing/README.md')).toBe(true);
 	});
 });
