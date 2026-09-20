@@ -28,24 +28,24 @@
 		display: inline-flex;
 		align-items: center;
 		border-radius: 999px;
-		padding: 0.15rem 0.55rem;
+		padding: 0.18rem 0.6rem;
 		font-size: 0.62rem;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		line-height: 1.4;
-		border: 1px solid color-mix(in oklab, currentColor 45%, transparent);
+		border: 1px solid transparent;
+		font-weight: 900;
 	}
 	.built {
-		color: var(--color-built);
-		background: color-mix(in oklab, var(--color-built) 14%, transparent);
+		color: #101408;
+		background: var(--color-built);
 	}
 	.partial {
-		color: var(--color-partial);
-		background: color-mix(in oklab, var(--color-partial) 16%, transparent);
+		color: #1a0e00;
+		background: var(--color-eva-orange);
 	}
 	.soon {
-		color: #ffb3bd;
-		background: color-mix(in oklab, var(--color-eva-red) 28%, transparent);
-		border-color: color-mix(in oklab, var(--color-eva-red) 55%, transparent);
+		color: #fff5f6;
+		background: var(--color-eva-red);
 	}
 </style>

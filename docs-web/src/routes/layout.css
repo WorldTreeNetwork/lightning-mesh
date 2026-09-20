@@ -48,17 +48,18 @@
 	--font-hud: 'Tactic Sans Extra Extended', 'Tactic Sans', ui-sans-serif, sans-serif;
 	--font-mono: ui-monospace, 'IBM Plex Mono', Menlo, monospace;
 
-	--color-bg: #08090c;
-	--color-bg-2: #12141a;
-	--color-ink: #ece7dc;
-	--color-ink-muted: #9aa0a8;
-	--color-border: #2a3140;
-	--color-bolt: #ff7a18;
-	--color-eva-red: #c41e3a;
-	--color-link: #6ec8ff;
-	--color-built: #8fbf3f;
-	--color-partial: #ff7a18;
-	--color-soon: #c41e3a;
+	--color-bg: #05060a;
+	--color-bg-2: #141820;
+	--color-ink: #f8f5ec;
+	--color-ink-muted: #c5cad3;
+	--color-border: #4a5366;
+	--color-bolt: #ffb020;
+	--color-eva-orange: #ff7a18;
+	--color-eva-red: #e0243f;
+	--color-link: #7ed4ff;
+	--color-built: #c6f04a;
+	--color-partial: #ffb020;
+	--color-soon: #ff6b81;
 }
 
 html {
@@ -77,8 +78,8 @@ body {
 		-45deg,
 		#ff7a18,
 		#ff7a18 8px,
-		#12141a 8px,
-		#12141a 16px
+		#05060a 8px,
+		#05060a 16px
 	);
 }
 

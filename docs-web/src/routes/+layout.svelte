@@ -67,7 +67,7 @@
 									class="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm {current ===
 									item.slug
 										? 'bg-bg text-[var(--color-bolt)]'
-										: 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'}"
+										: 'text-[var(--color-ink)] hover:text-[var(--color-bolt)]'}"
 									onclick={() => (open = false)}
 								>
 									<span class="truncate">{item.title}</span>
