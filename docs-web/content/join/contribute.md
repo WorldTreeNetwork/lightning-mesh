@@ -58,7 +58,7 @@ The router daemon only builds for Linux. Use `deploy/openwrt/build.sh`
 ## Editing this guide
 
 This guide lives in
-[`docs/join/`](https://github.com/WorldTreeNetwork/lightning-mesh/tree/main/docs/join).
+[`docs-web/content/join/`](https://github.com/WorldTreeNetwork/lightning-mesh/tree/main/docs-web/content/join).
 Every page has YAML frontmatter:
 
 | Field | Meaning |

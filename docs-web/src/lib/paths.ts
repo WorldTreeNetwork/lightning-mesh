@@ -1,8 +1,5 @@
 import { posix as path } from 'node:path';
 
-/** User-facing guide only. Everything else in docs/ stays in git. */
-const USER_PREFIX = 'join/';
-
 export type DocMeta = {
 	id?: string;
 	title?: string;
@@ -20,7 +17,7 @@ export type DocMeta = {
 export type DocRecord = {
 	/** URL slug without leading slash, e.g. `join/person/01-connect` */
 	slug: string;
-	/** Path relative to `docs/`, e.g. `join/person/01-connect.md` */
+	/** Path relative to `docs-web/content/`, e.g. `join/person/01-connect.md` */
 	rel: string;
 	meta: DocMeta;
 	title: string;
@@ -29,8 +26,7 @@ export type DocRecord = {
 };
 
 export function shouldSkip(rel: string): boolean {
-	if (!rel.endsWith('.md')) return true;
-	return !rel.startsWith(USER_PREFIX);
+	return !rel.endsWith('.md');
 }
 
 export function relToSlug(rel: string): string {
@@ -66,10 +62,11 @@ export function rewriteDocHref(href: string, fromRel: string): string {
 
 	const fromDir = path.dirname(fromRel);
 	const resolved = path.normalize(path.join(fromDir === '.' ? '' : fromDir, bare));
-	const cleaned = resolved.replace(/^\.\//, '').replace(/^(\.\.\/)+/, '');
+	const cleaned = resolved.replace(/^\.\//, '');
 	const relMd = cleaned.endsWith('.md') ? cleaned : `${cleaned}.md`;
-	if (!relMd.startsWith(USER_PREFIX)) {
-		return `https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/${relMd}${hash}`;
+	if (relMd.startsWith('../')) {
+		const repoRel = relMd.replace(/^(\.\.\/)+/, '');
+		return `https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/${repoRel}${hash}`;
 	}
 	const slug = relToSlug(relMd);
 	return `/${slug}${hash}`;
@@ -84,10 +81,10 @@ export function navKey(slug: string, pathField?: string): string {
 
 export const SECTION_LABELS: Record<string, string> = {
 	start: 'Start',
-	person: 'On the Wi-Fi',
-	house: 'Your house',
-	node: 'Add a router',
-	publish: 'Publish',
+	person: 'Use the mesh',
+	house: 'Set up a home',
+	node: 'Build a router',
+	publish: 'Share a service',
 	contribute: 'Contribute'
 };
 

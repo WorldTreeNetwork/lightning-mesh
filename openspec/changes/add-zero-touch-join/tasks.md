@@ -12,7 +12,7 @@ These boxes mirror what this change owes once activated.
 - [ ] `fyby.3`: unauthorized identities cannot merge subnet claims or production CRDT lane writes
 - [ ] `met`: enrollment offer on the quarantine lane; existing QR path still enrolls; K-of-N / revocation unchanged
 - [ ] Amend `ARCHITECTURE.md`: discoverable ≠ trusted; three gates; radio as hostile underlay
-- [ ] Docs: `docs/join/node/03-join-the-mesh.md` trust paragraph matches this change
+- [ ] Docs: `docs-web/content/join/node/03-join-the-mesh.md` trust paragraph matches this change
 
 Not owed here (bullets, not boxes):
 

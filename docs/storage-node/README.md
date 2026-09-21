@@ -41,6 +41,6 @@ These come from the project as a whole and aren't up for renegotiation here:
 
 ## Related
 
-- [Join Lightning Mesh](../join/index.md): the user-facing guide
-- [Publish a service](../join/publish/01-publish-a-service.md): how apps get `.mesh` names today
+- [Join Lightning Mesh](../../docs-web/content/join/index.md): the user-facing guide
+- [Publish a service](../../docs-web/content/join/publish/01-publish-a-service.md): how apps get `.mesh` names today
 - [Node operations](../deploy/node-operations.md): management plane design for routers

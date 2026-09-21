@@ -187,7 +187,7 @@ production CRDT, or overlay management until quarantine, authenticated
 babel sessions, and identity-authorized CRDT writes are all in effect.
 Until those gates exist, association SHALL NOT be documented or
 implemented as membership. The live fleet's empty `MESH_KEY` is a
-current fact; this change does not owe flipping it. `docs/join/node/03-join-the-mesh.md`
+current fact; this change does not owe flipping it. `docs-web/content/join/node/03-join-the-mesh.md`
 SHALL state that the membership gate is absent until the three gates
 land. Trusted-fleet gossip bootstrap remains inventory `list peer`
 (`m4a`), not RF association.

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import StatusChip from '$lib/components/StatusChip.svelte';
 
 	let { data } = $props();
@@ -25,6 +26,8 @@
 
 {#if data.next}
 	<p class="mt-10 max-w-3xl text-sm">
-		<a class="text-[var(--color-link)]" href="/{data.next.slug}">Next: {data.next.title} →</a>
+		<a class="text-[var(--color-link)]" href={resolve('/[...slug]', { slug: data.next.slug })}
+			>Next: {data.next.title} →</a
+		>
 	</p>
 {/if}

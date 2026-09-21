@@ -9,7 +9,7 @@ SvelteKit + TypeScript, built as a static site (`@sveltejs/adapter-static`)
 and embedded into the `mjolnir-hello` router binary. The page is served over
 plain HTTP, so it can't rely on WebCrypto or other secure-context APIs.
 
-User-facing guide: [`docs/join/person/`](../docs/join/person/02-hello-mesh.md).
+User-facing guide: [`docs-web/content/join/person/`](../docs-web/content/join/person/02-hello-mesh.md).
 Server and daemon seams: `crates/mjolnir-hello`,
 [`docs/network-coordination/hello-mesh-service.md`](../docs/network-coordination/hello-mesh-service.md).
 

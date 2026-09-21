@@ -1,12 +1,14 @@
 <script lang="ts">
 	import './layout.css';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import StatusChip from '$lib/components/StatusChip.svelte';
 
 	let { children, data } = $props();
 	let open = $state(false);
 
-	const current = $derived(page.url.pathname.replace(/^\/|\/$/g, ''));
+	const current = $derived(page.url.pathname.replace(/^\/|\/$/g, '') || 'join');
+	const activeSection = $derived(current.split('/')[1] || 'start');
 </script>
 
 <svelte:head>
@@ -20,18 +22,20 @@
 	<header class="bg-bg-2 lg:hidden">
 		<div class="hazard" aria-hidden="true"></div>
 		<div class="flex items-center justify-between px-4 py-3">
-		<a href="/" class="font-display text-sm tracking-widest text-[var(--color-bolt)] uppercase"
-			>Lightning Mesh</a
-		>
-		<button
-			type="button"
-			class="border-border size-9 rounded-sm border text-[var(--color-ink-muted)]"
-			aria-expanded={open}
-			aria-label="Menu"
-			onclick={() => (open = !open)}
-		>
-			{open ? '✕' : '☰'}
-		</button>
+			<a
+				href={resolve('/')}
+				class="font-display text-sm tracking-widest text-[var(--color-bolt)] uppercase"
+				>Lightning Mesh</a
+			>
+			<button
+				type="button"
+				class="border-border size-9 rounded-sm border text-[var(--color-ink-muted)]"
+				aria-expanded={open}
+				aria-label="Menu"
+				onclick={() => (open = !open)}
+			>
+				{open ? '✕' : '☰'}
+			</button>
 		</div>
 	</header>
 
@@ -42,28 +46,30 @@
 	>
 		<div class="hazard" aria-hidden="true"></div>
 		<div class="px-5 py-6">
-			<a href="/" class="block">
+			<a href={resolve('/')} class="block">
 				<p class="font-display text-[0.7rem] tracking-[0.28em] text-[var(--color-bolt)]">
 					LIGHTNING MESH
 				</p>
-				<p class="font-hud mt-2 text-[0.65rem] tracking-[0.22em] text-[var(--color-ink-muted)] uppercase">
+				<p
+					class="font-hud mt-2 text-[0.65rem] tracking-[0.22em] text-[var(--color-ink-muted)] uppercase"
+				>
 					User manual
 				</p>
 			</a>
 		</div>
-		<nav class="px-3 pb-10" aria-label="Docs">
+		<nav class="px-3 pb-10" aria-label="User guide">
 			{#each data.sections as section (section.key)}
-				<div class="mb-5">
-					<p
-						class="font-hud px-2 text-[0.65rem] tracking-widest text-[var(--color-ink-muted)] uppercase"
+				<details class="nav-section mb-2" open={section.key === activeSection}>
+					<summary
+						class="font-hud cursor-pointer rounded-sm px-2 py-2 text-[0.65rem] tracking-widest text-[var(--color-ink-muted)] uppercase hover:text-[var(--color-bolt)]"
 					>
 						{section.label}
-					</p>
-					<ul class="mt-1">
+					</summary>
+					<ul class="mt-1 border-l border-[var(--color-border)] pl-2">
 						{#each section.items as item (item.slug)}
 							<li>
 								<a
-									href="/{item.slug || ''}"
+									href={resolve('/[...slug]', { slug: item.slug })}
 									class="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm {current ===
 									item.slug
 										? 'bg-bg text-[var(--color-bolt)]'
@@ -76,7 +82,7 @@
 							</li>
 						{/each}
 					</ul>
-				</div>
+				</details>
 			{/each}
 		</nav>
 	</aside>
@@ -99,5 +105,17 @@
 	}
 	.skip:focus {
 		transform: translateY(0);
+	}
+	.nav-section summary::-webkit-details-marker {
+		display: none;
+	}
+	.nav-section summary::before {
+		content: '›';
+		display: inline-block;
+		margin-right: 0.5rem;
+		transition: transform 120ms ease;
+	}
+	.nav-section[open] summary::before {
+		transform: rotate(90deg);
 	}
 </style>

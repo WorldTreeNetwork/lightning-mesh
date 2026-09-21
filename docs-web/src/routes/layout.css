@@ -74,13 +74,7 @@ body {
 
 .hazard {
 	height: 8px;
-	background: repeating-linear-gradient(
-		-45deg,
-		#ff7a18,
-		#ff7a18 8px,
-		#05060a 8px,
-		#05060a 16px
-	);
+	background: repeating-linear-gradient(-45deg, #ff7a18, #ff7a18 8px, #05060a 8px, #05060a 16px);
 }
 
 .prose-docs {

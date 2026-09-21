@@ -31,7 +31,7 @@ Client L2 is deliberately *not* bridged across nodes (broadcast containment is
 what lets this scale), so roaming works by routing instead: a client that
 keeps its address on another node gets a host route. That guest-roam path is
 built but **not yet field-validated** on physical clients.
-See [what works today](docs/join/index.md#what-works-today).
+See [what works today](docs-web/content/join/index.md#what-works-today).
 
 See [docs/vision/why-decentralized-mesh.md](docs/vision/why-decentralized-mesh.md)
 for the full motivation, [docs/vision/mjolnir-integration.md](docs/vision/mjolnir-integration.md)
@@ -90,10 +90,14 @@ and AI agents all coexist on the same fabric.
 
 ## Documentation
 
+Public, task-oriented documentation lives in `docs-web/content/` and is
+published on the docs site. Architecture, research, decisions, and maintainer
+notes live in `docs/` and stay repository-only.
+
 ### Join the network
-- [Join Lightning Mesh](docs/join/index.md): step-by-step guide for a new
+- [Join Lightning Mesh](docs-web/content/join/index.md): step-by-step guide for a new
   person (Wi-Fi, hello.mesh, IdentiKey), adding a router, and publishing a
-  service. Agent index: [`docs/join/llms.txt`](docs/join/llms.txt). Build
+  service. Agent index: [`llms.txt`](docs-web/content/join/llms.txt). Build
   the website with `cd docs-web && bun run build` (SvelteKit static SSG).
   Live: [https://lightning.worldtree.network/](https://lightning.worldtree.network/)
   (`docs-web/scripts/publish.sh` → IdentiKey Sites).
@@ -145,7 +149,7 @@ operator-published services, stationary device names, key-owned leased names),
 uplink-aware connectivity checks, automatic internet sharing, and guest-client
 roam (`sz9`, awaiting field validation in `0pv`). Mini-app cards inside
 hello.mesh are designed and partly merged, not deployed (`ncy`). The
-user-facing picture of what works is [docs/join](docs/join/index.md).
+user-facing picture of what works is the [public guide](docs-web/content/join/index.md).
 
 Open (tracked in beads): the IPv6-vs-IPv4 addressing question (`bsa` — IPv4
 `/24` claims hand out a limited resource), name/service staleness (`e21.9`),

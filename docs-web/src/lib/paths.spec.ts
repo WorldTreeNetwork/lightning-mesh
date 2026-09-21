@@ -33,18 +33,17 @@ describe('rewriteDocHref', () => {
 		);
 	});
 	it('sends non-user docs to GitHub', () => {
-		expect(rewriteDocHref('../../vision/why-decentralized-mesh.md', 'join/index.md')).toBe(
+		expect(rewriteDocHref('../../../docs/vision/why-decentralized-mesh.md', 'join/index.md')).toBe(
 			'https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/vision/why-decentralized-mesh.md'
 		);
 	});
 });
 
 describe('shouldSkip', () => {
-	it('keeps the join guide and drops speculative docs', () => {
+	it('accepts Markdown only because the content tree is the publication boundary', () => {
 		expect(shouldSkip('join/index.md')).toBe(false);
 		expect(shouldSkip('join/person/01-connect.md')).toBe(false);
-		expect(shouldSkip('vision/why-decentralized-mesh.md')).toBe(true);
-		expect(shouldSkip('network-coordination/network-architecture.md')).toBe(true);
-		expect(shouldSkip('research/manet-dynamic-addressing/README.md')).toBe(true);
+		expect(shouldSkip('join/llms.txt')).toBe(true);
+		expect(shouldSkip('join/router.png')).toBe(true);
 	});
 });

@@ -12,4 +12,4 @@ Authoritative owed work is bead `mjolnir-mesh-ncy.2`.
 - [ ] meshd: carry `app` through the spool, leased-name record (`#[serde(default)]`) and directory TXT projection; renewal without `app` clears it; unit tests
 - [ ] meshd control API: if TXT `app` is present, validate it and `path` with the shared function (`400` + reason); if `app` is absent, leave `path` and other TXT opaque; CLI `--app` and `--app-path`
 - [ ] `CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-hello` and `cargo test -p mjolnir-mesh --lib --features daemon` in the cross container; `bunx vitest run --project server src/lib/miniapp`
-- [ ] Docs: `docs/join/publish/01-publish-a-service.md` and `docs/deploy/mesh-app-publishing.md` show `app` on name claims and `--app` on the CLI
+- [ ] Docs: `docs-web/content/join/publish/01-publish-a-service.md` and `docs/deploy/mesh-app-publishing.md` show `app` on name claims and `--app` on the CLI

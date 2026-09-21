@@ -67,7 +67,7 @@ planned.
 
 ## Reading this guide as an agent
 
-- Reading order and one-line summaries: [`llms.txt`](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/join/llms.txt).
+- Reading order and one-line summaries: [`llms.txt`](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs-web/content/join/llms.txt).
 - Every page starts with YAML frontmatter:
   - `id`, `path`, `status`
   - `requires` and `next_step`, which link pages by `id`

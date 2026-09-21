@@ -19,7 +19,7 @@ scope_tier: mvp
 >   [`identity-assertion.md`](../../network-coordination/identity-assertion.md))
 >   are built.
 >
-> Current behavior, step by step: [`docs/join/person/`](../../join/person/02-hello-mesh.md).
+> Current behavior, step by step: [`docs-web/content/join/person/`](../../../docs-web/content/join/person/02-hello-mesh.md).
 
 ## Problem Statement
 

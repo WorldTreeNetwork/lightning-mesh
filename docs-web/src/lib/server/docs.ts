@@ -14,7 +14,7 @@ import {
 	type DocRecord
 } from '$lib/paths';
 
-const DOCS_ROOT = join(process.cwd(), '..', 'docs');
+const DOCS_ROOT = join(process.cwd(), 'content');
 
 async function walk(dir: string, prefix = ''): Promise<string[]> {
 	const entries = await readdir(dir, { withFileTypes: true });

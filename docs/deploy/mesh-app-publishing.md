@@ -17,7 +17,7 @@ deployment. Both end up resolving fleet-wide and listed in `hello.mesh`'s
 Services panel.
 
 User-facing, step-by-step version of this page:
-[`docs/join/publish/01-publish-a-service.md`](../join/publish/01-publish-a-service.md).
+[`docs-web/content/join/publish/01-publish-a-service.md`](../../docs-web/content/join/publish/01-publish-a-service.md).
 
 ## Lane 1 — operator publish (works today)
 
@@ -231,7 +231,7 @@ is the only action required for both DNS resolution and UI discoverability.
 >
 > Design: [`openspec/changes/add-mini-app-contract`](../../openspec/changes/add-mini-app-contract/)
 > (accepted). User-facing summary:
-> [`docs/join/publish/02-mini-apps.md`](../join/publish/02-mini-apps.md).
+> [`docs-web/content/join/publish/02-mini-apps.md`](../../docs-web/content/join/publish/02-mini-apps.md).
 > Epic: `mjolnir-mesh-ncy`.
 
 A mini-app is a published service that hello.mesh can show as an app card.

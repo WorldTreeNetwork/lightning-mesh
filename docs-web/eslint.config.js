@@ -28,5 +28,10 @@ export default defineConfig(
 				parser: ts.parser
 			}
 		}
+	},
+	{
+		// These routes render Markdown read from this repository's public content tree.
+		files: ['src/routes/**/+page.svelte'],
+		rules: { 'svelte/no-at-html-tags': 'off' }
 	}
 );
