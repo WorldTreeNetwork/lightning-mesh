@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-FP="${IDENTIKEY_FP:-7PfGe1Dsx176UjgvTSaQd9Bc6hXBiCaJrNz3Tcd2noWL}"
+FP="${IDENTIKEY_FP:-9m9YdqCFcQKGtLzAk2rKYMLK9xw9zERpJiEqWk3NAfaQ}"
 KEY="${IDENTIKEY_KEYPAIR_FILE:-$HOME/.config/mjolnir/identikey.json}"
 SITE="${SITES_NAME:-lightning-mesh}"
 

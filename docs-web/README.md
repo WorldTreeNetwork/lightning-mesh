@@ -31,5 +31,5 @@ cd docs-web
 | | |
 |---|---|
 | Site name | `lightning-mesh` |
-| IdentiKey fingerprint | `7PfGe1Dsx176UjgvTSaQd9Bc6hXBiCaJrNz3Tcd2noWL` |
+| IdentiKey fingerprint | `9m9YdqCFcQKGtLzAk2rKYMLK9xw9zERpJiEqWk3NAfaQ` |
 | Domain | `lightning.worldtree.network` (A → `45.76.77.97`, DNS-only) |
