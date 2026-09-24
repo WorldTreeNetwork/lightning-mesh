@@ -9,14 +9,17 @@ status: built
 time: 30–60 min per box
 requires: []
 next_step: node.install
-verified_against: 503cd17 (2026-09-13)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Choose a router and flash OpenWrt
 
 A Lightning Mesh node is a normal OpenWrt router running one extra daemon,
-`mjolnir-meshd`. This page gets you from a boxed router to plain OpenWrt that
-you can reach over ethernet.
+`mjolnir-meshd`. This page gets you from a **stock** boxed router to plain
+OpenWrt that you can reach over ethernet.
+
+If the box already broadcasts `⚡` or `Lightning Mesh` after a minute on
+power, it is pre-flashed — go to [Unbox](../house/01-unbox.md) instead.
 
 > **Status: built.** This is how every node in the live fleet was made.
 

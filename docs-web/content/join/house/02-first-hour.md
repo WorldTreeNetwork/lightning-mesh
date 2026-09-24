@@ -9,7 +9,7 @@ status: built
 time: 10 min
 requires: [house.unbox]
 next_step: house.how-it-works
-verified_against: 723b308 (2026-09-19)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # First hour on the mesh
@@ -38,10 +38,10 @@ from [Unbox](01-unbox.md).
 http://hello.mesh
 ```
 
-Include `http://`. There is no public `https` for this name.
+Include `http://`. There is no public `https` for this name yet.
 
 **Expect:** a page that says you are connected to a named router, with
-People, Services, and Routers sections. The page refreshes itself.
+People, **Apps**, Services, and Routers. The page refreshes itself.
 
 **If not:**
 - The browser searched — type the full `http://hello.mesh`.
@@ -50,6 +50,7 @@ People, Services, and Routers sections. The page refreshes itself.
 - Still nothing — open `http://10.42.x.1` using the `.1` from step 1.
   Come back to `http://hello.mesh` before creating an identity; keys made
   at the numeric address are stored separately.
+- No **Apps** section — older hello on this box. Services still work.
 
 ## Step 3: Optional identity
 
@@ -59,6 +60,7 @@ People, Services, and Routers sections. The page refreshes itself.
 phrase.
 
 **Expect:** you appear under People. Apps can later ask you to sign in.
+Stamp location (under Routers) also needs this identity.
 
 **If not:** skip it. Joining the Wi-Fi did not create an account. You can
 use internet (when a router has an uplink) and open published services
@@ -74,7 +76,8 @@ administration is SSH or Lightning Admin, covered in
 |---|---|
 | `http://hello.mesh` | Front desk loads |
 | A website on the public internet | Loads if **any** mesh router has a working WAN; otherwise only local mesh works |
-| A second pre-flashed box, powered nearby, same client SSID | After a few minutes it shows under Routers and you can walk between them |
+| Apps / Services | Empty until someone publishes. That is normal on a new house |
+| A second pre-flashed box, powered nearby, same client SSID | Radios are up; they are **not** one mesh until you exchange peer ids — [Add another router](06-add-router.md) |
 
 Internet sharing is automatic (`gateway=auto`). If this box is on a
 metered or captive network, do not share: see

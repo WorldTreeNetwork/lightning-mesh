@@ -9,7 +9,7 @@ status: built
 time: 1 min
 requires: []
 next_step: person.hello
-verified_against: 503cd17 (2026-09-13)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Connect to the Wi-Fi
@@ -18,6 +18,13 @@ Lightning Mesh is a network of ordinary routers that talk to each other
 directly. You join it like any Wi-Fi network. No account and no password.
 
 > **Status: built.**
+
+## Before you start (one radio)
+
+A phone or laptop has **one** Wi-Fi radio. Joining this network drops the
+Wi-Fi you were using for the internet (home, café, "Pirate Radio", …).
+That is expected. Do not change your default route on a machine you still
+need as a working uplink unless you mean to.
 
 ## Step 1: Find the network
 
@@ -39,8 +46,9 @@ those.
 
 **Do:** tap the network name.
 
-**Expect:** you connect within a few seconds. A sign-in sheet may pop up
-("You're on Lightning Mesh"). That's the next page, so leave it open.
+**Expect:** you connect within a few seconds. If the mesh has no internet
+right now, a sheet may explain that the *local* mesh is still available.
+That is [the next page](02-hello-mesh.md), not a login.
 
 Joining the Wi-Fi doesn't make you a member of anything or create an
 account. It just gets you on the network.
@@ -56,18 +64,25 @@ address tells you which router you're connected to.
 
 **If not:** you're on a different network. Check the name in step 1.
 
+## Walking around (roaming)
+
+You land on whichever client radio is strongest. Each router owns its own
+`10.42.x.0/24`, so two people in the same room can have different prefixes.
+
+| What the software does | What you should expect |
+|---|---|
+| Same SSID on every box | You stay on "the house Wi-Fi" as you walk |
+| Household DHCP: first MAC keeps its IP, every AP can OFFER it | Often you keep `10.42.a.b` when you change radios |
+| Guest path: if you kept another node's IP, the visited node installs a host route | Built; **not** proven on every phone |
+| Live TCP/UDP sessions (a call, a download) | May still drop or stall. Reconnect the app |
+
+Do not plan a long call on a walk across the building yet.
+
 ## Good to know
 
-- **You land on whichever router is closest by radio.** Each router has its
-  own address range, so your address can differ from a friend's in the same
-  room.
-- **Moving around:** walking to another router may briefly interrupt
-  connections, and you may get a new address. Seamless roaming is being built
-  but hasn't been field-tested, so don't count on long calls surviving a walk
-  across the building.
-- **Internet:** you get internet if any router in the mesh has a working
-  uplink. Everything on the mesh itself (hello.mesh, `.mesh` names, people
-  nearby) works with no internet at all.
+- **Internet:** you get internet if **any** router in the mesh has a working
+  uplink and is allowed to share it (`gateway=auto`). hello.mesh and `.mesh`
+  names work with no internet at all.
 - **Some phones hide `.mesh` names.** If your phone uses "Private DNS" or
   your browser uses "secure DNS", turn it off for this network. See
   [Troubleshooting](troubleshooting.md).

@@ -9,7 +9,7 @@ status: partial
 time: 20 min
 requires: [house.how-it-works]
 next_step: house.services
-verified_against: 723b308 (2026-09-19)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Administer the house

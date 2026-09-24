@@ -9,7 +9,7 @@ status: partial
 time: 15 min
 requires: [house.administer]
 next_step: house.add-router
-verified_against: 723b308 (2026-09-19)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Share something on the house mesh
@@ -19,16 +19,17 @@ open by name: a wiki, a camera page, a game, a printer admin UI. The
 directory on hello.mesh is the index. DNS for `.mesh` is served by the
 routers, so it works with the WAN unplugged.
 
-> **Status: partial.** Operator publish from SSH is built. App cards
-> inside hello.mesh are not deployed. Claiming a pretty name from the
-> front desk is not deployed.
+> **Status: partial.** Operator publish from SSH is built. The Apps shelf
+> is built on current hello.mesh. Claiming a pretty name from the front
+> desk is not deployed.
 
 ## What residents see
 
-**Do:** open `http://hello.mesh` → **Services**.
+**Do:** open `http://hello.mesh` → **Apps**, then **Services**.
 
-**Expect:** links such as `https://walkie-talkie.mesh`. Tapping one opens
-the app. A self-signed certificate warning is normal for `https://…mesh`.
+**Expect:** mini-apps as cards (Open / Open here); other names as links
+such as `https://walkie-talkie.mesh`. A self-signed certificate warning is
+normal for `https://…mesh`.
 
 **If not:** "Nothing has been shared" means nobody has published on this
 mesh yet. Internet sites are unrelated; they need a WAN uplink.
@@ -49,7 +50,9 @@ mjolnir-meshd publish photos --port 8080
 ```
 
 **Expect:** `published photos.mesh  ip=10.42.x.1 port=8080`. Within a
-minute it appears under Services on every hello.mesh.
+minute it appears under **Services**. To put it on the **Apps** shelf,
+add `--txt app=v1 --txt proto=http` (or `https`) and serve
+`/.well-known/mesh-app.json` — [Mini-apps](../publish/02-mini-apps.md).
 
 **If the app is another machine on that LAN:**
 

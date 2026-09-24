@@ -5,11 +5,11 @@ description: Expand coverage with a second pre-flashed box, or flash your own ha
 path: house
 order: 6
 audience: [operator, agent]
-status: built
+status: partial
 time: 30 min–2 h
 requires: [house.services]
 next_step: node.hardware
-verified_against: 723b308 (2026-09-19)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Add another router
@@ -17,7 +17,11 @@ verified_against: 723b308 (2026-09-19)
 One box is a house Wi-Fi with a local front desk. A second box is a mesh:
 walk between rooms, share one WAN, see both under Routers.
 
-> **Status: built.** Peer lists are still edited by hand on each node.
+> **Status: partial.** Radios and routing work. **Peering is still
+> manual.** Powering a second pre-flashed box does **not** join it to the
+> first. You paste 64-character node ids over SSH on both boxes.
+> Automatic discovery (without treating association as trust) is in
+> progress, not on the box.
 
 ## Path A — another pre-flashed box (same image)
 
@@ -32,21 +36,25 @@ open backhaul).
 do not give it a second WAN unless you want a second uplink.
 
 **Expect:** after a couple of minutes, `mjolnir-mesh` is on the air from
-both. Client Wi-Fi with the same name appears from both.
+both. Client Wi-Fi with the same name appears from both. Phones can land
+on either radio. They are **not** yet exchanging routes or directory.
 
 **If not:** they were flashed with different `wireless.env`. Re-flash or
 re-apply wireless from [Install](../node/02-install.md).
 
-### Step 2: Exchange node ids
+### Step 2: Exchange node ids (required)
 
-There is no membership gate yet. Joining still needs each daemon to list
-the other as a peer.
+There is no membership gate and no zero-touch join yet. Each daemon must
+list the other as a peer.
 
-**Do:** on each box (recovery ethernet or overlay SSH):
+**Do:** on each box (recovery ethernet `root@192.168.1.1` or overlay SSH):
 
 ```sh
 mjolnir-meshd id --secret-file /etc/mjolnir/secret
 ```
+
+(`id` briefly starts a network endpoint. On a **live** node prefer
+`service mjolnir-meshd diag` and read the id from there.)
 
 Then on box A, add B's id; on box B, add A's id:
 
@@ -55,6 +63,9 @@ uci add_list mjolnir.meshd.peer='<64-hex-id>'
 uci commit mjolnir
 service mjolnir-meshd restart
 ```
+
+Add **every** other router, not just one. A chain of single peers has
+split a fleet into two gossip islands.
 
 Exact verify steps (station dump, babel routes, gossip, `/api/health`):
 [Join the mesh](../node/03-join-the-mesh.md).
@@ -85,11 +96,15 @@ Supported fleet hardware today: Cudy WR3000S, M3000, TR3000, AP3000
 Outdoor (all MT7981). Wrong Cudy intermediate image bricks the unit —
 match the **label on the router**, not the box art.
 
+A single-radio board cannot run 802.11s and a client AP on the same radio.
+The installer turns that co-located AP off. The supported USB client AP
+is Ralink RT5370 (`148f:5370`).
+
 ## After it joins
 
 Phones keep using one client SSID. They land on whichever radio is
-stronger. Addresses may change when walking; do not count on a single TCP
-session surviving a roam yet.
+stronger. Household DHCP tries to keep one IP per MAC; a live call can
+still drop. See [How it works — walking](03-how-it-works.md#walking-between-rooms).
 
 When you are done adding boxes, residents can stay on
 [Connect to the Wi-Fi](../person/01-connect.md). Operators come back to

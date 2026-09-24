@@ -9,7 +9,7 @@ status: built
 time: 20–40 min
 requires: [node.hardware]
 next_step: node.join
-verified_against: 503cd17 (2026-09-13)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Install Lightning Mesh on a router

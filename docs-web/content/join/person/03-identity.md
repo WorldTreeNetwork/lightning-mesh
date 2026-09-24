@@ -9,7 +9,7 @@ status: built
 time: 3 min
 requires: [person.hello]
 next_step: person.signin
-verified_against: 503cd17 (2026-09-13)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Create your identity
@@ -37,7 +37,7 @@ guard anything valuable.
 
 **Do:**
 1. Open `http://hello.mesh` in your normal browser.
-2. Tap **Set up your identity**.
+2. Tap the **Set up your identity** chip (top of the page).
 3. Under **Introduce yourself**, type a name in **Your name** (up to 48
    characters).
 4. Tap **Join**.

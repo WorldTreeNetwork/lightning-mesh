@@ -9,7 +9,7 @@ status: built
 time: 15 min
 requires: [node.install]
 next_step: node.operate
-verified_against: 503cd17 (2026-09-13)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Join the mesh
@@ -21,7 +21,7 @@ by being known in return. After that, everything else is automatic:
 - routes learned by babel
 
 > **Status: built**, with one manual chore: peer lists are edited by hand on
-> each node (automatic full peer sets are planned, bead `m4a`).
+> each node. Identity-peering / zero-touch join is designed, not shipped.
 
 ## How joining works
 

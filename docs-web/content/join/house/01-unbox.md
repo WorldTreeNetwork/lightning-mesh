@@ -9,7 +9,7 @@ status: built
 time: 10 min
 requires: []
 next_step: house.first-hour
-verified_against: 723b308 (2026-09-19)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Unbox a pre-flashed router
@@ -20,6 +20,10 @@ open the front desk.
 
 > **Status: built.** Same software as the live fleet. Factory client Wi-Fi
 > is open and named `⚡` unless the person who flashed the box renamed it.
+
+This page is **only** for a box that already runs Lightning Mesh. There is
+no public storefront in this guide. If you bought a stock Cudy from a shop,
+go to [Choose a router and flash OpenWrt](../node/01-hardware-and-flash.md).
 
 ## What you should have
 
@@ -33,16 +37,22 @@ open the front desk.
 You do not need a GitHub account, a password, or Lightning Admin for the
 first hour.
 
+A laptop has one Wi-Fi radio. Joining the mesh SSID drops whatever network
+you were using to read this guide.
+
 ## Step 1: Place it
 
 **Do:** put the router where people actually sit, not in a closet if you
 can help it. Keep it away from microwave ovens and thick metal.
 
-**Expect:** after power-on, LEDs come up within about a minute. The unit
-is ready when the radio LED is steady or slowly blinking, not racing.
+**Expect:** after power-on, *some* LEDs come up within about a minute.
+Which lamp means "ready" depends on the model (white, green, or mixed
+red/white). Treat **client Wi-Fi on the air** as the real signal, not a
+specific colour.
 
 **If not:** try another outlet. If nothing lights, the brick or PoE injector
-is the first suspect, not the software.
+is the first suspect, not the software. A blinking WPS lamp is a WAN SSH
+window, not a health check.
 
 ## Step 2: Power, then optional internet
 
@@ -77,13 +87,9 @@ address that starts with `10.42.` within a few seconds.
 **If not:**
 - You see `mjolnir-mesh` — that is the **routers'** backhaul, not for
   phones. Ignore it.
-- No Lightning Mesh name at all — wait two minutes after power-on, then
-  stand closer. If it still never appears, the box may not have been
-  flashed; see [Choose a router and flash OpenWrt](../node/01-hardware-and-flash.md).
+- No Lightning Mesh name at all after two minutes, standing close — this
+  box is almost certainly **stock firmware**. Stop Unbox.
+  [Flash OpenWrt](../node/01-hardware-and-flash.md).
 - The network has a lock — the flasher set a password. Ask them.
-
-Do not set this phone or laptop's default route through the mesh if you
-are also using it to talk to the internet on another network. One radio
-joins one Wi-Fi at a time.
 
 Next: [First hour on the mesh](02-first-hour.md).

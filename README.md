@@ -24,8 +24,8 @@ CRDT and routed between nodes with babel over an 802.11s backhaul — client
 traffic flows to the internet and across LANs (field-validated in July 2026 on
 a four-router fleet; the inventory in `deploy/openwrt/fleet-nodes.conf` now
 lists five). Service discovery is built on top of it: every node serves the
-`hello.mesh` front desk (a live directory of people, services and routers,
-plus a browser-held IdentiKey), and `.mesh` names — operator-published
+`hello.mesh` front desk (a live directory of people, **apps**, services and
+routers, plus a browser-held IdentiKey), and `.mesh` names — operator-published
 services, stationary devices and key-owned app names — resolve from any node.
 Client L2 is deliberately *not* bridged across nodes (broadcast containment is
 what lets this scale), so roaming works by routing instead: a client that
@@ -96,8 +96,8 @@ notes live in `docs/` and stay repository-only.
 
 ### Join the network
 - [Join Lightning Mesh](docs-web/content/join/index.md): step-by-step guide for a new
-  person (Wi-Fi, hello.mesh, IdentiKey), adding a router, and publishing a
-  service. Agent index: [`llms.txt`](docs-web/content/join/llms.txt). Build
+  person (Wi-Fi, hello.mesh, Apps, IdentiKey), a house, adding a router, and
+  publishing. Agent index: [`llms.txt`](docs-web/content/join/llms.txt). Build
   the website with `cd docs-web && bun run build` (SvelteKit static SSG).
   Live: [https://lightning.worldtree.network/](https://lightning.worldtree.network/)
   (`docs-web/scripts/publish.sh` → IdentiKey Sites).

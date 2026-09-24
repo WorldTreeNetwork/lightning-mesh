@@ -9,7 +9,7 @@ status: partial
 time: 10 min
 requires: [node.join]
 next_step: publish.miniapps
-verified_against: 503cd17 (2026-09-13)
+verified_against: 2f6dc6b (2026-09-24)
 ---
 
 # Publish a service on the mesh
@@ -67,7 +67,8 @@ name. The router-specific part stops two routers' devices from colliding.
 
 For a web app, include `--txt proto=http` (or `proto=https`). That's what
 makes hello.mesh show it as a clickable link; without it the entry shows as a
-bare address.
+bare address. Add `--txt app=v1` (and optionally `--txt path=/entry`) to
+put it on the **Apps** shelf — [Mini-apps](02-mini-apps.md).
 
 ### Step 4: Check it from anywhere on the mesh
 
@@ -156,4 +157,4 @@ every 5 seconds.
 Full protocol reference:
 [`docs/deploy/mesh-app-publishing.md`](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/deploy/mesh-app-publishing.md).
 
-Next: [Mini-apps (coming soon)](02-mini-apps.md).
+Next: [Mini-apps](02-mini-apps.md).
