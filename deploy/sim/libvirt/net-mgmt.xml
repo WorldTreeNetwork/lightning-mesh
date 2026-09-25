@@ -1,0 +1,15 @@
+<network>
+  <name>lightning-sim-mgmt</name>
+  <forward mode="nat"/>
+  <bridge name="virbr-lsmgmt" stp="on" delay="0"/>
+  <ip address="10.99.0.1" netmask="255.255.255.0">
+    <dhcp>
+      <range start="10.99.0.10" end="10.99.0.250"/>
+      <host mac="52:54:00:4c:4d:0a" name="sim-node-a" ip="10.99.0.10"/>
+      <host mac="52:54:00:4c:4d:0b" name="sim-node-b" ip="10.99.0.11"/>
+      <host mac="52:54:00:4c:4d:0c" name="sim-isp-cpe" ip="10.99.0.12"/>
+      <host mac="52:54:00:4c:4d:0d" name="sim-house-nat" ip="10.99.0.13"/>
+      <host mac="52:54:00:4c:4d:0e" name="sim-phone" ip="10.99.0.14"/>
+    </dhcp>
+  </ip>
+</network>

@@ -1,0 +1,8 @@
+#!/bin/sh
+# First boot: br-lan DHCP so libvirt mgmt (10.99.0.0/24) can SSH.
+# Must not leak onto metal — only in the sim image FILES tree.
+uci -q delete network.lan.ipaddr
+uci -q delete network.lan.netmask
+uci set network.lan.proto='dhcp'
+uci commit network
+exit 0

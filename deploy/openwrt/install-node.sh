@@ -23,13 +23,16 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$DIR/mjolnir-meshd-aarch64"
-TXN_BIN="$DIR/mjolnir-txn-aarch64"
+BIN="${MJOLNIR_MESHD_BIN:-$DIR/mjolnir-meshd-aarch64}"
+TXN_BIN="${MJOLNIR_TXN_BIN:-$DIR/mjolnir-txn-aarch64}"
 # mjolnir-hello (S7, mjolnir-mesh-eei): OPTIONAL front desk binary. Unlike BIN
 # above, its absence is not fatal — a node runs the mesh fine without it. See
 # README.md "Build the hello front desk" for the (currently manual/documented)
 # cross-build step.
-HELLO_BIN="$DIR/mjolnir-hello-aarch64"
+HELLO_BIN="${MJOLNIR_HELLO_BIN:-$DIR/mjolnir-hello-aarch64}"
+# Sim lab may stage a marker-guarding wrapper; stock script still copied as
+# setup-wireless.stock.sh so the wrapper can exec it. Metal default is stock.
+SETUP_WIRELESS="${SETUP_WIRELESS:-$DIR/setup-wireless.sh}"
 STAGE=/root/mjolnir-stage
 PKGS="babeld kmod-tun wpad-mesh-mbedtls wpad-basic-mbedtls iperf3"  # basic variant = rollback fuel for the wpad swap; iperf3 = always-on measurement service (81n)
 # Drivers for every supported USB dongle ride along on every node (fleet
@@ -67,7 +70,8 @@ scp -O "$DIR/files/etc/init.d/mjolnir-babeld"  "$HOST:$STAGE/init.d-mjolnir-babe
 scp -O "$DIR/files/etc/init.d/mjolnir-txn-restore" "$HOST:$STAGE/init.d-mjolnir-txn-restore"
 scp -O "$DIR/files/etc/init.d/mjolnir-txn-verify"  "$HOST:$STAGE/init.d-mjolnir-txn-verify"
 scp -O "$DIR/files/etc/config/mjolnir"         "$HOST:$STAGE/config-mjolnir"
-scp -O "$DIR/setup-wireless.sh"                "$HOST:$STAGE/setup-wireless.sh"
+scp -O "$DIR/setup-wireless.sh"                "$HOST:$STAGE/setup-wireless.stock.sh"
+scp -O "$SETUP_WIRELESS"                       "$HOST:$STAGE/setup-wireless.sh"
 scp -O "$DIR/files/usr/sbin/mjolnir-apply"     "$HOST:$STAGE/mjolnir-apply"
 scp -O "$DIR/files/usr/sbin/mjolnir-dongle"    "$HOST:$STAGE/mjolnir-dongle"
 scp -O "$DIR/files/etc/hotplug.d/usb/70-mjolnir-dongle" "$HOST:$STAGE/hotplug-usb-mjolnir-dongle"

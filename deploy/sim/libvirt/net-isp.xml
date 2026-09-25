@@ -1,0 +1,4 @@
+<network>
+  <name>lightning-sim-isp</name>
+  <bridge name="virbr-lsisp" stp="on" delay="0"/>
+</network>

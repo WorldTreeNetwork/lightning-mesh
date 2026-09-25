@@ -1,0 +1,4 @@
+<network>
+  <name>lightning-sim-nat2</name>
+  <bridge name="virbr-lsnat2" stp="on" delay="0"/>
+</network>

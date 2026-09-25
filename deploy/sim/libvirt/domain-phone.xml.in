@@ -1,0 +1,34 @@
+<domain type="kvm">
+  <name>NAME</name>
+  <memory unit="MiB">256</memory>
+  <vcpu>1</vcpu>
+  <os>
+    <type arch="x86_64" machine="q35">hvm</type>
+    <loader readonly="yes" type="pflash">/usr/share/edk2/x64/OVMF_CODE.4m.fd</loader>
+    <nvram template="/usr/share/edk2/x64/OVMF_VARS.4m.fd">NVRAM</nvram>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode="host-passthrough"/>
+  <clock offset="utc"/>
+  <devices>
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2"/>
+      <source file="DISK"/>
+      <target dev="vda" bus="virtio"/>
+    </disk>
+    <interface type="network">
+      <mac address="MGMTMAC"/>
+      <source network="lightning-sim-mgmt"/>
+      <model type="virtio"/>
+    </interface>
+    <serial type="pty">
+      <target port="0"/>
+    </serial>
+    <console type="pty">
+      <target type="serial" port="0"/>
+    </console>
+  </devices>
+</domain>

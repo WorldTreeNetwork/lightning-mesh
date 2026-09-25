@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-sim-roam-keep-ip-advise-sol-r2",
+  "node_id": "add-sim-roam-keep-ip-advise-sol-r2",
+  "capability": "mesh-sim-lab",
+  "change_id": "add-sim-roam-keep-ip",
+  "goal": "Advise r2 add-sim-roam-keep-ip after send-back. You are Sol (gpt-5.6-sol), other-family reader. Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nr1 is openspec/changes/add-sim-roam-keep-ip/reviews/2026-09-18-advise.md (send-back). Author added design.md and expanded the spec. Write openspec/changes/add-sim-roam-keep-ip/reviews/2026-09-18-advise-r2.md (that exact name).\n\nVerify r1 holes are closed:\n1. Ordered pre-hop baseline + green: observed A→B assoc, unchanged IPv4, proto 158 on B only / absent on A, LWW lease same MAC→IP, sequenced egress via B with timestamps/loss.\n2. Property-red: command without transition, A keeps /32, lease diverges, no resume via B → fail.\n3. Log names hop mechanism and evidence schema (station/neigh, seq/loss, egress node).\nIf still open, send-back. If closed and no new blocker, accept.\n\n\nBLIND PASS first. From Why, living specs, and cited code/docs only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md or tasks.md until that take is written. Then open those files and the spec delta, compare, steelman against your take.\n\nWhy (from proposal.md, not the design):\n5wc is a walking-phone test. The lab's first instrument is a Linux STA hop A→B that records keep-IP, proto 158, LeaseBook, and egress gap. Sim green does not close 5wc / wvg / sz9.1.\nWhat: OpenWrt STA-only guest (same image). Associate A, hop to B (vwifi-ctrl and/or wpa_cli roam). Record IP, /32 on B only, LeaseEntry, ping gap. Must not bd close metal roam beads.\nBanner ACTIVE BUILD. Rigor instrument.\n\nCited (read before design.md):\n- openspec/specs/mesh-sim-lab/spec.md — Sim evidence is not metal roam proof; keep-IP harness scenario already in living spec\n- crates/mjolnir-mesh/src/roam.rs — guest /32 proto 158, parse iw station dump\n- docs/network-coordination/island-formation.md — sz9 keep-IP, proxy-ARP, no shared L2\n- docs/LEARNINGS.md — roam DHCP LWW; do not stitch L2 for keep-IP\n- deploy/sim/README.md — Linux STA ≠ iPhone; sim does not close 5wc\n\nPersist exactly:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** sol-arch-review\n> **SPAWN:** <this spawn dir>\nNotes in the body. If send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": [
+    "Implement the harness",
+    "Fold",
+    "Flip the banner",
+    "Close 5wc/wvg/sz9.1",
+    "iPhone DNAv4"
+  ],
+  "anchors": [
+    {
+      "symbol": "crates/mjolnir-mesh/src/roam.rs",
+      "invariant": "Keep-IP dataplane is proxy-ARP plus proto 158 /32 from iw station dump + ip neigh."
+    },
+    {
+      "symbol": "openspec/specs/mesh-sim-lab/spec.md",
+      "invariant": "A passing sim roam SHALL NOT close 5wc/wvg/sz9.1."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A scripted Linux STA hop records keep-IP, proto 158, LeaseBook, and egress gap without closing metal roam beads.",
+    "if_false": "The harness is treated as 5wc close, or shared-L2 is required for the sim hop."
+  },
+  "out_of_scope": [
+    {"item": "iPhone DNAv4", "tracked_as": "mjolnir-mesh-sz9.1"},
+    {"item": "call-survive", "tracked_as": "mjolnir-mesh-wvg.1"},
+    {"item": "libvirt domains", "tracked_as": "mjolnir-mesh-sim.3"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-sim-roam-keep-ip/reviews/",
+      "openspec/changes/add-sim-roam-keep-ip/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-sol-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

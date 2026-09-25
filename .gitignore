@@ -18,6 +18,7 @@
 # misc
 .DS_Store
 *.pem
+.spawns/
 
 # debug
 npm-debug.log*
@@ -55,6 +56,14 @@ deploy/mikrotik/*.tar
 
 # OpenWrt native build artifact (static aarch64 binary; rebuild with deploy/openwrt/build.sh)
 deploy/openwrt/*-aarch64
+
+# Sim lab artifacts (rebuild with deploy/sim/build-meshd.sh / build-image.sh)
+deploy/sim/*-x86_64
+deploy/sim/*.img
+deploy/sim/*.img.gz
+deploy/sim/imagebuilder/
+deploy/sim/disks/
+deploy/sim/bin/
 
 # Prefetched OpenWrt packages (install-node.sh fills this from any node with
 # feed access; pushed to nodes without WAN). Re-fetchable, release-specific.

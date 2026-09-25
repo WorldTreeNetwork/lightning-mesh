@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-mesh-sim-lab-advise-sol-r2",
+  "node_id": "add-mesh-sim-lab-advise-sol-r2",
+  "capability": "mesh-sim-lab",
+  "change_id": "add-mesh-sim-lab",
+  "goal": "Advise r2 add-mesh-sim-lab after send-back. You are Sol (gpt-5.6-sol), other-family reader. Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nr1 is openspec/changes/add-mesh-sim-lab/reviews/2026-09-17-advise.md (send-back, three blocking corrections). Author amended spec+design. Write openspec/changes/add-mesh-sim-lab/reviews/2026-09-17-advise-r2.md (that exact name).\n\nVerify the three r1 holes are closed:\n1. Positive sim-guest marker; unmarked metal including non-Cudy refused before any wireless write.\n2. Mgmt negative control: partition vwifi, SSH lives, babel/10.254 die; overlay via mgmt is failure.\n3. Daily x86 is PC/q35; -M virt only for armsr smoke.\nIf still open, send-back. If closed and no new blocker, accept.\n\nBLIND PASS first. From Why, living specs, and cited code/docs only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md or tasks.md until that take is written. Then open those files and the spec delta, compare, steelman against your take.\n\nWhy (from proposal.md, not the design):\nRoam keep-IP (sz9, 5wc, wvg) and household NAT already exist as product problems. The dataplane is coded; the missing piece is a repeatable OpenWrt fleet that is not the live Cudy boxes and not a walking phone. QEMU/libvirt already runs Windows builds (morphist-win11). That host pattern can run OpenWrt guests. It cannot boot Filogic sysupgrade images. Without a named lab contract, a later act will either emulate the wrong machine, leak a virt wireless profile onto metal, or close 5wc from a Linux STA.\nWhat: Name capability mesh-sim-lab. Daily lab is this Linux x86_64 KVM host, OpenWrt x86_64 guests, x86_64 musl meshd. Air is vwifi+hwsim. Ethernet NAT is virtio. Mgmt SSH and vwifi TCP on a third net. Layout deploy/sim/ not under deploy/openwrt/. Sim profile refused on Cudy. Green sim does not close 5wc/wvg/sz9.1. First instrument (later change) is Linux STA hop A→B. NAT fixture later: ISP + aftermarket.\nBanner ACTIVE BUILD. Human said activate 2026-09-17 after intend; steer was decide-for-me on recommended forks. This change is architecture only — it does not implement vwifi/images/harness.\n\nCited (read before design.md):\n- ARCHITECTURE.md — L3 overlay is the product; radio is plumbing\n- deploy/openwrt/README.md — OpenWrt on mt76; no container\n- docs/join/node/01-hardware-and-flash.md — supported Cudy MT7981 boards\n- docs/network-coordination/island-formation.md — sz9 keep-IP path\n- docs/LEARNINGS.md — roam DHCP LWW, do not stitch L2 for keep-IP\n- admin/scripts/windows-build/README.md — libvirt domain + SSH BatchMode pattern\n- spike/buw-overlay-2node.sh — existing netns overlay sim, not OpenWrt\n- openspec/specs/ has no living mesh-sim-lab spec yet. Proposed SHALLs: openspec/changes/add-mesh-sim-lab/specs/mesh-sim-lab/spec.md — AFTER the take.\n\nPersist exactly:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** sol-arch-review\n> **SPAWN:** <this spawn dir>\nNotes in the body. If send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": [
+    "Implement vwifi, libvirt domains, or x86 image",
+    "Fold",
+    "Flip the change banner",
+    "Close 5wc/wvg/sz9.1",
+    "Boot Filogic sysupgrade in QEMU"
+  ],
+  "anchors": [
+    {
+      "symbol": "ARCHITECTURE.md",
+      "invariant": "The L3 overlay is the product; the radio is plumbing."
+    },
+    {
+      "symbol": "docs/network-coordination/island-formation.md",
+      "invariant": "Keep-IP roam is proxy-ARP plus proto 158 /32; client L2 is not bridged across nodes."
+    },
+    {
+      "symbol": "admin/scripts/windows-build/README.md",
+      "invariant": "Existing QEMU use is libvirt named domains plus SSH BatchMode, not SoC emulation."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A named virt OpenWrt lab can later host vwifi and a roam harness without being metal proof or a Filogic emulator.",
+    "if_false": "The lab boots Cudy images, sim profile can apply on metal, or sim green closes 5wc."
+  },
+  "out_of_scope": [
+    {"item": "x86 image + musl meshd", "tracked_as": "mjolnir-mesh-sim.2"},
+    {"item": "libvirt fixture", "tracked_as": "mjolnir-mesh-sim.3"},
+    {"item": "vwifi air", "tracked_as": "mjolnir-mesh-sim.4"},
+    {"item": "sim install profile", "tracked_as": "mjolnir-mesh-sim.5"},
+    {"item": "NAT topology", "tracked_as": "mjolnir-mesh-sim.6"},
+    {"item": "roam keep-IP harness", "tracked_as": "mjolnir-mesh-sim.7"},
+    {"item": "iPhone DNAv4", "tracked_as": "mjolnir-mesh-sz9.1"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-mesh-sim-lab/reviews/",
+      "openspec/changes/add-mesh-sim-lab/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-sol-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

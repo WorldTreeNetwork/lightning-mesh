@@ -107,3 +107,11 @@ origin) fails closed before identity load; application HTML carries
   sandboxed cross-origin card; key origin ≠ app origin; identity
   over the bridge via one-shot MessagePort):
   `openspec/specs/mesh-mini-apps/spec.md`
+- Laptop-local OpenWrt sim lab (named libvirt q35 domains, mgmt
+  `10.99.0.0/24` not overlapping host/Docker bridges, vwifi air,
+  virtio NAT; household double-NAT: node-a WAN on ISP-CPE LAN with
+  `gateway=auto`, node-b WAN behind house-nat without default export,
+  overlay `10.254` on 802.11s not WAN hole-punch; not Filogic; sim
+  is not metal roam proof):
+  `openspec/specs/mesh-sim-lab/spec.md`,
+  contract `deploy/sim/README.md`
