@@ -43,8 +43,20 @@ package-lock.json
 **/*.bun
 .omc
 .metacoding/
+# Cargo: workspace root, crate-local, and CARGO_TARGET_DIR=target/sim-cross
 /target/
+**/target/
 .omx
+# Intention conductor packets/leases from local /act runs (like .spawns).
+# Already-tracked files under groups/ stay in git; new runs stay local.
+/groups/
+# Editor / patch leftovers
+*~
+*.swp
+*.swo
+*.orig
+*.rej
+*.rs.bk
 
 # Beads / Dolt files (added by bd init)
 .dolt/
@@ -64,6 +76,9 @@ deploy/sim/*.img.gz
 deploy/sim/imagebuilder/
 deploy/sim/disks/
 deploy/sim/bin/
+*.qcow2
+*.nvram
+*.raw
 
 # Prefetched OpenWrt packages (install-node.sh fills this from any node with
 # feed access; pushed to nodes without WAN). Re-fetchable, release-specific.
