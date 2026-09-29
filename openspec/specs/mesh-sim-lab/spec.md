@@ -7,7 +7,10 @@ ride a third net. Sim wireless/apply runs only on a positive sim-guest
 marker. A green sim roam does not close metal roam beads. Folded from
 `add-mesh-sim-lab` (2026-09-17), `add-sim-vwifi-air` (2026-09-18),
 `add-sim-node-profile` (2026-09-18), `add-sim-nat-topology` (2026-09-24),
-`add-sim-roam-keep-ip` (2026-09-24).
+`add-sim-roam-keep-ip` (2026-09-24), `add-sim-e2e-keep-ip` (2026-09-25),
+`add-sim-e2e-runner` (2026-09-25), `add-sim-e2e-nat` (2026-09-25),
+`add-sim-e2e-dhcp-crdt` (2026-09-25), `add-sim-e2e-fade` (2026-09-25),
+`add-sim-e2e-dna` (2026-09-25), `add-sim-e2e-apply-rollback` (2026-09-29).
 
 Contract: `deploy/sim/README.md`. Layout is `deploy/sim/`, not under
 `deploy/openwrt/`. Operational shape copies `morphist-win11` /
@@ -286,3 +289,126 @@ transition SHALL NOT be a pass.
 - GIVEN a sequenced probe across the hop
 - WHEN there is no first-success-after via B
 - THEN the harness exits non-zero
+
+### Requirement: Keep-IP e2e fails while A still announces proto 158
+
+The sim e2e runner SHALL expose `keep-ip` that hops a Linux STA A→B.
+The run SHALL fail if proto 158 `/32` for the STA IP remains on A
+after the hop, even if B also has it. The run SHALL NOT close
+`mjolnir-mesh-5wc`, `wvg`, `wvg.1`, or `sz9.1`. Dual-158 SHALL NOT
+be marked expected-fail.
+
+#### Scenario: Dual /32 is red
+
+- GIVEN a STA that kept its IPv4 across A→B
+- AND proto 158 `/32` is present on both A and B
+- WHEN `deploy/sim/e2e/run.sh keep-ip` finishes
+- THEN the command exits non-zero
+- AND `5wc` remains open
+
+### Requirement: Health e2e is a gated command
+
+The sim lab SHALL provide `deploy/sim/e2e/run.sh health` that checks
+mgmt SSH, the sim-guest marker, 802.11s ESTAB, and overlay `10.254`
+ping. Partitioning vwifi SHALL fail overlay ping while mgmt SSH still
+works. The runner SHALL NOT close beads.
+
+#### Scenario: Health pass
+
+- GIVEN the q35 guests are running and vwifi is up
+- WHEN an operator runs `deploy/sim/e2e/run.sh health`
+- THEN SSH to 10.99.0.10–14 succeeds in BatchMode
+- AND each node guest has `/etc/mjolnir/sim-guest`
+- AND 802.11s is ESTAB between node-a and node-b
+- AND `10.254` ping a↔b succeeds
+
+#### Scenario: Partition fails overlay not SSH
+
+- GIVEN health preconditions
+- WHEN vwifi-server is stopped
+- THEN overlay `10.254` ping fails
+- AND mgmt SSH still succeeds
+- AND the runner restores vwifi before exit
+
+### Requirement: NAT e2e is a gated command
+
+`deploy/sim/e2e/run.sh nat` SHALL check that node-a WAN is on the
+ISP LAN (`192.168.1.0/24`) with `gateway=auto`, node-b WAN is on
+`192.168.50.0/24` without default export, overlay `10.254` traceroute
+is one hop, and node-a cannot ping node-b's WAN address.
+
+#### Scenario: Overlay not WAN
+
+- GIVEN the household NAT fixture
+- WHEN `deploy/sim/e2e/run.sh nat` runs
+- THEN overlay traceroute a↔b is 1 hop
+- AND ping from A to B's WAN address fails
+
+### Requirement: DHCP CRDT e2e is a gated command
+
+`deploy/sim/e2e/run.sh dhcp-crdt` SHALL hop or place a STA on node-b
+after node-a vended its IPv4, then DHCPREQUEST that address. The run
+SHALL fail if node-b offers a different IPv4 or if `mjolnir-roam.conf`
+on B does not contain the STA MAC→IP. The run SHALL NOT close
+`mjolnir-mesh-wvg.4`.
+
+#### Scenario: B ACKs A's lease
+
+- GIVEN a STA whose IPv4 was vended on node-a
+- WHEN it DHCPREQUESTs on node-b
+- THEN the IPv4 is unchanged
+- AND B's roam dhcp-host file lists that MAC and IP
+
+### Requirement: Fade e2e is a gated command
+
+`deploy/sim/e2e/run.sh fade` SHALL increase vwifi distance until overlay
+`10.254` ping fails, then restore coordinates and require reconvergence.
+The run SHALL fail if overlay stays up. Killing vwifi-server is the
+health partition, not this suite.
+
+#### Scenario: Distance fade drops overlay
+
+- GIVEN overlay ping a↔b works
+- WHEN vwifi-ctrl moves guests far apart
+- THEN overlay ping fails while mgmt SSH lives
+- AND restoring coordinates restores overlay ping
+
+### Requirement: DNA e2e is a gated command
+
+`deploy/sim/e2e/run.sh dna` SHALL run the RFC 4436 INIT-REBOOT probe
+and SHALL NOT close `mjolnir-mesh-sz9.1`.
+
+#### Scenario: Observation recorded
+
+- GIVEN a STA with a lease
+- WHEN `run.sh dna` finishes successfully
+- THEN keep vs hole is logged
+- AND `sz9.1` remains open
+
+### Requirement: Apply-rollback e2e is a gated command
+
+`deploy/sim/e2e/run.sh apply-rollback` SHALL run `mjolnir-apply` on a
+sim guest that presents `/etc/mjolnir/sim-guest`. The run SHALL
+snapshot current allowlisted UCI, stage a UCI mutation that fails
+closed before commit, and require the snapshot to be restored. The
+command SHALL fail if the result is not `ROLLED_BACK`, if UCI still
+contains the staged change, or if overlay `10.254` ping a↔b does not
+succeed after restore. The runner SHALL NOT close beads. Metal apply
+remains a separate hardware gate. The harness SHALL NOT bounce
+sim radios (`RUN_WIRELESS` / `wifi reload`) — dedicated hostapd is
+the client AP.
+
+#### Scenario: Bad UCI rolls back
+
+- GIVEN node-a is a marked sim guest with overlay ping to node-b
+- WHEN `deploy/sim/e2e/run.sh apply-rollback` runs
+- THEN `mjolnir-apply` writes `ROLLED_BACK`
+- AND the staged UCI mutation is absent
+- AND overlay `10.254` ping a↔b succeeds
+- AND `lpv` / `z3th` remain open
+
+#### Scenario: Marker still required
+
+- GIVEN a node without `/etc/mjolnir/sim-guest`
+- WHEN the sim apply-rollback profile would write UCI
+- THEN it aborts before mutation
