@@ -50,6 +50,7 @@ log "lease_before: $lease_before"
 
 [ "$assoc_a_before" != 0 ] || fail "STA not associated to A before hop"
 [ "$assoc_b_before" = 0 ] || fail "STA already on B before hop"
+[ "${r158_a_before:-0}" = 0 ] && [ "${r158_b_before:-0}" = 0 ] || fail "stale proto 158 before hop (need a move, not inherited /32)"
 
 # Probe
 probe_log=$(mktemp)

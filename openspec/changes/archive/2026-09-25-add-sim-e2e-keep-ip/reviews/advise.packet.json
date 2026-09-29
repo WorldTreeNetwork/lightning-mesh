@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-sim-e2e-keep-ip-advise-sol",
+  "node_id": "add-sim-e2e-keep-ip-advise-sol",
+  "capability": "mesh-sim-lab",
+  "change_id": "add-sim-e2e-keep-ip",
+  "goal": "Advise add-sim-e2e-keep-ip. You are Sol (gpt-5.6-sol), other-family reader. Conductor is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-sim-e2e-keep-ip/reviews/2026-09-25-advise.md (that exact name).\n\nBLIND PASS first from Why and living mesh-sim-lab spec. Then read steer.md, proposal, spec delta.\n\nWhy: roam-keep-ip.sh already showed keep-IPv4 and dual proto 158. That must be a gated fail, not an xfail and not a metal close.\nSteer decide-for-me: dual 158 is FAIL not xfail; never bd close 5wc/wvg/sz9.1.\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** sol-arch-review\n> **SPAWN:** <this spawn dir>",
+  "non_goals": ["Implement keep-ip e2e", "Fold", "Close 5wc", "Fix meshd dual /32"],
+  "anchors": [
+    {
+      "symbol": "openspec/specs/mesh-sim-lab/spec.md",
+      "invariant": "Sim evidence is not metal roam proof; keep-IP harness records /32 move."
+    },
+    {
+      "symbol": "deploy/sim/roam-keep-ip.sh",
+      "invariant": "Live hop kept IPv4 and failed because A still had proto 158."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "keep-ip e2e fails while A still announces proto 158; 5wc stays open.",
+    "if_false": "dual 158 is xfail or the harness closes 5wc."
+  },
+  "out_of_scope": [
+    {"item": "meshd withdraw /32 on A", "tracked_as": "mjolnir-mesh-sz9"},
+    {"item": "metal phone walk", "tracked_as": "mjolnir-mesh-5wc"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-sim-e2e-keep-ip/reviews/",
+      "openspec/changes/add-sim-e2e-keep-ip/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "instrument",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "agt-sol-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-sol-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
