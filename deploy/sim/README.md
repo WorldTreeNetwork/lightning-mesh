@@ -139,6 +139,20 @@ Client AP needs a dedicated `hostapd` (`ssid LightningMesh` ch 6);
 netifd/wpad leaves hwsim 2g AP at txpower 0. Split mgmt `eth0` off
 `br-lan` so STA DHCP is `10.42.x` not `10.99`.
 
+## E2E (`mjolnir-mesh-0wgr`)
+
+```bash
+deploy/sim/e2e/run.sh health     # PASS
+deploy/sim/e2e/run.sh nat        # PASS
+deploy/sim/e2e/run.sh keep-ip    # FAIL until proto 158 moves (not xfail)
+deploy/sim/e2e/run.sh dhcp-crdt  # FAIL until B ACKs A's lease (wvg.4)
+deploy/sim/e2e/run.sh dna        # records hole; does not close sz9.1
+deploy/sim/e2e/run.sh fade            # FAIL: distance does not drop overlay yet
+deploy/sim/e2e/run.sh apply-rollback  # 0wgr.7 snapshot, fail closed, restore
+```
+
+Never `bd close` 5wc/wvg/sz9.1 from these harnesses. Metal apply stays `lpv` / `z3th`.
+
 ## aarch64 smoke (`sim.8`)
 
 ```bash
