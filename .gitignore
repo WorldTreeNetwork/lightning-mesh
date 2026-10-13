@@ -96,3 +96,8 @@ deploy/mikrotik/secrets/
 deploy/openwrt/fleet-secrets/*
 !deploy/openwrt/fleet-secrets/*.example
 .playwright-mcp
+
+# Intention scratch (conductor isolate, spawn stage, harness session)
+.worktrees/
+.spawns/
+groups/*/inventory.json

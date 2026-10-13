@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-coverage-sweep",
+  "node_id": "mjolnir-mesh-6hn.6",
+  "change_id": "add-coverage-sweep",
+  "capability": "mesh-coverage",
+  "goal": "IMPLEMENT add-coverage-sweep first slice: fixture walk paints coverage on web3d-space /mesh. Do not advise. Do not fold.\n\nSample record: lat/lon or local metre x/z matching simulate.ts, heading, rssi_dbm, time, optional node_id/ssid.\nGrid join: cells unknown | thin | covered. Strong RSSI paints covered. Silence stays unknown. Completeness is a visible score on /mesh (Tactic Sans numerals already: font-numerals). Paint MUST be distinct from edgeStrength link colors (cyan strong / gold relay / grey weak).\n\nFixture: recorded walk over the four-router fleet in src/lib/mesh/simulate.ts (Front Porch [6,0.7,8], Kitchen [8,0.7,-4], Workshop [-6,0.7,2], Hill [-14,0.7,-8]). Strong samples near Porch/Kitchen; a silent corner stays unknown.\n\nEmpty samples: /mesh still boots, all unknown. PlayCanvas adapter failure stays the existing visible error.\n\nDreamBall schema is NOT this node. Compass GPS HAL is NOT this node. Live fleet fetch is NOT this node.\n\nTests: vitest contrast (strong walk covered; silence unknown). Check off lightning-mesh openspec/changes/add-coverage-sweep/tasks.md. If /mesh paint also satisfies add-coverage-world-viz tasks, check those too but do not fold.\n\nType: display Space Age, numerals Tactic Sans — already on /mesh.\n\nCommit each repo separately, explicit paths, never git add -A.\nlightning-mesh: git push git@github.com:WorldTreeNetwork/lightning-mesh.git HEAD:main\nweb3d-space: git push origin HEAD:main (dukedorje/web3d-space)",
+  "non_goals": [
+    "DreamBall coverage attribute",
+    "Live radio.json fetch",
+    "World-model GLB",
+    "NeRF train"
+  ],
+  "anchors": [
+    {
+      "symbol": "src/lib/mesh/simulate.ts",
+      "invariant": "Four-router fixture positions are metres, not GPS. Coverage first slice may use that local frame."
+    },
+    {
+      "symbol": "src/lib/mesh/mount.ts",
+      "invariant": "Link colors encode edgeStrength. Coverage paint must use a different encoding."
+    },
+    {
+      "symbol": "src/routes/mesh/+page.svelte",
+      "invariant": "Completeness score is on-screen, not a hidden metric."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cd /Users/dukejones/work/Family/web3d-space && bun test src/lib/mesh"
+  },
+  "out_of_scope": [
+    {"item": "DreamBall wasm", "tracked_as": "add-dreamball-coverage"},
+    {"item": "World-model overlay", "tracked_as": "add-survey-world-model"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-coverage-sweep/",
+      "/Users/dukejones/work/Family/web3d-space/src/lib/mesh/",
+      "/Users/dukejones/work/Family/web3d-space/src/routes/mesh/",
+      "/Users/dukejones/work/Family/web3d-space/openspec/changes/add-coverage-world-viz/tasks.md"
+    ],
+    "do_not": ["fold", "deploy"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "worker",
+  "assignee": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "effort": "medium",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

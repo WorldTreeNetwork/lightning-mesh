@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-mesh-ncy.1-act-sol",
+  "node_id": "mjolnir-mesh-ncy.1",
+  "capability": "mesh-mini-apps",
+  "goal": "You are the IMPLEMENTATION WORKER, not a reviewer: write product code and tests, and do not write any review file. Implement openspec change add-mini-app-contract (ACTIVE BUILD, advise ACCEPT round 2 by sol-arch-review). You are the implementation worker. Edit only constraints.paths and stop; the conductor verifies and commits. Do not fold, do not flip the banner, do not push.\n\nRead first, in this order: openspec/changes/add-mini-app-contract/proposal.md, design.md, specs/mesh-mini-apps/spec.md (the requirements you must satisfy; every #### Scenario needs a test), tasks.md, and reviews/2026-09-13-advise-r2.md (the accept, whose last paragraphs are act-time verification requirements).\n\nBuild two parts.\n\nPART A, browser contract (TypeScript, pure, no Svelte components):\n- hello-mesh-web/src/lib/miniapp/contract.ts exporting: isMiniApp(svc), appPath(svc), entryUrl(svc), entryOrigin(svc) (same host/port rule as webUrl in hello-mesh-web/src/lib/components/ServicesPanel.svelte:31, plus path; final check new URL(entry).origin === record-derived origin); parseManifest(json) (field limits, truncation, text-only values, icon must be a data:image/(png|jpeg|webp|svg+xml) URI <= 64 KiB after the node inlines it, embed default link, height via clampHeight); clampHeight(n) (finite numbers only, 120-640); isKeyBearingOrigin(origin, pageOrigin) and canEmbed(entryOrigin, pageOrigin, embedMode) implementing the structural rule (IP-literal hosts incl. IPv6 brackets, reserved hello.mesh/id.mesh, current page origin => never embed); FRAME_SANDBOX, FRAME_ALLOW, FRAME_REFERRER constants; bridge envelope types; acceptBridgeMessage(event, frameWindow, entryOrigin) (source AND origin, mesh === 'mini-app/v1', known type, JSON.stringify wrapped in try/catch, UTF-8 byte length via TextEncoder <= 16384); safeOpenUrl(url) (http/https only); parseAppsResponse(json, directoryServices) that binds each /api/apps entry to a directory service by (name, protocol, ip, port) and ignores any server-supplied URL or origin.\n- hello-mesh-web/src/lib/miniapp/contract.spec.ts (runs in the vitest 'server' project, node env): one test per scenario in the delta for Requirements 'App marker', 'Sandboxed insertion' (as canEmbed decisions) and 'Bridge envelope' (use fake event objects), plus manifest validation cases driven by the shared fixtures below.\n- Shared manifest fixtures: hello-mesh-web/src/lib/miniapp/fixtures/manifests/*.json, each file {\"input\": <raw manifest JSON value or string>, \"expect\": <validated manifest object or null>}. Both the TS and Rust suites must load the SAME files so validation stays field-for-field identical.\n- hello-mesh-web/src/lib/directory/fixtures.ts: add an app-marked service (keyed, http, 3000, txt app=v1 path=/app) and a same-origin trap (dotted mDNS-style name with txt app=v1 whose ip is a gateway 10.42.7.1 port 80).\n\nPART B, node-side manifest fetch (Rust, crates/mjolnir-hello):\n- New module crates/mjolnir-hello/src/apps.rs: manifest validation mirroring parseManifest and driven by the same fixture files (read them in tests via a path relative to CARGO_MANIFEST_DIR: ../../hello-mesh-web/src/lib/miniapp/fixtures/manifests); a background refresher thread started from main.rs that reads the same cached directory.json projection /api/directory serves (routes.rs DirectoryCache) and, for each mini-app record (protocol http/https, txt app=v1) whose ip is in 10.42.0.0/16 or 10.254.0.0/16, fetches GET /.well-known/mesh-app.json by connecting to the record's literal ip:port (no DNS, no proxy env), Host header = entry host, no redirects, 3 s timeout, body capped at 128 KiB while streaming after any transfer decoding, then the manifest-named same-origin icon under the same rules and inlines it as a data URI; per-app re-fetch at most every 5 minutes with jitter; last-good kept up to 1 hour; cache keyed by (name, protocol, ip, port), pruned when a record disappears or changes; bounded app count and concurrency (sequential in the one refresher thread is fine).\n- HTTP client: ureq 2.x with rustls using the ring crypto provider (NOT aws-lc-rs: the router build is a static aarch64 musl cross-compile in Docker, see deploy/openwrt/build.sh). The certificate-verification bypass must live in a private type inside apps.rs, used only by the manifest fetcher, with no cookies, credentials or exported client. Keep the dependency set minimal.\n- GET /api/apps in routes.rs: serialize the in-memory map only (never fetch or wait inside a request), shape {\"version\":1,\"apps\":[{\"name\",\"protocol\",\"ip\",\"port\",\"manifest\":<validated or null>,\"fetched_at_unix_ms\",\"stale\":bool,\"error\":<string or null>}]}. It gets the same CORS treatment as other GET /api/*.\n- Tests in apps.rs (and routes tests if routes.rs has a test module): fixture parity; out-of-range ip not fetched; redirect not followed; body over cap rejected; timeout; cache prune on record removal/change; /api/apps never blocks (serialize from map). Use a local std::net::TcpListener test server bound to 127.0.0.1; make the range guard injectable for tests only (a test-only constructor), never loosened in production code.\n\nTick the checkboxes in openspec/changes/add-mini-app-contract/tasks.md ONLY for work you completed and tested. Do not tick the advise box, the docs sign-off box, or the binary-size item (the conductor measures the aarch64 delta).\n\nKnown environment facts: on this host use CARGO_TARGET_DIR=/tmp/lm-target (repo target/ is root-owned). The mjolnir-meshd daemon feature does not compile on macOS; mjolnir-hello and the mjolnir-mesh library do. The vitest 'client' browser project needs a Playwright Chromium that is not installed; run only the 'server' project. Package manager is bun. Multiple sessions share this checkout, and the conductor persists your edits: change only files on constraints.paths and leave everything else in the working tree exactly as you found it.",
+  "non_goals": [
+    "Apps shelf UI or any .svelte component (add-app-shelf, ncy.3)",
+    "meshd publish --app (ncy.2)",
+    "Identity bridge types (add-embedded-assert, ncy.4)",
+    "Editing docs/** (needs Duke sign-off)",
+    "Rebuilding crates/mjolnir-hello/static or deploying",
+    "Measuring the aarch64 binary delta (conductor does this)"
+  ],
+  "anchors": [
+    {
+      "symbol": "hello-mesh-web/src/lib/components/ServicesPanel.svelte:31",
+      "invariant": "entryUrl uses the same host and default-port rule as webUrl, plus path."
+    },
+    {
+      "symbol": "crates/mjolnir-hello/src/routes.rs DirectoryCache",
+      "invariant": "The refresher reads the same cached projection; request handling never performs app-host I/O."
+    },
+    {
+      "symbol": "crates/mjolnir-mesh/src/crdt/service.rs:79 ServiceEntryV2",
+      "invariant": "No CRDT schema change; the app marker rides txt."
+    },
+    {
+      "symbol": "hello-mesh-web/src/lib/identity/keys.ts",
+      "invariant": "No app-supplied code, markup or style is ever placed in a hello.mesh origin."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cd hello-mesh-web && bunx vitest run --project server src/lib/miniapp && bun run check && cd .. && CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-hello"
+  },
+  "out_of_scope": [
+    {"item": "Apps shelf UI", "tracked_as": "mjolnir-mesh-ncy.3 add-app-shelf"},
+    {"item": "meshd publish --app", "tracked_as": "mjolnir-mesh-ncy.2 add-app-manifest-publish"},
+    {"item": "Identity over the bridge", "tracked_as": "mjolnir-mesh-ncy.4 add-embedded-assert"},
+    {"item": "Publishing guide section", "tracked_as": "tasks.md docs sign-off box"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "hello-mesh-web/src/lib/miniapp",
+      "hello-mesh-web/src/lib/directory/fixtures.ts",
+      "crates/mjolnir-hello/src/apps.rs",
+      "crates/mjolnir-hello/src/routes.rs",
+      "crates/mjolnir-hello/src/main.rs",
+      "crates/mjolnir-hello/Cargo.toml",
+      "Cargo.lock",
+      "openspec/changes/add-mini-app-contract/tasks.md"
+    ],
+    "do_not": ["push", "deploy", "fold", "edit docs"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only",
+  "role": "worker",
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "sol-implement"}
+  },
+  "requester": {
+    "id": "agt-opus-5",
+    "kind": "model",
+    "harness": "claude",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-opus-5"}
+  }
+}

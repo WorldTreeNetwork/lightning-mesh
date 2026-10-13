@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-node-coordinates",
+  "node_id": "mjolnir-mesh-6hn.2",
+  "change_id": "add-node-coordinates",
+  "capability": "mesh-coverage",
+  "goal": "Add last-known WGS84 stamps as additive optional fields on the gossiped directory projection. Unmarked omits the field. Join to radio.json is backhaul_addr. Do not change radio.json v1. Stamp ingest POST is add-compass-node-mark — this node is the store, gossip, and projection so that ingest has a home.\n\nLiving spec: openspec/specs/mesh-coverage/spec.md (Last-known coordinates live on the directory). Change: openspec/changes/add-node-coordinates/.\n\nPattern: crates/mjolnir-mesh/src/crdt/node_name.rs NodeNameBook — but stamps are NOT self-announce-only. A phone stamps another node_id. LWW on stamped_at + stamper.\n\nDirectoryNode/Neighbor live in crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs ~2864-2889. Hello types: hello-mesh-web/src/lib/directory/api.ts.\n\nAcceptance: cargo test of the new book + projection (CARGO_TARGET_DIR=/tmp/lm-target; do not sudo cargo; daemon-feature tests cannot compile natively on macOS — keep new tests in the lib crate). hello types accept additive fields. Unmarked neighbor has no lat/lon keys in serialized JSON.\n\nCommit explicit paths. Never git add -A. Push git@github.com:WorldTreeNetwork/lightning-mesh.git HEAD:main after tests pass. Do not implement hello stamp UI.",
+  "non_goals": [
+    "hello.mesh stamp UI (add-compass-node-mark)",
+    "radio.json lat/lon",
+    "GPS on OpenWrt",
+    "DreamBall snapshot",
+    "/mesh paint",
+    "NFC/BLE/ESP-NOW"
+  ],
+  "anchors": [
+    {
+      "symbol": "crates/mjolnir-mesh/src/crdt/node_name.rs",
+      "invariant": "LWW book keyed by node_id; persist + gossip. Coordinate stamps differ: subject may not equal stamper."
+    },
+    {
+      "symbol": "crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs",
+      "invariant": "DirectoryNode/Neighbor grow additively with skip_serializing_if Option; hello stays schema-safe."
+    },
+    {
+      "symbol": "hello-mesh-web/src/lib/directory/api.ts",
+      "invariant": "TypeScript DirectoryNode/Neighbor already have optional name; coords follow that pattern."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "CARGO_TARGET_DIR=/tmp/lm-target cargo test -p mjolnir-mesh --lib -- coordinate"
+  },
+  "out_of_scope": [
+    {"item": "POST stamp to hello", "tracked_as": "add-compass-node-mark"},
+    {"item": "Coverage heatmap", "tracked_as": "add-coverage-sweep"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "crates/mjolnir-mesh/src/crdt/",
+      "crates/mjolnir-mesh/src/lib.rs",
+      "crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs",
+      "hello-mesh-web/src/lib/directory/api.ts",
+      "hello-mesh-web/src/lib/directory/",
+      "openspec/changes/add-node-coordinates/tasks.md"
+    ],
+    "do_not": ["fold", "deploy"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "worker",
+  "assignee": {
+    "id": "agt-opus-5",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "effort": "medium",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-opus-5"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
