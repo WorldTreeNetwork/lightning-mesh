@@ -2,4 +2,5 @@
 // Copyright (C) 2026 World Tree Network Foundation and the Lightning Mesh contributors
 
 pub mod discovery;
+pub mod guild;
 pub mod network_name;

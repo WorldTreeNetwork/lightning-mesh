@@ -2,9 +2,11 @@
 // Copyright (C) 2026 World Tree Network Foundation and the Lightning Mesh contributors
 
 mod commands;
+mod guild;
 pub mod net;
 
 use commands::discovery::scan_link_local;
+use commands::guild::sign_guild_op;
 use commands::network_name::apply_network_name;
 
 fn init_logging() {
@@ -27,7 +29,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             scan_link_local,
-            apply_network_name
+            apply_network_name,
+            sign_guild_op
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

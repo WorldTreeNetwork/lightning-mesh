@@ -28,6 +28,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 if-addrs = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync", "process"] }
+# Signer for identikey-keyspace-v1. Same rev identikey-core uses.
+# Admin signs membership ops. It does not mint or wrap a guild PTK.
+identikey-log = { git = "https://github.com/identikey/identikey-protocol.git", rev = "093ceb13148d5fb5267ad309ecdfea15f2637d9e" }
+dcbor = "=0.25.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

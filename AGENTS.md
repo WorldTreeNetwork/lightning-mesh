@@ -128,6 +128,15 @@ Keypair `~/.config/mjolnir/identikey.json`, fingerprint
 `7PfGe1Dsx176UjgvTSaQd9Bc6hXBiCaJrNz3Tcd2noWL`, site name `lightning-mesh`.
 Not `mj deploy`.
 
+## Lightning Admin
+
+Native desktop editor in `admin/` (Tauri 2 + SvelteKit). Not hello.mesh
+(visitor front desk) and not bf7. Run: `cd admin && bun install && bun run tauri dev`.
+The window discovers neighbors, sets the fleet network name through
+`mjolnir-apply`, and signs guild ops (`keyspace.join`, `keyspace.change`,
+`keyspace.assign-node`, `keyspace.nest`). No rename. Guild signing does not
+write the client SSID. See `admin/README.md`.
+
 ## Lightning Admin Windows build (morphist-win11)
 
 Recipe: [`admin/scripts/windows-build/README.md`](admin/scripts/windows-build/README.md).

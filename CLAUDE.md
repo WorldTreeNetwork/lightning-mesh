@@ -59,7 +59,10 @@ cargo build --workspace          # Cargo workspace (crates/*)
 cargo test --workspace
 cargo clippy
 deploy/openwrt/build.sh          # cross-build static aarch64 mjolnir-meshd for routers
-# Windows MSI/NSIS for Lightning Admin: boot morphist-win11, then
+# Lightning Admin is the native desktop editor (not hello.mesh):
+#   cd admin && bun install && bun run tauri dev
+# Discovery, fleet network name, and guild verbs (keyspace.* ops).
+# Windows MSI/NSIS: boot morphist-win11, then
 #   admin/scripts/windows-build/release.sh
 # (see AGENTS.md + admin/scripts/windows-build/README.md)
 ```

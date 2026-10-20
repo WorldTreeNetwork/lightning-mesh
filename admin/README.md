@@ -5,7 +5,8 @@ Winbox / UniFi Network: sit on a LAN, discover the boxes, then administer
 them. Built like [Papyrus](https://github.com/): Tauri 2 wrapping a SvelteKit
 static SPA (`adapter-static` + `ssr = false`).
 
-v1 of the window is discovery plus the fleet **network name**. Unique Local
+The window is discovery, the fleet **network name**, and **guild**
+membership. Unique Local
 (`fc00::/7`) and link-local (`fe80::`) IPv6 on every local interface, plus
 neighbors from the kernel table and an ICMPv6 echo to `ff02::1` (all-nodes)
 scoped per interface. The **Network name** control sets the client AP SSID
@@ -42,6 +43,20 @@ bun run check
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-The frontend talks to Rust through `invoke('scan_link_local')` and
-`invoke('apply_network_name')` — same method as Papyrus `list_vms` /
-`list_boxes`.
+## Guild
+
+Join, Change, Assign node, and Nest sign identikey-log ops. The buttons
+say guild. The kinds are `keyspace.join`, `keyspace.change`,
+`keyspace.assign-node`, and `keyspace.nest`. There is no rename button.
+An empty guild id on Join is outer genesis (profile `house`); the
+keyspace id is that op's content hash. Nest creates an inner
+`access-node` guild whose id is the nest op's content hash. Assign node
+binds an opaque 32-byte node id.
+
+The actor seed is 32 bytes as 64 hex characters (an Ed25519 seed). It is
+not written next to the op. Signed ops append as hex lines to
+`~/.config/lightning-admin/guild-ops.log`. These ops do not mint or wrap
+a guild secret, and they do not call Apply on the network name.
+
+The frontend talks to Rust through `invoke('scan_link_local')`,
+`invoke('apply_network_name')`, and `invoke('sign_guild_op')`.

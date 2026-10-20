@@ -60,6 +60,28 @@ for how this composes with the broader Mjolnir microVM platform.
 |------------------------------------------------|-----------------|----------------------------------------------------------------------|
 | [`mjolnir-mesh`](crates/mjolnir-mesh)          | `mjolnir-meshd` | **The deployed OpenWrt router daemon** — CRDT, gossip, babel, overlay TUN |
 | [`mjolnir-meshctl`](crates/mjolnir-meshctl)    | `meshctl`       | Operator-side RouterOS reconciler                                     |
+| [`admin/`](admin)                              | Lightning Admin | Native desktop editor (Tauri). Discovery, fleet network name, guild verbs. Not hello.mesh. |
+
+## Lightning Admin
+
+Lightning Admin (`admin/`) is the native operator desktop, the Winbox-style
+editor for this mesh. `hello.mesh` is the visitor front desk on the open
+client network. Do not administer the fleet from hello.mesh.
+
+```bash
+cd admin
+bun install
+bun run tauri dev
+```
+
+The window discovers Unique Local and link-local IPv6 neighbors, sets the
+fleet **network name** (the client SSID phones join, written only through
+`mjolnir-apply`), and signs guild membership: join, change, assign node,
+and nest. Guild copy is the product word. The signed ops are
+`keyspace.join`, `keyspace.change`, `keyspace.assign-node`, and
+`keyspace.nest`. There is no rename. Signing a guild op does not change
+the network name. Quality gates and the actor-seed log path are in
+[`admin/README.md`](admin/README.md).
 
 > **Voice/media lives elsewhere.** The audio side-quest (Opus pipeline, PLC
 > backends, jitter buffer, Media-over-QUIC scaffolding, and the desktop voice

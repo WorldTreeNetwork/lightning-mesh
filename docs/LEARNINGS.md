@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-10-19 — Lightning Admin guild verbs sign identikey-log locally (`~/.config/lightning-admin/guild-ops.log`) and do not wrap a PTK or touch `CLIENT_SSID`. hello.mesh still has no access-node replica, so `mjolnir-mesh-st1.4` stays open. (`admin/src-tauri/src/guild.rs`)
 - 2026-09-29 — Sim apply-rollback uses durable txn `ApplyFailed` (wrong `proposed_revision`), not `mesh-reachability`: OpenWrtAdapter records reachability as Unknown, then `verify_restoration` errors into `RecoveryRequired` and blocks later applies. Do not `RUN_WIRELESS` on the live sim guests — dedicated hostapd owns the client AP. (`deploy/sim/e2e/apply-rollback.sh`)
 - 2026-09-25 — Sim `dhcp-crdt` e2e: B offered `10.42.103.106` instead of A's `10.42.69.106`; harness FAIL as intended; `wvg.4` left open. (`deploy/sim/e2e/run.sh dhcp-crdt`, `openspec/specs/mesh-sim-lab/spec.md`)
 - 2026-09-25 — vwifi-ctrl distance 50000 does not drop overlay `10.254` ping; killing vwifi-server does (health partition). Fade e2e FAILs until the loss model bites. (`deploy/sim/e2e/fade.sh`)
