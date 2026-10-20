@@ -17,6 +17,7 @@
 mod apps;
 mod assets;
 mod config;
+mod guildspace;
 mod portal;
 mod routes;
 

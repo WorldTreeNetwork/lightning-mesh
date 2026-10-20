@@ -118,6 +118,10 @@ struct IdentityRequest {
     challenge: String,
     #[serde(default)]
     label: Option<String>,
+    /// X25519 encapsulation key that would hold an access-node wrap.
+    /// Absent means this login is not a guild event.
+    #[serde(default)]
+    wrap_recipient: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -453,6 +457,13 @@ fn submit_identity(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path) -
     };
     let signature = Signature::from_bytes(&sig_arr);
 
+    // Reject a bad wrap target before the challenge is consumed. Missing
+    // recipient is not an error: authentication alone is not membership.
+    if let Err(err) = crate::guildspace::decide(spool_dir, &req.pubkey, req.wrap_recipient.as_deref())
+    {
+        return bad_request(&err);
+    }
+
     let Ok(challenge_bytes) = HEXLOWER.decode(req.challenge.as_bytes()) else {
         return bad_request("invalid challenge encoding");
     };
@@ -492,15 +503,33 @@ fn submit_identity(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path) -
         challenge: &req.challenge,
         label: &req.label,
     };
-    let record_json = serde_json::to_string(&record).expect("record serializes");
+    let mut record_value = serde_json::to_value(&record).expect("record serializes");
 
     let dest = spool_dir.join(format!("{}.json", req.pubkey));
-    if let Err(err) = std::fs::write(&dest, &record_json) {
+    if let Err(err) = std::fs::write(
+        &dest,
+        serde_json::to_string(&record).expect("record serializes"),
+    ) {
         tracing::error!(%err, path = %dest.display(), "failed to write identity spool entry");
         return RouteResponse::json(500, r#"{"error":"spool write failed"}"#);
     }
 
-    RouteResponse::json(200, record_json)
+    match crate::guildspace::note_login(spool_dir, &req.pubkey, req.wrap_recipient.as_deref()) {
+        Ok(Some(keyspace_id)) => {
+            record_value["guildspace"] = serde_json::Value::String(keyspace_id);
+            record_value["guildspace_profile"] = serde_json::json!("access-node");
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(%err, "access-node wrap-login failed after identity spool");
+            return RouteResponse::json(500, r#"{"error":"guildspace spool failed"}"#);
+        }
+    }
+
+    RouteResponse::json(
+        200,
+        serde_json::to_string(&record_value).expect("record serializes"),
+    )
 }
 
 /// `POST /api/name-claim` — validate a signed claim to a flat `.mesh` name and,
@@ -1151,6 +1180,9 @@ mod tests {
             None,
         );
         assert_eq!(resp.status, 200);
+        let body_json: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert!(body_json.get("guildspace").is_none());
+        assert!(!spool.path().join("guildspace").exists());
 
         let spooled_path = spool.path().join(format!("{pubkey_hex}.json"));
         assert!(
@@ -1174,6 +1206,102 @@ mod tests {
             None,
         );
         assert_eq!(replay.status, 400);
+    }
+
+    #[test]
+    fn identikey_login_asks_for_an_access_node_wrap_and_portal_pass_does_not() {
+        let (challenges, spool) = no_state();
+        let keyspace = "33".repeat(32);
+        std::fs::write(
+            spool.path().join("access-node-keyspace"),
+            format!("{keyspace}\naccess-node\n"),
+        )
+        .unwrap();
+        let signing_key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(signing_key.verifying_key().as_bytes());
+        let recipient = "22".repeat(32);
+
+        let challenge_resp = route(
+            "GET",
+            "/api/challenge",
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
+        );
+        let challenge_json: serde_json::Value =
+            serde_json::from_slice(&challenge_resp.body).unwrap();
+        let challenge_hex = challenge_json["challenge"].as_str().unwrap();
+        let challenge_bytes = HEXLOWER.decode(challenge_hex.as_bytes()).unwrap();
+        let sig_hex = HEXLOWER.encode(&signing_key.sign(&challenge_bytes).to_bytes());
+        let body = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","wrap_recipient":"{recipient}"}}"#
+        );
+        let resp = route(
+            "POST",
+            "/api/identity",
+            None,
+            body.as_bytes(),
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            Path::new("/nonexistent"),
+            &RadioCache::new(),
+            Path::new("/nonexistent"),
+            &new_portal_releases(),
+            None,
+        );
+        assert_eq!(resp.status, 200);
+        let logged: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(logged["guildspace"], keyspace);
+        assert_eq!(logged["guildspace_profile"], "access-node");
+        let wrap: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                spool.path()
+                    .join("guildspace")
+                    .join(format!("{pubkey_hex}.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wrap["kind"], "keyspace.join");
+        assert_eq!(wrap["recipient"], recipient);
+        assert!(wrap.get("ciphertext").is_none());
+
+        let releases = new_portal_releases();
+        let before = std::fs::read_dir(spool.path().join("guildspace"))
+            .unwrap()
+            .count();
+        assert_eq!(
+            route(
+                "POST",
+                "/api/portal/pass",
+                None,
+                b"",
+                &challenges,
+                spool.path(),
+                &DirectoryCache::new(),
+                Path::new("/nonexistent"),
+                &RadioCache::new(),
+                Path::new("/nonexistent"),
+                &releases,
+                Some("10.42.12.77".parse().unwrap()),
+            )
+            .status,
+            200
+        );
+        assert_eq!(
+            std::fs::read_dir(spool.path().join("guildspace"))
+                .unwrap()
+                .count(),
+            before
+        );
     }
 
     #[test]
