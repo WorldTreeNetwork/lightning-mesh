@@ -2,23 +2,25 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 
 	let {
-		origin,
+		origin = '',
 		appName,
-		displayName,
-		shortKey,
-		offerCreate,
+		displayName = '',
+		shortKey = '',
+		offerCreate = false,
+		announce = false,
 		onallow,
 		ondeny,
-		ondismiss
+		ondismiss = () => {}
 	}: {
-		origin: string;
+		origin?: string;
 		appName?: string;
-		displayName: string;
-		shortKey: string;
-		offerCreate: boolean;
+		displayName?: string;
+		shortKey?: string;
+		offerCreate?: boolean;
+		announce?: boolean;
 		onallow: () => void;
 		ondeny: () => void;
-		ondismiss: () => void;
+		ondismiss?: () => void;
 	} = $props();
 </script>
 
@@ -29,7 +31,18 @@
 	aria-labelledby="consent-title"
 >
 	<section class="w-full max-w-md rounded-lg border border-border bg-card p-5 text-card-foreground">
-		{#if offerCreate}
+		{#if announce}
+			<h2 id="consent-title" class="text-lg font-semibold">Announce yourself on this network?</h2>
+			<p class="mt-2 text-sm text-muted-foreground">
+				Creating an identity makes a key in this browser and lists your name in the directory for
+				everyone here to see. It does not give you internet or admin rights. You can decline and
+				keep browsing.
+			</p>
+			<div class="mt-4 flex gap-2">
+				<Button size="sm" onclick={onallow}>Create and announce</Button>
+				<Button size="sm" variant="outline" onclick={ondeny}>Not now</Button>
+			</div>
+		{:else if offerCreate}
 			<h2 id="consent-title" class="text-lg font-semibold">Create your identity first</h2>
 			<p class="mt-2 text-sm text-muted-foreground">
 				<span class="font-medium text-foreground">{origin}</span>

@@ -9,6 +9,7 @@
      No external hosts — must run fully offline. -->
 <script lang="ts">
 	import HeroStrip from '$lib/components/HeroStrip.svelte';
+	import WelcomeInvitation from '$lib/welcome/WelcomeInvitation.svelte';
 	import PeoplePanel from '$lib/components/PeoplePanel.svelte';
 	import RoutersPanel from '$lib/components/RoutersPanel.svelte';
 	import AppsPanel from '$lib/components/AppsPanel.svelte';
@@ -33,6 +34,10 @@
 
 <main class="mx-auto flex max-w-2xl flex-col gap-6 p-6">
 	<HeroStrip />
+
+	{#if !framed}
+		<WelcomeInvitation />
+	{/if}
 
 	<PeoplePanel />
 

@@ -16,6 +16,9 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 
+	// The welcome flow in a portal browser passes false: it never asks for a seed.
+	let { allowRestore = true }: { allowRestore?: boolean } = $props();
+
 	const inputClass =
 		'h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -151,31 +154,33 @@
 			{/if}
 		</div>
 
-		<Collapsible.Root bind:open={importOpen}>
-			<Collapsible.Trigger
-				class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-			>
-				Already have a recovery phrase? Restore it
-			</Collapsible.Trigger>
-			<Collapsible.Content class="mt-2 flex flex-col gap-2">
-				<textarea
-					class="{inputClass} h-auto min-h-16 py-1.5 font-mono text-xs"
-					placeholder="Paste your 24-word recovery phrase or 64-character hex seed"
-					bind:value={importText}></textarea>
-				{#if importError}
-					<p class="text-xs text-destructive">{importError}</p>
-				{/if}
-				<Button
-					size="sm"
-					variant="outline"
-					class="w-fit"
-					disabled={busy || !importText.trim()}
-					onclick={doImport}
+		{#if allowRestore}
+			<Collapsible.Root bind:open={importOpen}>
+				<Collapsible.Trigger
+					class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
 				>
-					Restore identity
-				</Button>
-			</Collapsible.Content>
-		</Collapsible.Root>
+					Already have a recovery phrase? Restore it
+				</Collapsible.Trigger>
+				<Collapsible.Content class="mt-2 flex flex-col gap-2">
+					<textarea
+						class="{inputClass} h-auto min-h-16 py-1.5 font-mono text-xs"
+						placeholder="Paste your 24-word recovery phrase or 64-character hex seed"
+						bind:value={importText}></textarea>
+					{#if importError}
+						<p class="text-xs text-destructive">{importError}</p>
+					{/if}
+					<Button
+						size="sm"
+						variant="outline"
+						class="w-fit"
+						disabled={busy || !importText.trim()}
+						onclick={doImport}
+					>
+						Restore identity
+					</Button>
+				</Collapsible.Content>
+			</Collapsible.Root>
+		{/if}
 	{:else}
 		<!-- Has a key: rename, reveal, export, import. -->
 		<CustodyNotice />
