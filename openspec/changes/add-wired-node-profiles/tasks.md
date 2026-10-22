@@ -4,7 +4,7 @@
 
 - [x] Independent architecture advise r1 send-back (`reviews/opus-arch-review.md`)
 - [x] Answer B1–B5 in design.md and the spec delta (2026-10-22)
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation — accept (`reviews/opus-arch-review-r2.md`)
 - [ ] Profile decider: one role per port and radio, node-link not in `br-mesh`, omitted mapped ports disabled, default `ethernet-gateway-satellites`, refuse unqualified `wired-core`
 - [ ] Plan builder on a fake adapter: `mjolnir.node_link`, required health, previous revision on failure. Do not submit to `OpenWrtAdapter` until live probes exist
 - [ ] Babel renderer reads `mjolnir.node_link` as wired interfaces
