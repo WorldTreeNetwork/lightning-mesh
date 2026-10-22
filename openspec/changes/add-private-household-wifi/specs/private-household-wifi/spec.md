@@ -100,14 +100,14 @@ exception in that plan.
 #### Scenario: Guest reaches a resident service on another node
 
 - GIVEN an isolated guest profile and a resident service on a different node
-- WHEN a guest client addresses that service over IPv4 or enabled IPv6
+- WHEN a guest client addresses that service over IPv4
 - THEN the plan denies it by the house aggregates, not by a peer list
 - AND a named exception in the same plan is the only extra permit
 
-#### Scenario: IPv6 is enabled and the plan has no IPv6 deny
+#### Scenario: IPv6 is enabled or unknown
 
-- GIVEN the house has IPv6 enabled
-- WHEN a guest plan claims isolation without an IPv6 deny
+- GIVEN IPv6 is enabled, or the builder cannot tell
+- WHEN a guest profile is planned
 - THEN the plan is refused
 - AND the previous revision remains
 
