@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-10-22 — Station-uplink restore proves management reachability and the applied revision only. Requiring upstream observations turns a wrong passphrase into `recovery-required` instead of the previous plan. A captive DHCP lease must not install or redistribute `0.0.0.0/0`. (`crates/mjolnir-apply/src/uplink.rs`, `openspec/specs/wifi-internet-uplink/spec.md`)
 - 2026-10-20 — hello.mesh `POST /api/identity` with `wrap_recipient` spools `pending/guildspace/*.json` only when `pending/access-node-keyspace` names an access-node id. That file is a holder request, not a PTK and not roster membership. Portal pass writes neither. (`crates/mjolnir-hello/src/guildspace.rs`, mjolnir-mesh-st1.4)
 - 2026-10-19 — Lightning Admin guild verbs sign identikey-log locally (`~/.config/lightning-admin/guild-ops.log`) and do not wrap a PTK or touch `CLIENT_SSID`. hello.mesh still has no access-node replica, so `mjolnir-mesh-st1.4` stays open. (`admin/src-tauri/src/guild.rs`)
 - 2026-09-29 — Sim apply-rollback uses durable txn `ApplyFailed` (wrong `proposed_revision`), not `mesh-reachability`: OpenWrtAdapter records reachability as Unknown, then `verify_restoration` errors into `RecoveryRequired` and blocks later applies. Do not `RUN_WIRELESS` on the live sim guests — dedicated hostapd owns the client AP. (`deploy/sim/e2e/apply-rollback.sh`)

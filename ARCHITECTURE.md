@@ -84,6 +84,29 @@ name. Framed hello.mesh (`window.top !== window`, including a hello
 origin) fails closed before identity load; application HTML carries
 `frame-ancestors 'self'`, not the captive portal.
 
+Gossip is not authority for admin control (`add-control-record-integrity`,
+bead `mjolnir-mesh-ai0.9`). A node uses an owner-signed record only after
+it verifies the signature, domain, house, epoch, and canonical bytes
+itself. Those bytes are the mesh-admin-capabilities canonical-CBOR
+profile, domain `lightning-admin/record/<type>` version 1. Node-vouched
+facts never satisfy an owner-signed check. Freshness advances only from
+owner-signed authority-state records. A forked authority head is refused
+until a higher-epoch successor names one branch. This capability does
+not write a new head. Living spec:
+`openspec/specs/admin-record-integrity/spec.md`.
+
+Wi-Fi internet uplink (`add-wifi-internet-uplink`, bead
+`mjolnir-mesh-bf7.2`): one authorized node joins a selected upstream
+SSID as a station and feeds the mesh. Credentials bind to that candidate
+(node id, radio id, SSID; a different BSSID is a new candidate). The
+passphrase lives in a root-only file outside the four revisioned UCI
+files. A DHCP lease is not downstream internet. The mesh default-route
+export is not a second default beside an existing house-gateway export
+unless that change is in the same revision-checked plan. Failure
+restores the previous committed plan. The station interface is not
+bridged into the client LAN. Living spec:
+`openspec/specs/wifi-internet-uplink/spec.md`.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
@@ -91,6 +114,8 @@ origin) fails closed before identity load; application HTML carries
   `docs/network-coordination/ipv6-parallel-plane.md` (epic `mjolnir-mesh-v6`;
   does not reverse the `bsa` spine rejection)
 - Front desk / hello.mesh: `crates/mjolnir-hello/`, `docs/products/hello.mesh/`
+- Owner-signed admin records: `openspec/specs/admin-record-integrity/spec.md`
+- Station internet uplink: `openspec/specs/wifi-internet-uplink/spec.md`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
