@@ -41,8 +41,11 @@ Isolation is a property of the plan, not a label the UI may add later.
 The plan may say `isolated` only when all of these are true:
 
 - Each guest-serving node denies forwarded guest destinations in
-  `10.42.0.0/16` and `10.254.0.0/16`. The deny is not a list of
-  current peers and not a ban on forwarding to the mesh.
+  the committed mesh client space and in `10.254.0.0/16`. The
+  default client space is `10.42.0.0/16`
+  (`crates/mjolnir-mesh/src/alloc.rs` `DEFAULT_MESH_SPACE`). The
+  deny is not a list of current peers and not a ban on forwarding
+  to the mesh. A guest CIDR outside that client space is refused.
 - Every house node rejects INPUT whose source is in the committed
   guest-source class, except DHCP and DNS on that node's own guest
   interface. That covers the gateway's WAN address, `wwan`, recovery
@@ -59,7 +62,11 @@ The plan may say `isolated` only when all of these are true:
   on a house node that drops a guest CIDR from that node's class,
   while any house node still has a guest SSID committed for that
   CIDR, is refused. The previous revision stays. This is any
-  builder's rewrite of `mjolnir`, not only a restore.
+  builder's rewrite of `mjolnir`, not only a restore. The
+  guest-enable submitter re-reads every peer revision it built
+  against immediately before it submits the guest SSID, and refuses
+  if any moved. The residual window is two transactions that both
+  pass that check before either commits.
 - A node that joins after a guest SSID is committed
   (`mjolnir-mesh-fyby`, `add-zero-touch-join`) carries the class in
   the config it is admitted with, before it exports routes. This
@@ -69,8 +76,11 @@ The plan may say `isolated` only when all of these are true:
   for this change, not resident space. Devices that live only on the
   ISP router's LAN are outside the mesh client aggregates.
 - The same-node deny includes the node's own addresses. Guest input
-  accepts only DHCP and DNS. IPv6 neighbor discovery is out of this
-  change because a guest profile on an IPv6-enabled house is refused.
+  accepts only DHCP and DNS. The guest interface's device sets
+  `ipv6` to `0`, so the guest link has no IPv6 address, including
+  `fe80::`. IPv6 neighbor discovery is out of this change because a
+  guest profile on an IPv6-enabled house is refused, and the device
+  flag covers the link the kernel would address anyway.
 - The default guest plan names no hello.mesh exception. Guests do not
   reach `10.42.x.1:80` until a later change. Anonymous hub browsing
   stays on the resident network, or on the open SSID before commit.
@@ -79,7 +89,10 @@ The plan may say `isolated` only when all of these are true:
   `wan6` interface or `proto` `dhcpv6`, or odhcpd `ra` or `dhcpv6`
   server on a client interface. If those configs are not passed in,
   the builder refuses. This change refuses a guest profile when that
-  predicate is true. A guest `wifi-iface` carries no `ip6assign`.
+  predicate is true. On today's fleet that predicate is true
+  (`ula_prefix`, `wan6`), so a guest plan is refused until IPv6 is
+  stripped or a later change adds a v6 deny. A guest `wifi-iface`
+  carries no `ip6assign`.
   It does not invent a house GUA or a shared ULA list. A later change
   can add the v6 deny. Enabling IPv6 while a guest profile is already
   committed is refused unless that same revision drops the guest
@@ -118,3 +131,7 @@ does not perform the replacement.
 - Device-only SSIDs, SQM, VPN, or multicast reflection.
 - Rendering nftables on a router. The plan states the denies. A later
   apply slice renders them when live probes exist.
+- Same-SSID client isolation (`option isolate`). Guests on one SSID
+  can reach each other in this change.
+- Keeping `/etc/mjolnir/secrets/` across sysupgrade. That is `lpv`
+  or the deploy path.

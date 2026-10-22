@@ -50,9 +50,11 @@ required to use either network.
 
 The system SHALL offer guest Wi-Fi only as an optional second profile.
 It SHALL label that profile isolated only when forwarded guest
-destinations in `10.42.0.0/16` and `10.254.0.0/16` are denied, and
+destinations in the committed mesh client space (default
+`10.42.0.0/16`) and in `10.254.0.0/16` are denied, and
 every house node rejects INPUT from the committed guest-source class
-except DHCP and DNS on its own guest interface. Destinations outside
+except DHCP and DNS on its own guest interface. A guest CIDR outside
+that client space SHALL be refused. Destinations outside
 those aggregates that are not an address of a house node SHALL stay
 allowed. The guest-source class SHALL be the CIDRs listed in each house node's
 committed `mjolnir` config. Each CIDR SHALL be a CRDT claim under
@@ -69,7 +71,13 @@ that path. Any later revision on a house node SHALL be refused when it
 drops a guest CIDR from that node's committed class while any house
 node still has a guest SSID committed for that CIDR, and the previous
 revision SHALL stay. That refusal covers every builder that rewrites
-`mjolnir`, not only a restore. The default guest plan SHALL NOT name hello.mesh as an
+`mjolnir`, not only a restore. The guest-enable submitter SHALL
+re-read every peer revision it built against immediately before
+submitting the guest SSID, and SHALL refuse if any moved. Two
+transactions that both pass that check before either commits remain
+a residual window. The guest interface's device SHALL set `ipv6` to
+`0`, so the guest link has no IPv6 address, including link-local.
+The default guest plan SHALL NOT name hello.mesh as an
 exception. IPv6 SHALL count as enabled when the committed config shows
 any of `network.globals` `ula_prefix`, `ip6assign` on any interface, a
 `wan6` interface or `proto` `dhcpv6`, or odhcpd `ra` or `dhcpv6` server
@@ -87,8 +95,9 @@ exception in that plan.
 #### Scenario: Guest on a satellite still has an internet forward allow
 
 - GIVEN an isolated guest profile on a node that is not the gateway
-- WHEN the guest addresses a destination that is outside `10.42.0.0/16`
-  and `10.254.0.0/16` and is not an address of a house node
+- WHEN the guest addresses a destination that is outside the committed
+  mesh client space and outside `10.254.0.0/16` and is not an address
+  of a house node
 - THEN the plan's forward policy allows it
 - AND the return route for the guest CIDR is a meshd follow-up, not
   this plan
@@ -129,6 +138,26 @@ exception in that plan.
 - AND a house node's committed config rejects INPUT from that CIDR
 - WHEN a revision of that node removes the CIDR from its class
 - THEN the revision is refused
+- AND the previous revision stays
+
+#### Scenario: Guest device has no IPv6
+
+- GIVEN a guest profile the IPv6 predicate allows
+- WHEN the plan is built
+- THEN the guest interface device sets `ipv6` to `0`
+
+#### Scenario: Guest CIDR is outside the client space
+
+- GIVEN a claimed guest CIDR outside the committed mesh client space
+- WHEN the builder runs
+- THEN the plan is refused
+- AND the previous revision stays
+
+#### Scenario: A peer revision moves before submit
+
+- GIVEN a guest plan built against a set of peer revisions
+- WHEN one of those revisions has moved before submit
+- THEN the submit is refused
 - AND the previous revision stays
 
 #### Scenario: A joiner has not carried the class
