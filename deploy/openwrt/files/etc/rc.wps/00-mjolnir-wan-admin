@@ -1,10 +1,45 @@
 #!/bin/sh
-# Consume the WPS press for WAN-LAN SSH before stock 40-wps_ap / 50-wps_sta.
+# Consume the WPS press before stock 40-wps_ap / 50-wps_sta.
 # OpenWrt 25.12 /etc/rc.button/wps runs /etc/rc.wps/* and breaks on first
 # success — we must run first and exit 0 so hostapd wps_pbc never starts
 # on the open client AP. Reset (KEY_RESTART) is a different button.
+#
+# meshd decides what the press means (owner claim, mjolnir-mesh-bf7.1) and
+# publishes it in $CLAIM_DIR/button-effect:
+#   ceremony — verifier present and unclaimed, or a verified pending
+#              recovery: signal meshd, which owns the window. WAN SSH is
+#              NOT toggled.
+#   wan-ssh  — no verifier, or owned with no verified pending recovery:
+#              the existing mjolnir-wan-admin toggle.
+# No published effect: if the ownership record still holds a verifier the
+# node is mid-claim and meshd is not ready, so swallow the press (never open
+# WAN SSH on a node that should arm a ceremony). Otherwise keep the toggle.
 
 [ "$ACTION" = "released" ] || [ -z "$ACTION" ] || exit 1
+
+CLAIM_DIR=/var/run/mjolnir/owner-claim
+CLAIM_STATE=/etc/mjolnir/owner-claim.json
+
+effect=
+[ -r "$CLAIM_DIR/button-effect" ] && read -r effect <"$CLAIM_DIR/button-effect"
+
+case "$effect" in
+	ceremony)
+		# Signal only; meshd consumes the press file and arms the window.
+		date +%s >"$CLAIM_DIR/.press.tmp" 2>/dev/null \
+			&& mv -f "$CLAIM_DIR/.press.tmp" "$CLAIM_DIR/press"
+		logger -t mjolnir-owner-claim "setup press: ceremony window requested" 2>/dev/null
+		exit 0
+		;;
+	wan-ssh) ;;
+	*)
+		if [ -e "$CLAIM_STATE" ] && ! grep -q '"verifier":null' "$CLAIM_STATE" 2>/dev/null; then
+			logger -t mjolnir-owner-claim "setup press ignored: meshd has not published a button effect" 2>/dev/null
+			exit 0
+		fi
+		;;
+esac
+
 [ -x /usr/sbin/mjolnir-wan-admin ] || exit 1
 /usr/sbin/mjolnir-wan-admin toggle || true
 exit 0

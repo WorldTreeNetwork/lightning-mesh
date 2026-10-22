@@ -13,6 +13,7 @@
 //! Modules:
 //! - [`crdt`] — shared-state types and FWW merge
 //! - [`alloc`] / [`claim_cooldown`] — subnet claim allocation on first boot
+//! - [`owner_claim`] — household owner-claim ceremony, recovery, and reset
 //! - [`tun`] — per-peer TUN lifecycle and Iroh-datagram encap/decap loops
 //! - [`babel`] — babeld config rendering (babeld's process lifecycle is owned by
 //!   procd via the `mjolnir-babeld` service, not this crate — mjolnir-mesh-m8t)
@@ -35,6 +36,7 @@ pub mod heal;
 pub mod https_alias;
 mod https_label;
 pub mod led;
+pub mod owner_claim;
 pub mod radio;
 pub mod roam;
 pub mod roster;

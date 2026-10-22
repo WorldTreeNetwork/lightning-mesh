@@ -16,6 +16,7 @@
 
 mod apps;
 mod assets;
+mod claim_relay;
 mod config;
 mod guildspace;
 mod portal;
