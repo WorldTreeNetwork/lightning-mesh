@@ -107,6 +107,15 @@ restores the previous committed plan. The station interface is not
 bridged into the client LAN. Living spec:
 `openspec/specs/wifi-internet-uplink/spec.md`.
 
+Wired node profiles (`add-wired-node-profiles`, bead `mjolnir-mesh-ai0.6`):
+each used port is WAN, node-link, client, or disabled, and each used
+radio is mesh, client-ap, station, or disabled. The default stays
+`ethernet-gateway-satellites`. `wired-core` needs a qualified port map.
+A node-link stays off `br-mesh` and off resident DHCP. meshd feeds
+`mjolnir.node_link` into the babel renderer as `type wired` and does
+not drop a house-gateway `0.0.0.0/0` export. Living spec:
+`openspec/specs/node-connection-profiles/spec.md`.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
@@ -116,6 +125,7 @@ bridged into the client LAN. Living spec:
 - Front desk / hello.mesh: `crates/mjolnir-hello/`, `docs/products/hello.mesh/`
 - Owner-signed admin records: `openspec/specs/admin-record-integrity/spec.md`
 - Station internet uplink: `openspec/specs/wifi-internet-uplink/spec.md`
+- Wired node profiles: `openspec/specs/node-connection-profiles/spec.md`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
