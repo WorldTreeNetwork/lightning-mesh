@@ -13,9 +13,11 @@ verifies against the same request, node id, and ownership epoch.
    The node id is the key this mesh already derives addresses from.
 
 2. **One-time provisioning secret.** Printed on a card that ships off the
-   device. The node never displays it, including after reset. The node stores
-   HMAC-SHA256(node-local salt, secret), not the secret. The card has at
-   least 80 bits of entropy (16 lowercase RFC 4648 base32 characters).
+   device. The node never displays it, including after reset. The card carries the full node id. `k = HMAC-SHA256(salt, secret)`. The salt
+   is printed on the card or carried in the node-signed challenge. The node
+   stores `k`, not the card string. `k` is secret-equivalent for forging
+   proofs; reading it off flash is physical compromise. The card secret has
+   at least 80 bits of entropy (16 lowercase RFC 4648 base32 characters).
 
 3. **Physical window.** The local setup button (the same button position as
    WPS on these devices) only arms presence. It opens a configurable window
@@ -31,19 +33,25 @@ before it sends anything derived from the secret. That signature is the
 purchaser's check that the entry router is the intended device. The node does
 not treat its own signature as an acceptance factor.
 
-The client then sends HMAC-SHA256(secret, owner public key || node id || epoch
-|| ceremony nonce). The raw secret never leaves the client and never reaches
-hello. A window allows 5 failed proofs and then closes. The nonce is fresh
-per attempt, so a sniffed MAC does not replay.
+The client then sends HMAC-SHA256(k, owner public key || node id || epoch ||
+ceremony nonce). The nonce comes from the node-signed challenge. The raw
+secret and `k` never reach hello. Card entry, owner key generation, and the
+HMAC run only in Lightning Admin. hello.mesh may point at that app. It has
+no secret field. A window allows 5 failed proofs and then closes. Spending
+those attempts is denial of service only; the purchaser presses again. The
+nonce is fresh per attempt, so a sniffed MAC does not replay.
 
 Order is request, then press. The press consumes the window for that request
 only. meshd compares the MAC, owns the window, and runs the compare-and-swap.
 The rc.wps hook only signals meshd. hello only relays, with a 5 second wait,
 and does not use the async name spool for this request.
 
-On an unclaimed node, or a node with a pending recovery request, the press
-arms the ceremony and does not toggle WAN SSH. On any other node the existing
-WAN-SSH toggle runs and the press does not arm a ceremony.
+Button dispatch has three states. With a verifier present and the node
+unclaimed, or with a pending recovery whose credential has already verified,
+the press arms the ceremony and does not toggle WAN SSH. With no verifier
+(developer-owned, or reset before a provisioning image), the press keeps the
+existing WAN-SSH toggle. On an owned node with no pending verified recovery,
+the press toggles WAN SSH and does not arm a ceremony.
 
 The first complete claim is persisted atomically against the node id and moves
 the epoch from unclaimed to 1. A racing second claim cannot overwrite it.

@@ -37,9 +37,13 @@
 ## Freshness and replay (advise 2026-10-22 B1)
 
 Every owner-signed record carries issuer-signed `issued_at` and, where the
-record expires, `expires_at`, inside the canonical bytes. Freshness advances
-only to the signed `issued_at` of a record that verifies and is newer than the
-applied record for that subject. Receipt time never advances freshness.
+record expires, `expires_at`, inside the canonical bytes. Only an owner-signed
+authority-state record advances freshness: the current head, or an
+owner-signed issuer and revocation snapshot chained to it, stating the
+complete issuer set and revocations as of its `issued_at`. Records from
+non-owner issuers, and owner-signed records of any other type, do not advance
+freshness. Receipt time never advances freshness. A cold node judges signed
+time with `TimeEvidence` from mesh-admin-capabilities, not the wall clock.
 Re-receiving an already-applied record, or an older one, leaves freshness
 unchanged. A cold node rejects an old record by that signed time against the
 household stale-authority maximum. Replaying the newest valid record after
@@ -62,15 +66,20 @@ node-vouched fact.
 
 Once a withdrawal verifies, no record from that issuer authorizes control,
 regardless of the record's signing time. Only the owner signs a withdrawal.
-It is single-use and uses the ownership-class cap (at most 5 minutes) from
-the household-authority contract. Another issuer cannot withdraw or
-un-withdraw a peer.
+The 5-minute ownership-class cap bounds the owner's authorization to sign
+that withdrawal. It is not a lifetime of the withdrawal record. Withdrawals
+and revocations are accepted at any age, because they only narrow authority.
+Only permissive records are refused for staleness. Another issuer cannot
+withdraw or un-withdraw a peer.
 
 ## Fork resolution (B4)
 
 A successor at a higher epoch that names one branch supersedes every sibling
-at the lower epoch. A forked node does not fall back to the common ancestor
-for privileged use. Read-only diagnostics and the data plane continue.
+at the lower epoch. Same-epoch siblings stay refused until that happens.
+A forked node does not fall back to the common ancestor for privileged use.
+Read-only diagnostics and the data plane continue. Deny reasons are a closed
+set: forged, replayed, withdrawn issuer, forked head, stale, freshness
+unreadable, node-vouched.
 
 ## Encoder (N1)
 

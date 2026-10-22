@@ -39,6 +39,16 @@ receipt time.
 - WHEN a peer replays the newest already-applied owner-signed record
 - THEN privileged use stays denied
 
+#### Scenario: Withdrawn issuer keeps signing
+- GIVEN a withdrawn issuer partitioned with a node that never saw the withdrawal
+- WHEN that issuer keeps publishing newly signed records that are not authority-state snapshots
+- THEN privileged use is denied once the stale maximum passes since the last owner-signed authority-state record
+
+#### Scenario: Old withdrawal still narrows
+- GIVEN a withdrawal signed under a valid 5-minute owner authorization
+- WHEN a node sees that withdrawal after the 5 minutes and after the stale maximum
+- THEN the withdrawal still removes that issuer and does not itself get rejected for age
+
 ### Requirement: Withdrawn issuers and lost freshness deny
 Once a node has verified an owner-signed issuer withdrawal, no record from
 that issuer SHALL authorize control on that node, whatever the record's

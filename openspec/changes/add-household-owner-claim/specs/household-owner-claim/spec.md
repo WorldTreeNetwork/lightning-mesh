@@ -64,10 +64,15 @@ SHALL be a new verified ceremony that names one parent.
 hello.mesh HTTP code SHALL NOT receive the owner private key, the raw
 provisioning secret, or a reusable administrative bearer.
 
-#### Scenario: Claim from the hub origin
-- GIVEN a claim in progress or completed
-- WHEN hub request and response handlers run
-- THEN they do not contain the owner private key or the raw provisioning secret
+#### Scenario: Hub offers no secret entry
+- GIVEN the hello.mesh page
+- WHEN a purchaser opens it on an unclaimed node
+- THEN the page does not accept the card secret and hub handlers do not receive it
+
+#### Scenario: No verifier keeps the WAN toggle
+- GIVEN a node with no provisioning verifier
+- WHEN the setup button is pressed
+- THEN the existing WAN SSH toggle runs and no ceremony window arms
 
 ### Requirement: Physical window and admin grants use different clocks
 The physical window SHALL default to 120 seconds and SHALL close on success,

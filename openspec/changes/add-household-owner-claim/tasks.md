@@ -4,6 +4,7 @@
 
 - [x] Independent architecture advise r1 send-back (`reviews/2026-10-22-advise.md`)
 - [x] Answer R1–R4 in design.md and the spec delta (2026-10-22)
+- [x] Fresh advise r2 send-back B1–B3 (`reviews/2026-10-22-advise-r2.md`)
 - [ ] Fresh advise after preparation
 - [ ] Claim persistence: card HMAC, client-checked device signature, 120 second button window, single winner, reset clears the verifier
 - [ ] Recovery: both factors, ownership and authority epoch advance, retire prior recovery credentials
