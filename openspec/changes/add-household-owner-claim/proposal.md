@@ -32,9 +32,9 @@ physical presence together.
 
 ## User journey & surfaces
 
-A purchaser, at the node's own setup surface, enters the one-time provisioning
-secret and presses the local setup button within its window. The node binds
-that owner. A second person racing the same window does not overwrite the
+A purchaser, on their own device, checks the node id printed on the card,
+enters the card secret there, and presses the node's setup button within the
+window. The node never shows the secret. The node binds that owner. A second person racing the same window does not overwrite the
 binding. Later, the owner recovers from Lightning Admin only after enrolling a
 recovery credential and pressing the button again. The button alone, or the
 credential from another network, leaves the current owner in place. hello.mesh

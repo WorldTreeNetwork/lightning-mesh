@@ -39,8 +39,42 @@ Station uplink credentials and candidate tests belong to
 `add-wifi-internet-uplink`. A profile may leave a radio role `station` only
 when that change's plan assigns it.
 
+## Loop and port rules (advise 2026-10-22)
+
+A node-link port is its own routed L3 interface. It is not a member of
+`br-mesh` and it is not bridged with a mesh radio. The plan writes the
+interface names to `mjolnir.node_link`. meshd's babel renderer treats those
+names as wired interfaces. This change includes that renderer path. It does
+not leave the cable without a route.
+
+Under a qualified map, every physical port in the map has an explicit role.
+A port the profile omits is `disabled`, not left in `br-lan`.
+
+`wired-core` with cable-loss `isolate` is refused when a current mesh peer
+has no other path, unless the plan carries an explicit acknowledgement.
+
+Qualified maps are image data files named by model. `qualified: true` is set
+only by `mjolnir-mesh-lpv`. This change ships the parser and test fixtures
+with `qualified: false`. The profile id is stored in `mjolnir` UCI. Applying
+the default profile to a fixture of today's generated config is a no-op:
+the proposed revision equals the expected revision.
+
+Babel hellos heard on a client port, or foreign DHCP on a node-link, are
+observations for later qualification. They are not a healthy result.
+
+## Health (B3)
+
+A plan that changes port roles or a mesh radio requires
+`ManagementReachability` and `MeshReachability`, plus `AppliedRevision`.
+Restoration proves management reachability and the applied revision, not
+"the new topology is optimal". Until those probes exist on `OpenWrtAdapter`,
+this change tests the builder against a fake adapter and refuses to submit
+the plan to `OpenWrtAdapter`. Live probes are a follow-up bead, not this
+change's radio write.
+
 ## Not owed here
 
 - Claiming a model is qualified. `mjolnir-mesh-lpv` owns hardware trials.
+- Live radio writes. The plan builder stops before `OpenWrtAdapter`.
 - Guest or resident passphrase Wi-Fi.
 - Automatic radio optimization.

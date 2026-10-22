@@ -25,15 +25,29 @@ model has no qualified map.
 ### Requirement: Wired-core keeps the three domains apart
 `wired-core` SHALL require distinct WAN, node-link, and client ports. Client
 ports SHALL NOT run the mesh routing protocol. Node-link ports SHALL NOT
-serve resident DHCP. WAN SHALL NOT be bridged into the client bridge. When
-the profile's cable-loss mode is `isolate`, loss of the node-link SHALL NOT
-move a client radio onto mesh. When the mode is `reserve-mesh`, the reserved
-radio SHALL stay off client AP.
+serve resident DHCP, and SHALL NOT be bridged with a mesh radio. WAN SHALL
+NOT be bridged into the client bridge. Every port in a qualified map SHALL
+have an explicit role; an omitted port SHALL be disabled rather than left in
+the client bridge. When the profile's cable-loss mode is `isolate`, loss of
+the node-link SHALL NOT move a client radio onto mesh, and the profile SHALL
+be refused without an explicit acknowledgement when a current mesh peer has
+no other path. When the mode is `reserve-mesh`, the reserved radio SHALL stay
+off client AP.
 
 #### Scenario: Client port running babel
 - GIVEN a `wired-core` plan whose client port would run babel
 - WHEN the plan is checked
 - THEN it is refused
+
+#### Scenario: Node-link joined to the mesh bridge
+- GIVEN a plan that puts the node-link port in `br-mesh` while a mesh radio stays up
+- WHEN the plan is checked
+- THEN it is refused
+
+#### Scenario: Unassigned mapped port
+- GIVEN a qualified map that lists a port the profile does not assign
+- WHEN the plan is checked
+- THEN that port is disabled and is not left in the client bridge
 
 #### Scenario: Cable loss isolates
 - GIVEN a committed `wired-core` profile whose cable-loss mode is `isolate`
@@ -54,10 +68,17 @@ same revision-checked plan.
 
 ### Requirement: Profile apply is a durable transaction
 A profile change SHALL be one network-change transaction. If the transaction
-does not commit, the previous profile SHALL remain the committed
-configuration. This capability's software SHALL NOT perform a live radio write.
+does not commit, the previous revision SHALL remain the committed
+configuration. A plan that changes port roles or a mesh radio SHALL require
+management reachability and mesh reachability before commit. The profile id
+SHALL be recorded in the mjolnir settings of that same plan.
 
 #### Scenario: Failed profile apply
-- GIVEN a committed satellite profile
+- GIVEN a committed configuration
 - WHEN a replacement transaction fails before commit
-- THEN the satellite profile is still the committed configuration
+- THEN the previous revision remains the committed configuration
+
+#### Scenario: Default profile is a no-op on today's config
+- GIVEN a fixture of the current generated wireless and network config
+- WHEN the default satellite profile is planned
+- THEN the proposed revision equals the expected revision

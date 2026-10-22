@@ -2,10 +2,13 @@
 
 `mjolnir-mesh-bf7.1` owns this instrument change.
 
-- [ ] Independent architecture advise of the three-factor ceremony
-- [ ] Claim persistence: device signature, provisioning-secret hash, 120 second button window, single winner
-- [ ] Recovery: both factors, epoch binding, retire prior recovery credentials
-- [ ] Tests for racing claimants, secret-only, button-only, remote secret, and hub handlers not receiving owner key material
+- [x] Independent architecture advise r1 send-back (`reviews/2026-10-22-advise.md`)
+- [x] Answer R1–R4 in design.md and the spec delta (2026-10-22)
+- [ ] Fresh advise after preparation
+- [ ] Claim persistence: card HMAC, client-checked device signature, 120 second button window, single winner, reset clears the verifier
+- [ ] Recovery: both factors, ownership and authority epoch advance, retire prior recovery credentials
+- [ ] Button dispatch: unclaimed or pending recovery arms the ceremony only; otherwise the existing WAN-SSH toggle
+- [ ] Tests for racing claimants, secret-only, button-only, sniffed HMAC with a substituted owner key, ceremony press does not open WAN SSH, reboot closes the window, five-attempt cap, and hub handlers not receiving the raw secret
 
 Not owed here:
 

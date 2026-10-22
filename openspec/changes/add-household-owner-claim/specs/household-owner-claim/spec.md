@@ -2,20 +2,32 @@
 
 ### Requirement: Initial claim needs device proof, secret, and presence
 The system SHALL bind one initial owner to an unclaimed node only when, for the
-same claim request, the node's meshd identity key signs the request, the
-one-time provisioning secret matches the hash stored on that node, and a fresh
-local button window is open. Developer SSH, discovery, and the WPS protocol
-SHALL NOT constitute ownership.
+same claim request, the client has verified the node's meshd identity signature
+against the node id on the off-device card, the claim carries an HMAC of that
+request under the card secret, and a fresh local button window then confirms
+that request. The node SHALL NOT display the secret. Developer SSH, discovery,
+and the WPS protocol SHALL NOT constitute ownership. A local reset SHALL clear
+the binding and the stored verifier and SHALL NOT re-arm the original card.
 
 #### Scenario: Competing claim
 - GIVEN an unclaimed node with one open physical window
 - WHEN two different owner credentials race to claim it
 - THEN at most one durable binding succeeds and a retry cannot overwrite it
 
-#### Scenario: Secret without the button
-- GIVEN the provisioning secret and a valid device signature
-- WHEN no local button window is open
+#### Scenario: Secret proof without the button
+- GIVEN a valid HMAC of the claim under the card secret
+- WHEN no local button window confirms that request
 - THEN the claim is refused
+
+#### Scenario: Sniffed proof with a different owner key
+- GIVEN an HMAC bound to the purchaser's owner public key
+- WHEN a relay presents that proof with a different owner public key
+- THEN the claim is refused
+
+#### Scenario: Ceremony press does not open WAN SSH
+- GIVEN an unclaimed node
+- WHEN the setup button is pressed
+- THEN the ceremony window arms and WAN SSH is not toggled
 
 #### Scenario: Button without the secret
 - GIVEN a fresh local button window
@@ -49,12 +61,12 @@ SHALL be a new verified ceremony that names one parent.
 - THEN neither head replaces the other
 
 ### Requirement: The hub does not receive owner secrets
-hello.mesh HTTP code SHALL NOT receive the owner private key, the provisioning
-secret after the hash comparison, or a reusable administrative bearer.
+hello.mesh HTTP code SHALL NOT receive the owner private key, the raw
+provisioning secret, or a reusable administrative bearer.
 
 #### Scenario: Claim from the hub origin
-- GIVEN a claim completed on the node
-- WHEN hub response handlers run
+- GIVEN a claim in progress or completed
+- WHEN hub request and response handlers run
 - THEN they do not contain the owner private key or the raw provisioning secret
 
 ### Requirement: Physical window and admin grants use different clocks

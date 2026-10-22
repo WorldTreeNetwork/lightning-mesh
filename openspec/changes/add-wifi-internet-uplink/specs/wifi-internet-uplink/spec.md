@@ -35,20 +35,37 @@ revision-checked plan.
 - THEN the previous committed configuration remains in effect
 
 ### Requirement: Passphrases stay out of receipts
-The uplink passphrase SHALL be stored by reference. Receipts, controller-facing
-logs, and hello.mesh responses SHALL NOT include it.
+The uplink passphrase SHALL live in a root-only file outside the four
+revisioned UCI files. The transaction SHALL snapshot and restore that file.
+Controller-visible revisions and receipts SHALL NOT include the file's bytes
+or an unkeyed hash of them. hello.mesh responses SHALL NOT include the
+passphrase.
 
 #### Scenario: Receipt after a test
 - GIVEN a completed uplink transaction
-- WHEN the controller reads the receipt
-- THEN the receipt has no passphrase
+- WHEN the controller reads the receipt or the configuration revision
+- THEN neither value confirms a guessed passphrase
 
 ### Requirement: Unselected and house networks are not upstream
 The uplink SHALL NOT join an open SSID that was not explicitly selected, and
-SHALL NOT use the house's own client SSID as upstream. The station interface
-SHALL NOT be bridged into the client LAN.
+SHALL NOT use any BSSID advertised by a mesh node as upstream. The station
+section SHALL name exactly one network and SHALL NOT include a fallback list.
+A radio whose committed configuration is mesh mode SHALL be refused. The
+station interface SHALL NOT be bridged into the client LAN. A mesh
+default-route export SHALL be installed only after upstream-bound DNS and
+HTTPS evidence passes.
 
 #### Scenario: House SSID selected as upstream
-- GIVEN the configured house client SSID
+- GIVEN a BSSID advertised by a mesh node
 - WHEN a plan names it as the upstream network
+- THEN the plan is refused
+
+#### Scenario: Lease on a captive upstream
+- GIVEN a station that received a DHCP lease and failed upstream-bound DNS and HTTPS
+- WHEN the plan would export a mesh default route
+- THEN no mesh default route is installed and the previous revision is restored
+
+#### Scenario: Mesh radio taken for station
+- GIVEN a radio whose committed mode is mesh
+- WHEN a station plan selects it and no profile has changed that mode in the same transaction
 - THEN the plan is refused

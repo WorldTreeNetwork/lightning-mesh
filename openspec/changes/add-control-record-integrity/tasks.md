@@ -2,10 +2,12 @@
 
 `mjolnir-mesh-ai0.9` owns this instrument change.
 
-- [ ] Independent architecture advise
-- [ ] Extend the mesh-admin-capabilities encoder with a record-type domain tag if it cannot carry one, without a second canonicalizer
-- [ ] Consumer verifier: owner-signed checks, node-vouched rejection, replay, withdrawn issuer, forked head, unreadable freshness
-- [ ] Tests that a non-ingesting consumer rejects a forged or replayed record and accepts a valid owner-signed record
+- [x] Independent architecture advise. r1 **send-back** (`reviews/2026-10-22-advise.md`, READER opus-arch-review)
+- [x] Answer B1–B4 and N1–N3 in design.md and the spec delta (2026-10-22)
+- [ ] Fresh advise after preparation
+- [ ] Add closed record schemas on the existing canonical-CBOR profile (`lightning-admin/record/<type>`), not a second encoder
+- [ ] Consumer verifier: owner-signed checks, node-vouched rejection, signed-time freshness, retroactive owner-only withdrawal, higher-epoch fork successor, unreadable freshness
+- [ ] Tests that a non-ingesting consumer rejects a forged record, ignores re-gossip, and does not restore privilege when the newest record is replayed past the stale maximum
 
 Not owed here:
 

@@ -32,8 +32,51 @@
    Otherwise the plan is refused until the profile changes in the same
    transaction or an earlier committed one.
 
+## Required health (advise 2026-10-22 S1)
+
+A station plan requires `UpstreamAssociation`, `UpstreamAddress`,
+`UpstreamRoute`, `UpstreamBoundDnsHttps`, `MeshReachability`, and
+`ManagementReachability`. Restoration proves `ManagementReachability` and
+`AppliedRevision` only. It does not require the upstream observations, so a
+wrong passphrase can return to the previous revision instead of sticking at
+recovery-required for lack of upstream evidence.
+
+The builder is tested on a fake adapter. It refuses submission to
+`OpenWrtAdapter` until that adapter can report those observations and can
+reload inside apply and restore. That live path is a follow-up, not this
+change.
+
+## Secret file (S2)
+
+The passphrase lives outside the four revisioned UCI files, at
+`/etc/mjolnir/secrets/uplink/<candidate-id>`, mode 0600. The transaction
+snapshots that file in a root-only journal sidecar. Controller-visible
+revisions and receipts are computed without those bytes, so a guess cannot
+be confirmed from a receipt. Restore puts the previous secret file back
+before the result is restored. A reused reference name cannot point a
+restored config at a newer secret.
+
+## First gateway (S3)
+
+The mesh default-route export is installed only after
+`UpstreamBoundDnsHttps` passes. A DHCP lease, including a captive portal,
+does not install or redistribute `0.0.0.0/0`. Failure restores before that
+export is announced.
+
+## Which networks (S4, S5)
+
+Refuse every BSSID a mesh node advertises: house client, guest, captive,
+dongle AP, and per-node SSID. SSID match alone is not enough. The station
+section has exactly one network and no fallback list. Refuse a radio whose
+committed wireless config is mesh mode, whether or not a profile exists.
+An upstream subnet that overlaps `10.42.0.0/16`, `10.254.0.0/16`, or the
+node's identity-derived ULA is a restore trigger, not a NAT exception.
+
 ## Not owed here
 
 - A live scan or association. Software builds the plan and the refusal rules.
+- `OpenWrtAdapter` probes and reload-during-apply.
 - Rating which physical radio hears the upstream best (`mjolnir-mesh-lpv`).
+- Dongle hotplug versus the transaction flock (separate bead).
+- Supplicant-reason strings in receipts (live-path follow-up).
 - Metered-transit consent. Parked until a separate change.

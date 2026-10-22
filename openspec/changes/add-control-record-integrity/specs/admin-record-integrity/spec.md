@@ -22,21 +22,32 @@ node-vouched. They SHALL NOT satisfy a check that requires an owner-signed fact.
 
 ### Requirement: Forged and replayed records fail closed
 The verifier SHALL reject a record whose signature, canonical bytes, epoch, or
-sequence does not match, including a replay of an already-applied record and a
-record made valid only by moving the clock backwards.
+sequence does not match, including a record made valid only by moving the clock
+backwards. Re-gossip of an already-applied record SHALL be a no-op and SHALL
+NOT demote applied state or advance freshness. Every owner-signed record SHALL
+carry an issuer-signed `issued_at` inside the canonical bytes. Freshness SHALL
+advance only to that signed time for a newly verified newer record, never to
+receipt time.
 
 #### Scenario: Replayed gossip
 - GIVEN a valid owner-signed record that this consumer already applied
-- WHEN the same bytes are gossiped again, or an older sequence for that head arrives
-- THEN the consumer rejects them and does not treat the replay as a new decision
+- WHEN the same bytes are gossiped again, or an older sequence for that subject arrives
+- THEN the consumer does not treat the replay as a new decision and does not advance freshness
+
+#### Scenario: Newest record replayed after the stale maximum
+- GIVEN a node whose last signed freshness is older than the household stale-authority maximum
+- WHEN a peer replays the newest already-applied owner-signed record
+- THEN privileged use stays denied
 
 ### Requirement: Withdrawn issuers and lost freshness deny
-A verified issuer withdrawal SHALL make later records from that issuer unusable
-on every node that has verified the withdrawal, even when a grant has not
-expired. A node SHALL deny privileged use of owner-signed records when its
-freshness state is missing, corrupt, or unreadable. A node that has not seen
-a withdrawal SHALL deny privileged use once the household stale-authority
-maximum has elapsed.
+Once a node has verified an owner-signed issuer withdrawal, no record from
+that issuer SHALL authorize control on that node, whatever the record's
+signing time. Only the owner SHALL sign a withdrawal. A node SHALL deny
+privileged use of owner-signed records when its freshness state is missing,
+corrupt, or unreadable, and SHALL NOT replace that state with an empty book.
+A node that has not seen a withdrawal SHALL deny privileged use once the
+household stale-authority maximum has elapsed. Freshness state includes the
+applied set and high-water marks.
 
 #### Scenario: Withdrawal during an unexpired grant
 - GIVEN a verified withdrawal of an issuer and a grant from that issuer that has not expired
@@ -50,20 +61,29 @@ maximum has elapsed.
 
 ### Requirement: A forked authority head is not merged
 An authority-transition record SHALL name one previous head. Consumers SHALL
-refuse a set of competing heads instead of picking one. Creating a successor
-head is out of this requirement.
+refuse a set of competing heads instead of picking one, and SHALL NOT fall
+back to their common ancestor for privileged use. A successor at a higher
+epoch that names one branch SHALL supersede every sibling at the lower epoch.
+Read-only diagnostics and ordinary forwarding SHALL continue during a fork.
 
 #### Scenario: Two partition heads
 - GIVEN two owner-signed heads that do not name each other
-- WHEN a consumer tries to use either as the current house authority
-- THEN both are refused until a single successor record exists
+- WHEN a consumer tries to use either, or their common ancestor, as the current house authority
+- THEN privileged use is refused until a higher-epoch successor names one branch
+
+#### Scenario: One successor covers the sibling
+- GIVEN a higher-epoch successor that names one of two sibling heads
+- WHEN a consumer that saw both siblings verifies the successor
+- THEN the successor is the current head and the other sibling is not
 
 ### Requirement: One canonical encoder
-Canonical record bytes SHALL be produced and checked with the
-mesh-admin-capabilities encoder and a distinct record-type domain tag. This
-capability SHALL NOT define a second canonicalization.
+Canonical record bytes SHALL use the mesh-admin-capabilities canonical-CBOR
+profile, its decode/re-encode gate, and a closed schema whose domain string
+is `lightning-admin/record/<type>` version 1. This capability SHALL NOT define
+a second canonicalization, and SHALL NOT treat a node-vouched value as
+`VerifiedAuthority`.
 
 #### Scenario: Divergent encoding
-- GIVEN the same fields encoded by a second, local JSON canonicalizer
-- WHEN the consumer verifies them with the mesh-admin-capabilities encoder
+- GIVEN the same fields encoded by a second canonicalizer
+- WHEN the consumer verifies them with the mesh-admin-capabilities record schema
 - THEN verification fails

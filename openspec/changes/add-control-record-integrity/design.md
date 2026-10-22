@@ -34,6 +34,64 @@
    a single successor exists. This change verifies that rule.
    `add-household-owner-claim` is the only writer of a new head.
 
+## Freshness and replay (advise 2026-10-22 B1)
+
+Every owner-signed record carries issuer-signed `issued_at` and, where the
+record expires, `expires_at`, inside the canonical bytes. Freshness advances
+only to the signed `issued_at` of a record that verifies and is newer than the
+applied record for that subject. Receipt time never advances freshness.
+Re-receiving an already-applied record, or an older one, leaves freshness
+unchanged. A cold node rejects an old record by that signed time against the
+household stale-authority maximum. Replaying the newest valid record after
+that maximum does not restore privileged use.
+
+## Sequence and constructors (B2)
+
+The sequence scope is `(house, epoch, signer, record-type, subject)`. Signers
+do not share one counter. Re-gossip of an already-applied record is a no-op:
+it does not demote applied state and it does not count as a new decision.
+The applied set and high-water marks are freshness state. Missing or corrupt
+freshness state denies. It is never replaced with an empty book.
+
+`OwnerVerified` from this verifier is the only production constructor for
+`VerifiedAuthority` and for `TimeEvidence.authority_verified_at` in
+`mjolnir-admin-capabilities`. Callers cannot assemble those values from a
+node-vouched fact.
+
+## Withdrawal (B3)
+
+Once a withdrawal verifies, no record from that issuer authorizes control,
+regardless of the record's signing time. Only the owner signs a withdrawal.
+It is single-use and uses the ownership-class cap (at most 5 minutes) from
+the household-authority contract. Another issuer cannot withdraw or
+un-withdraw a peer.
+
+## Fork resolution (B4)
+
+A successor at a higher epoch that names one branch supersedes every sibling
+at the lower epoch. A forked node does not fall back to the common ancestor
+for privileged use. Read-only diagnostics and the data plane continue.
+
+## Encoder (N1)
+
+Reuse means the existing canonical-CBOR profile and decode/re-encode gate in
+`mjolnir-admin-capabilities`, with closed per-record schemas and new domain
+strings `lightning-admin/record/<type>` version 1. It does not mean passing a
+tag through `AdminRequest::encode`, and it does not mean a second JSON
+canonicalizer. `codec-profile.md` in that change records the new domains.
+
+## Leased names (N2)
+
+Leased-name records stay node-vouched. Their v1 preimage does not cover
+address, scheme, app, or the time fields, and a multi-hop publish does not
+authenticate the originator. "Vouched by" names the delivering peer, or
+nothing. This change does not upgrade p43/71x comments into owner signatures.
+
+## Consumers (N3)
+
+This change is the library instrument. meshd and Lightning Admin call the
+crate. Admin does not reimplement the check in TypeScript.
+
 ## Not owed here
 
 - AliasTable resolution records.
