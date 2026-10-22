@@ -29,8 +29,11 @@ client SSID. Only a committed resident plan SHALL replace that SSID.
 A resident or guest passphrase SHALL be named only as a root-only file
 outside `wireless`, `network`, `firewall`, and `mjolnir`. The
 `wifi-iface` SHALL carry no `key` and SHALL name that file through
-`wpa_psk_file`. The profile id SHALL be derived from the SSID and the
-role, never from the secret. The transaction SHALL snapshot and
+`wpa_psk_file`. The profile id SHALL be the lowercase hex of a
+domain-separated blake3 over the role and the SSID bytes, never the
+secret and never the raw SSID, so the file name is a single path
+component under `/etc/mjolnir/secrets/wifi/`. The secret file SHALL
+be exactly one line. The transaction SHALL snapshot and
 restore the secret file. A passphrase-only change SHALL move the
 revision by a `mjolnir` generation counter and SHALL name the
 `wifi-iface` whose `wpa_psk_file` hostapd re-reads on apply and on
@@ -63,15 +66,17 @@ invents. The builder SHALL enable a guest `wifi-iface` on a node only
 when every house node's committed config, passed in as input, already
 rejects INPUT from that node's guest CIDR. A missing, unreachable, or
 stale node SHALL refuse the plan. A newly joined node SHALL NOT count
-as covered until its committed config carries the class. While a guest
-SSID is committed, a joining node's admitted config SHALL carry that
-class before the node exports routes. Admission is
-`mjolnir-mesh-fyby` (`add-zero-touch-join`); this change does not edit
-that path. Any later revision on a house node SHALL be refused when it
+as covered until its committed config carries the class. A new guest
+plan SHALL be refused while any house node lacks the class. The export
+hold, that a joiner does not export routes while a committed
+guest-source class it lacks exists, is `mjolnir-mesh-fyby.4`. This
+change does not implement admission. Any later revision on a house node SHALL be refused when it
 drops a guest CIDR from that node's committed class while any house
 node still has a guest SSID committed for that CIDR, and the previous
 revision SHALL stay. That refusal covers every builder that rewrites
-`mjolnir`, not only a restore. The guest-enable submitter SHALL
+`mjolnir`, not only a restore. In-crate writers that edit named
+`mjolnir` sections keep the class. Hand `uci`, `meshctl`, and deploy
+scripts are not builders and are outside this SHALL. The guest-enable submitter SHALL
 re-read every peer revision it built against immediately before
 submitting the guest SSID, and SHALL refuse if any moved. Two
 transactions that both pass that check before either commits remain
@@ -165,7 +170,8 @@ exception in that plan.
 - GIVEN a guest SSID is already committed
 - WHEN a new node's admitted config does not carry the guest-source class
 - THEN that node is not covered
-- AND it does not export routes until admission includes the class
+- AND a new guest plan is refused
+- AND the export hold is `mjolnir-mesh-fyby.4`, not this plan
 
 ### Requirement: The builder does not submit to the live adapter
 

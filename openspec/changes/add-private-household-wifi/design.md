@@ -11,8 +11,12 @@ file shape pinned. v1 encryption is `psk2`. The `wifi-iface` carries
 no `option key`, and there is no `wifi-station` key. It names a
 root-only file through `option wpa_psk_file`. That file is
 `/etc/mjolnir/secrets/wifi/<profile-id>`, mode `0600`. `<profile-id>`
-is derived from the SSID and the role (`resident` or `guest`), never
-from the secret. Each line is `00:00:00:00:00:00 <passphrase>` so
+is the lowercase hex of a domain-separated blake3 over the role
+(`resident` or `guest`) and the SSID bytes, the same length-prefix
+shape as uplink `Candidate::id`, domain `mjolnir-wifi-profile`. It is
+never the secret and never the raw SSID, so `/`, `..`, and non-UTF-8
+bytes cannot leave `/etc/mjolnir/secrets/wifi/`. The file is exactly
+one line, `00:00:00:00:00:00 <passphrase>`, so
 hostapd accepts it for every station. The passphrase is uplink
 `Passphrase` (`crates/mjolnir-apply/src/uplink.rs`): printable ASCII
 `0x20..=0x7e` of length 8..=63, or 64 hex digits, so a newline cannot
@@ -62,16 +66,18 @@ The plan may say `isolated` only when all of these are true:
   on a house node that drops a guest CIDR from that node's class,
   while any house node still has a guest SSID committed for that
   CIDR, is refused. The previous revision stays. This is any
-  builder's rewrite of `mjolnir`, not only a restore. The
+  builder's rewrite of `mjolnir`, not only a restore. In-crate
+  writers that edit named sections keep the class. Hand `uci`,
+  `meshctl`, and deploy scripts are not builders. The
   guest-enable submitter re-reads every peer revision it built
   against immediately before it submits the guest SSID, and refuses
   if any moved. The residual window is two transactions that both
   pass that check before either commits.
-- A node that joins after a guest SSID is committed
-  (`mjolnir-mesh-fyby`, `add-zero-touch-join`) carries the class in
-  the config it is admitted with, before it exports routes. This
-  change does not edit that admission path. Until the joiner carries
-  the class it is not a covered house node.
+- A node that joins after a guest SSID is committed is not covered
+  until its committed config carries the class, and a new guest plan
+  is refused while it lacks the class. The export hold, including
+  the peer-file install path, is `mjolnir-mesh-fyby.4`. This change
+  does not implement admission.
 - The upstream LAN beyond a house node's own addresses is internet
   for this change, not resident space. Devices that live only on the
   ISP router's LAN are outside the mesh client aggregates.
@@ -129,8 +135,11 @@ does not perform the replacement.
 
 - Choosing bands, channels, or schedules.
 - Device-only SSIDs, SQM, VPN, or multicast reflection.
-- Rendering nftables on a router. The plan states the denies. A later
-  apply slice renders them when live probes exist.
+- Rendering nftables on a router. The plan states the denies.
+  `mjolnir-mesh-nx1k` renders them when live probes exist. A plan
+  that says `isolated` is not yet enforced on the router.
+- Removing an old secret file after an SSID change. The old file
+  stays so restore can put it back.
 - Same-SSID client isolation (`option isolate`). Guests on one SSID
   can reach each other in this change.
 - Keeping `/etc/mjolnir/secrets/` across sysupgrade. That is `lpv`
