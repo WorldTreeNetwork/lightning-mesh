@@ -11,7 +11,8 @@
   `parse_uci_node_links`; the meshd call site that feeds it is follow-up work)
 - [x] Tests for loop refusals: client babel, node-link in `br-mesh`, node-link DHCP, WAN bridged into `br-lan`, unassigned mapped port, cross-node client bridge, AP3000 `192.168.1.1/24` add, silent deletion of a house-gateway default export, and default-profile no-op on a current fixture
 
-- [ ] meshd passes `parse_uci_node_links` into `render_babeld_conf` (`mjolnir-mesh-1f5s`)
+- [x] meshd passes `parse_uci_node_links` into `render_babeld_conf` (`mjolnir-mesh-1f5s`):
+  `babel_reconciler` re-reads `/etc/config/mjolnir` each pass via `uci_node_links`
 
 Not owed here:
 

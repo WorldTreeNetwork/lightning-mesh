@@ -7771,11 +7771,17 @@ async fn babel_reconciler(
         // 42j: also require the reachability probe to pass (auto), unless
         // bypassed (always). `local_egress().healthy` already folds the bypass in.
         let gateway_now = gateway && local_egress().await.is_some_and(|e| e.healthy);
-        let iface_refs: Vec<&str> = ifaces.iter().map(String::as_str).collect();
-        let inputs = BabelConfigInputs::new(local_subnet, &iface_refs)
-            .l2_interfaces(&l2_refs)
-            .gateway(gateway_now);
-        let conf = render_babeld_conf(&inputs);
+        // Ethernet node-links (add-wired-node-profiles): re-read each pass so a
+        // profile apply that adds or drops `mjolnir.node_link` lands without a
+        // meshd restart. A missing file means no node-links.
+        let node_links = uci_node_links();
+        let conf = render_babel_conf_with_node_links(
+            local_subnet,
+            &ifaces,
+            &l2_refs,
+            &node_links,
+            gateway_now,
+        );
 
         // Debounce (qz9): when the desired config changes, let the mesh state
         // settle before writing — a tunnel coming up and then a subnet claim
@@ -7789,10 +7795,10 @@ async fn babel_reconciler(
             continue;
         }
 
-        // babeld needs at least one interface — the L2 backhaul (if present) or a
-        // live tunnel. With an L2 backhaul this is always true, so babeld runs
+        // babeld needs at least one interface — the L2 backhaul (if present), a
+        // node-link, or a live tunnel. With an L2 backhaul this is always true, so babeld runs
         // continuously rather than flapping with the tunnel set.
-        let have_ifaces = !ifaces.is_empty() || !l2_refs.is_empty();
+        let have_ifaces = !ifaces.is_empty() || !l2_refs.is_empty() || !node_links.is_empty();
 
         match write_atomic_if_changed(&config_path, &conf) {
             Ok(changed) => {
@@ -7808,7 +7814,7 @@ async fn babel_reconciler(
                     babeld_service("enable").await;
                     if babeld_service("restart").await {
                         started = true;
-                        let count = ifaces.len() + l2_refs.len();
+                        let count = ifaces.len() + l2_refs.len() + node_links.len();
                         info!(config = %config_path.display(), ifaces = count, "babeld started (procd: mjolnir-babeld)");
                     }
                 } else if changed {
@@ -7843,6 +7849,26 @@ async fn babel_reconciler(
 
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
+}
+
+/// Render babeld.conf for [`babel_reconciler`] with the UCI node-links as
+/// `type wired` interfaces. Pure, so a test can check the parsed names reach
+/// [`render_babeld_conf`]. The renderer keeps a node-link off the wireless RTT
+/// list; the gateway flag passes through unchanged.
+fn render_babel_conf_with_node_links(
+    local_subnet: Option<Ipv4Net>,
+    tunnels: &[String],
+    l2_refs: &[&str],
+    node_links: &[String],
+    gateway: bool,
+) -> String {
+    let tunnel_refs: Vec<&str> = tunnels.iter().map(String::as_str).collect();
+    let link_refs: Vec<&str> = node_links.iter().map(String::as_str).collect();
+    let inputs = BabelConfigInputs::new(local_subnet, &tunnel_refs)
+        .l2_interfaces(l2_refs)
+        .node_links(&link_refs)
+        .gateway(gateway);
+    render_babeld_conf(&inputs)
 }
 
 /// Live per-peer tunnel registry: maps each connected peer to its TUN interface
@@ -8906,6 +8932,15 @@ fn parse_uci_secret_file(text: &str) -> Option<PathBuf> {
 fn uci_node_name() -> Option<String> {
     let text = std::fs::read_to_string("/etc/config/mjolnir").ok()?;
     parse_uci_node_name(&text)
+}
+
+/// Best-effort read of the `mjolnir.node_link` ifnames from the UCI config
+/// (`/etc/config/mjolnir`) for babeld (add-wired-node-profiles). Any read miss
+/// returns no links. Mirrors [`uci_node_name`].
+fn uci_node_links() -> Vec<String> {
+    std::fs::read_to_string("/etc/config/mjolnir")
+        .map(|text| BabelConfigInputs::parse_uci_node_links(&text))
+        .unwrap_or_default()
 }
 
 /// Pure parse of the `option name '<name>'` value out of UCI config text.
@@ -10664,6 +10699,52 @@ config meshd 'meshd'
         assert_eq!(parse_uci_node_name(commented), None);
         // Absent option → None.
         assert_eq!(parse_uci_node_name("config meshd 'meshd'\n"), None);
+    }
+
+    #[test]
+    fn babel_render_receives_uci_node_links_as_wired() {
+        // The shape the profile plan writes (mjolnir-apply node_profile).
+        let cfg = "config meshd 'meshd'\n\toption name 'attic'\n\n\
+                   config node_link 'node_link'\n\tlist ifname 'lan3'\n\tlist ifname 'lan4'\n";
+        let links = BabelConfigInputs::parse_uci_node_links(cfg);
+        assert_eq!(links, vec!["lan3".to_string(), "lan4".to_string()]);
+        let subnet: Ipv4Net = "10.42.1.0/24".parse().unwrap();
+        let tunnels = vec!["mj-peer-aabbccdd".to_string()];
+        let conf =
+            render_babel_conf_with_node_links(Some(subnet), &tunnels, &["br-mesh"], &links, false);
+        assert!(conf.contains("interface lan3 type wired\n"), "{conf}");
+        assert!(conf.contains("interface lan4 type wired\n"), "{conf}");
+        assert!(conf.contains("interface br-mesh type wireless"), "{conf}");
+        assert!(
+            conf.contains("interface mj-peer-aabbccdd type tunnel\n"),
+            "{conf}"
+        );
+    }
+
+    #[test]
+    fn babel_node_link_stays_off_wireless_rtt_list() {
+        // Even if a node-link name also lands on the L2 list, it renders once, wired.
+        let links = vec!["lan3".to_string()];
+        let conf =
+            render_babel_conf_with_node_links(None, &[], &["br-mesh", "lan3"], &links, false);
+        assert_eq!(conf.matches("interface lan3").count(), 1, "{conf}");
+        assert!(!conf.contains("interface lan3 type wireless"), "{conf}");
+        assert!(conf.contains("interface lan3 type wired\n"), "{conf}");
+    }
+
+    #[test]
+    fn babel_node_links_leave_gateway_export_untouched() {
+        let subnet: Ipv4Net = "10.42.1.0/24".parse().unwrap();
+        let links = vec!["lan3".to_string()];
+        for gateway in [true, false] {
+            let with = render_babel_conf_with_node_links(Some(subnet), &[], &[], &links, gateway);
+            let without = render_babel_conf_with_node_links(Some(subnet), &[], &[], &[], gateway);
+            let export = "redistribute ip 0.0.0.0/0 le 0 metric 128\n";
+            assert_eq!(with.contains(export), gateway, "{with}");
+            assert_eq!(with.contains(export), without.contains(export));
+        }
+        // A node with no mjolnir.node_link section renders no wired interface.
+        assert!(BabelConfigInputs::parse_uci_node_links("config meshd 'meshd'\n").is_empty());
     }
 
     // --- identity-submission spool ingest (mjolnir-mesh-p6u) -------------------
