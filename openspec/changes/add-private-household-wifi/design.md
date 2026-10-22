@@ -13,8 +13,11 @@ root-only file through `option wpa_psk_file`. That file is
 `/etc/mjolnir/secrets/wifi/<profile-id>`, mode `0600`. `<profile-id>`
 is derived from the SSID and the role (`resident` or `guest`), never
 from the secret. Each line is `00:00:00:00:00:00 <passphrase>` so
-hostapd accepts it for every station. SAE and `sae_password_file` are
-not v1. A 6 GHz iface, which skips the PSK file, is refused.
+hostapd accepts it for every station. The passphrase is uplink
+`Passphrase` (`crates/mjolnir-apply/src/uplink.rs`): printable ASCII
+`0x20..=0x7e` of length 8..=63, or 64 hex digits, so a newline cannot
+become a second file line. SAE and `sae_password_file` are not v1. A
+6 GHz iface, which skips the PSK file, is refused.
 
 The transaction snapshots and restores that file with the UCI
 revision. A passphrase-only change increments `mjolnir` `secret_generation`
@@ -52,8 +55,16 @@ The plan may say `isolated` only when all of these are true:
   input, already rejects INPUT from N's guest CIDR. A missing,
   unreachable, or stale node refuses the plan. The fleet reject is
   committed before any guest SSID. A newly joined node is not counted
-  until its committed config carries the class. Restoring away the
-  reject while any node still has the guest SSID committed is refused.
+  until its committed config carries the class. Any later revision
+  on a house node that drops a guest CIDR from that node's class,
+  while any house node still has a guest SSID committed for that
+  CIDR, is refused. The previous revision stays. This is any
+  builder's rewrite of `mjolnir`, not only a restore.
+- A node that joins after a guest SSID is committed
+  (`mjolnir-mesh-fyby`, `add-zero-touch-join`) carries the class in
+  the config it is admitted with, before it exports routes. This
+  change does not edit that admission path. Until the joiner carries
+  the class it is not a covered house node.
 - The upstream LAN beyond a house node's own addresses is internet
   for this change, not resident space. Devices that live only on the
   ISP router's LAN are outside the mesh client aggregates.
@@ -63,24 +74,29 @@ The plan may say `isolated` only when all of these are true:
 - The default guest plan names no hello.mesh exception. Guests do not
   reach `10.42.x.1:80` until a later change. Anonymous hub browsing
   stays on the resident network, or on the open SSID before commit.
-- IPv6-enabled is read from the committed `network` and `mjolnir`
-  config. If the builder cannot tell, it refuses. This change refuses
-  a guest profile when IPv6 is enabled. It does not invent a house
-  GUA or a shared ULA list. A later change can add the v6 deny.
-  Enabling IPv6 while a guest profile is already committed is refused
-  unless that same revision drops the guest profile.
+- IPv6 is enabled when the committed config shows any of
+  `network.globals` `ula_prefix`, `ip6assign` on any interface, a
+  `wan6` interface or `proto` `dhcpv6`, or odhcpd `ra` or `dhcpv6`
+  server on a client interface. If those configs are not passed in,
+  the builder refuses. This change refuses a guest profile when that
+  predicate is true. A guest `wifi-iface` carries no `ip6assign`.
+  It does not invent a house GUA or a shared ULA list. A later change
+  can add the v6 deny. Enabling IPv6 while a guest profile is already
+  committed is refused unless that same revision drops the guest
+  profile.
 - The guest slice is a CIDR the CRDT already claimed under
   `/subnets/{cidr}`. The builder receives it as an input and does not
-  allocate. The committed fleet guest plan lists every such CIDR;
-  that list is the guest-source class. A slice that is not in the
-  committed plan is not yet guest traffic.
+  allocate. The guest-source class is those CIDRs as listed in each
+  node's committed `mjolnir` config. There is no separate fleet plan
+  object. A slice that is not in that class is not yet guest traffic.
 - Babel redistribution of that CIDR, so the gateway has a return
   route, is a meshd follow-up. This builder does not claim the route
   exists. The satellite-internet scenario is a forward-policy allow.
 - Guest addresses are not the resident `/24`. They are not bridged
-  onto `br-lan`. `roam` does not install a guest `/32` on `br-lan`
-  and does not export one. Guests do not roam in this change. They
-  re-DHCP on the node they join.
+  onto `br-lan`. `guest_routes` (`crates/mjolnir-mesh/src/roam.rs`)
+  excludes addresses in the committed guest-source class, so a stale
+  `10.42` lease in that class does not get a proto-158 `/32`. Guests
+  do not roam in this change. They re-DHCP on the node they join.
 - The only extra permit is an explicit named service exception in the
   same plan.
 

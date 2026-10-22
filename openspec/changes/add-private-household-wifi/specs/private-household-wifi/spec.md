@@ -61,13 +61,25 @@ invents. The builder SHALL enable a guest `wifi-iface` on a node only
 when every house node's committed config, passed in as input, already
 rejects INPUT from that node's guest CIDR. A missing, unreachable, or
 stale node SHALL refuse the plan. A newly joined node SHALL NOT count
-as covered until its committed config carries the class. The default guest plan SHALL NOT name hello.mesh as an
-exception. IPv6-enabled SHALL be read from the committed config.
-Unknown SHALL refuse the plan. A guest profile on an IPv6-enabled
-house SHALL be refused in this change. Enabling IPv6 while a guest
+as covered until its committed config carries the class. While a guest
+SSID is committed, a joining node's admitted config SHALL carry that
+class before the node exports routes. Admission is
+`mjolnir-mesh-fyby` (`add-zero-touch-join`); this change does not edit
+that path. Any later revision on a house node SHALL be refused when it
+drops a guest CIDR from that node's committed class while any house
+node still has a guest SSID committed for that CIDR, and the previous
+revision SHALL stay. That refusal covers every builder that rewrites
+`mjolnir`, not only a restore. The default guest plan SHALL NOT name hello.mesh as an
+exception. IPv6 SHALL count as enabled when the committed config shows
+any of `network.globals` `ula_prefix`, `ip6assign` on any interface, a
+`wan6` interface or `proto` `dhcpv6`, or odhcpd `ra` or `dhcpv6` server
+on a client interface. Missing configs SHALL refuse the plan. A guest
+profile SHALL be refused when that predicate is true. A guest
+`wifi-iface` SHALL NOT set `ip6assign`. Enabling IPv6 while a guest
 profile is committed SHALL be refused unless that revision drops the
-guest profile. Guest prefixes SHALL NOT be bridged onto `br-lan` and
-SHALL NOT be installed or exported by roam. A plan that cannot state
+guest profile. Guest prefixes SHALL NOT be bridged onto `br-lan`.
+`guest_routes` SHALL NOT install or export a `/32` whose address is in
+the committed guest-source class. A plan that cannot state
 those denies SHALL be refused and SHALL leave the previous revision
 in place. The only extra permit SHALL be an explicit named service
 exception in that plan.
@@ -106,10 +118,25 @@ exception in that plan.
 
 #### Scenario: IPv6 is enabled or unknown
 
-- GIVEN IPv6 is enabled, or the builder cannot tell
+- GIVEN the committed config has `ula_prefix` or `ip6assign`, or those configs were not passed in
 - WHEN a guest profile is planned
 - THEN the plan is refused
 - AND the previous revision remains
+
+#### Scenario: A later revision drops the guest class
+
+- GIVEN a guest SSID is committed for a CIDR
+- AND a house node's committed config rejects INPUT from that CIDR
+- WHEN a revision of that node removes the CIDR from its class
+- THEN the revision is refused
+- AND the previous revision stays
+
+#### Scenario: A joiner has not carried the class
+
+- GIVEN a guest SSID is already committed
+- WHEN a new node's admitted config does not carry the guest-source class
+- THEN that node is not covered
+- AND it does not export routes until admission includes the class
 
 ### Requirement: The builder does not submit to the live adapter
 
