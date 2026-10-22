@@ -23,7 +23,10 @@ unkeyed hash of the file. hello.mesh responses do not contain the
 passphrase or the file bytes.
 
 The builder returns a plan type that `OpenWrtAdapter` cannot submit,
-the same kind of gate as uplink `ProvesUpstream`.
+the same kind of gate as uplink `ProvesUpstream`. The gate's adapter
+contract is: a revision that changes a `wifi-iface`'s `wpa_psk_file`
+or its `secret_generation` makes hostapd re-read that file on apply
+and on restore. The plan names those ifaces.
 
 One resident profile is one house SSID plus one secret generation. A
 different SSID is a different profile. The cutover name, including
@@ -43,11 +46,20 @@ The plan may say `isolated` only when all of these are true:
   `192.168.1.1` when it is an address of the node, and any public
   address configured on a house node. A satellite guest forwarded
   toward the internet is FORWARD, not INPUT, and stays allowed.
+- Each node's copy of the guest-source class lives in its committed
+  `mjolnir` config. The builder enables a guest `wifi-iface` on node
+  N only when every house node's committed config, passed in as
+  input, already rejects INPUT from N's guest CIDR. A missing,
+  unreachable, or stale node refuses the plan. The fleet reject is
+  committed before any guest SSID. A newly joined node is not counted
+  until its committed config carries the class. Restoring away the
+  reject while any node still has the guest SSID committed is refused.
 - The upstream LAN beyond a house node's own addresses is internet
   for this change, not resident space. Devices that live only on the
   ISP router's LAN are outside the mesh client aggregates.
 - The same-node deny includes the node's own addresses. Guest input
-  accepts only DHCP, DNS, and, when IPv6 is enabled, ND and RA.
+  accepts only DHCP and DNS. IPv6 neighbor discovery is out of this
+  change because a guest profile on an IPv6-enabled house is refused.
 - The default guest plan names no hello.mesh exception. Guests do not
   reach `10.42.x.1:80` until a later change. Anonymous hub browsing
   stays on the resident network, or on the open SSID before commit.

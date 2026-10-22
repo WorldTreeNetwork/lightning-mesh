@@ -32,7 +32,9 @@ outside `wireless`, `network`, `firewall`, and `mjolnir`. The
 `wpa_psk_file`. The profile id SHALL be derived from the SSID and the
 role, never from the secret. The transaction SHALL snapshot and
 restore the secret file. A passphrase-only change SHALL move the
-revision by a `mjolnir` generation counter. No revision, manifest, or
+revision by a `mjolnir` generation counter and SHALL name the
+`wifi-iface` whose `wpa_psk_file` hostapd re-reads on apply and on
+restore. No revision, manifest, or
 receipt SHALL carry an unkeyed hash of the file. Receipts and
 hello.mesh responses SHALL NOT contain the passphrase. A guest profile
 SHALL NOT reuse the resident secret. Creating an identity SHALL NOT be
@@ -52,10 +54,14 @@ destinations in `10.42.0.0/16` and `10.254.0.0/16` are denied, and
 every house node rejects INPUT from the committed guest-source class
 except DHCP and DNS on its own guest interface. Destinations outside
 those aggregates that are not an address of a house node SHALL stay
-allowed. The guest-source class SHALL be the CIDRs listed in the
-committed fleet guest plan. Each CIDR SHALL be a CRDT claim under
+allowed. The guest-source class SHALL be the CIDRs listed in each house node's
+committed `mjolnir` config. Each CIDR SHALL be a CRDT claim under
 `/subnets/{cidr}` supplied to the builder, never a prefix the builder
-invents. The default guest plan SHALL NOT name hello.mesh as an
+invents. The builder SHALL enable a guest `wifi-iface` on a node only
+when every house node's committed config, passed in as input, already
+rejects INPUT from that node's guest CIDR. A missing, unreachable, or
+stale node SHALL refuse the plan. A newly joined node SHALL NOT count
+as covered until its committed config carries the class. The default guest plan SHALL NOT name hello.mesh as an
 exception. IPv6-enabled SHALL be read from the committed config.
 Unknown SHALL refuse the plan. A guest profile on an IPv6-enabled
 house SHALL be refused in this change. Enabling IPv6 while a guest
@@ -74,6 +80,14 @@ exception in that plan.
 - THEN the plan's forward policy allows it
 - AND the return route for the guest CIDR is a meshd follow-up, not
   this plan
+
+#### Scenario: Gateway has not committed the guest class
+
+- GIVEN a satellite guest plan and a gateway whose committed config
+  does not reject INPUT from that guest CIDR
+- WHEN the builder runs
+- THEN the plan is refused
+- AND the previous revision stays
 
 #### Scenario: Satellite guest addresses the gateway WAN
 
