@@ -4,8 +4,9 @@ use biscuit_auth::macros::biscuit;
 use biscuit_auth::{Biscuit, KeyPair, PublicKey};
 use ed25519_dalek::{Signer, SigningKey};
 use mjolnir_admin_capabilities::{
-    AdminRequest, AuthzError, GrantClass, HighWaterFloor, HolderAlgorithm, HolderKey, Operation,
-    SecurityProfile, TimeEvidence, TokenIdentity, VerifiedAuthority, authorize,
+    AdminRequest, AuthorityAnchor, AuthorityBook, AuthzError, GrantClass, HighWaterFloor,
+    HolderAlgorithm, HolderKey, Operation, OwnerVerified, Record, RecordBody, RecordHeader,
+    SecurityProfile, SignedRecord, TimeEvidence, TokenIdentity, VerifiedAuthority, authorize,
     verify_holder_proof,
 };
 
@@ -67,21 +68,78 @@ fn proof_for(
     (canonical, proof)
 }
 
+// Authority and time come only from the owner-signed record verifier. These
+// helpers build a one-head house and an issuer control record, then ask the
+// verifier for `OwnerVerified`.
+
+fn sign(sk: &SigningKey, header: RecordHeader, body: RecordBody) -> SignedRecord {
+    let bytes = Record::new(header, body).unwrap().encode().unwrap();
+    let sig = sk.sign(&bytes).to_bytes();
+    SignedRecord::new(bytes, sig)
+}
+
+fn owner_verified(
+    token_root: &PublicKey,
+    class: GrantClass,
+    profile: SecurityProfile,
+    verified_at: u64,
+) -> OwnerVerified {
+    let owner = SigningKey::from_bytes(&[0xa1; 32]);
+    let issuer = SigningKey::from_bytes(&[0xb2; 32]);
+    let owner_pk = owner.verifying_key().to_bytes();
+    let issuer_pk = issuer.verifying_key().to_bytes();
+    let head = sign(
+        &owner,
+        RecordHeader {
+            house_id: b32(0x11),
+            authority_epoch: 1,
+            signer: owner_pk,
+            sequence: 0,
+            issued_at: verified_at,
+            subject: [0; 32],
+        },
+        RecordBody::Head {
+            owner: owner_pk,
+            profile,
+            issuers: vec![issuer_pk],
+            revoked_lineage: Vec::new(),
+        },
+    );
+    let control = sign(
+        &issuer,
+        RecordHeader {
+            house_id: b32(0x11),
+            authority_epoch: 1,
+            signer: issuer_pk,
+            sequence: 1,
+            issued_at: verified_at,
+            subject: b32(0x22),
+        },
+        RecordBody::Control {
+            grant_class: class,
+            token_root: token_root.to_bytes().try_into().unwrap(),
+            expires_at: i64::MAX as u64,
+        },
+    );
+    let mut book = AuthorityBook::provision(AuthorityAnchor::new(b32(0x11), owner_pk));
+    book.ingest(&head, verified_at).unwrap();
+    book.verified_authority(&control, verified_at).unwrap()
+}
+
 fn authority(issuer: PublicKey, class: GrantClass, profile: SecurityProfile) -> VerifiedAuthority {
-    VerifiedAuthority {
-        issuer,
-        house_id: b32(0x11),
-        node_id: b32(0x22),
-        authority_epoch: 1,
-        profile,
-        grant_class: class,
-        revoked_lineage: Vec::new(),
-        issuer_revoked: false,
-    }
+    owner_verified(&issuer, class, profile, 1).authority().clone()
 }
 
 fn time(now: u64, verified_at: u64) -> TimeEvidence {
-    TimeEvidence::authenticated(now, verified_at).unwrap()
+    let root = KeyPair::new();
+    owner_verified(
+        &root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+        verified_at,
+    )
+    .time_evidence(now)
+    .unwrap()
 }
 
 #[test]
@@ -300,12 +358,13 @@ fn partition_stale_relaxed_refuses() {
         &hk,
         1,
     );
-    let mut auth = authority(
+    // Issuer withdrawn on a replica this destination has not verified: the
+    // destination's book simply lacks the withdrawal.
+    let auth = authority(
         root.public(),
         GrantClass::NetworkRadio,
         SecurityProfile::Relaxed,
     );
-    auth.issuer_revoked = true;
     let mut floor = HighWaterFloor::default();
     let err = authorize(
         &proof,
@@ -335,12 +394,12 @@ fn fd_positive_accepts_inside_stale_window() {
         &hk,
         1,
     );
-    let mut auth = authority(
+    // Issuer withdrawn on a replica this destination has not verified.
+    let auth = authority(
         root.public(),
         GrantClass::NetworkRadio,
         SecurityProfile::Standard,
     );
-    auth.issuer_revoked = true;
     let mut floor = HighWaterFloor::default();
     // 1h since last verify, Standard window 24h
     authorize(

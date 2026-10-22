@@ -7,13 +7,23 @@
 //! Codec layer: [`verify_holder_proof`] establishes **possession only**.
 //! Engine layer: [`authorize`] is a bounded authorization decision, not
 //! permission to execute. `b6j.2` must reserve [`ReplayObligation`] first.
+//! Record layer: [`AuthorityBook`] verifies owner-signed
+//! `lightning-admin/record/<type>` records at the consumer and is the only
+//! producer of [`VerifiedAuthority`] (via [`OwnerVerified`]).
 
 #![forbid(unsafe_code)]
 
 mod engine;
+mod record;
 pub use engine::{
     AuthorizedGrant, AuthzError, GrantClass, HighWaterFloor, ReplayObligation, SecurityProfile,
     TimeEvidence, VerifiedAuthority, authorize, verify_and_authorize,
+};
+pub use record::{
+    AuthorityAnchor, AuthorityBook, Evidence, FactClass, Ingested, MAX_LINEAGE_BYTES,
+    MAX_RECORD_BYTES, MAX_RECORD_ISSUERS, MAX_RECORD_LINEAGE, NodeVouched, OwnerVerified,
+    RECORD_DOMAIN_PREFIX, RECORD_VERSION, Record, RecordBody, RecordDeny, RecordHeader,
+    RecordType, SignedRecord, decode_record,
 };
 
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -84,6 +94,8 @@ pub enum CodecError {
     SignatureInvalid,
     #[error("request could not be canonically encoded")]
     EncodeFailed,
+    #[error("record is {actual} bytes, exceeding the {max} byte ceiling")]
+    RecordTooLarge { actual: usize, max: usize },
 }
 
 /// Closed set of administrative operations in local profile v1.
@@ -335,16 +347,45 @@ impl AdminRequest {
 /// decode/re-encode equality gate. Hostile bytes are never normalised and then
 /// accepted.
 pub fn decode_request(input: &[u8]) -> Result<AdminRequest, CodecError> {
+    decode_canonical(
+        input,
+        MAX_REQUEST_BYTES,
+        |actual, max| CodecError::RequestTooLarge { actual, max },
+        decode_request_fields,
+        AdminRequest::encode,
+    )
+}
+
+/// The one canonical gate for every closed schema in this crate (requests and
+/// `lightning-admin/record/<type>` records).
+///
+/// Size ceiling before any parsing, closed-schema decode, no trailing bytes,
+/// then the typed form must re-encode with the one encoder to exactly the
+/// input. That last step is what rejects non-minimal integers and any other
+/// encoding variant the closed schema did not already catch.
+pub(crate) fn decode_canonical<'b, T>(
+    input: &'b [u8],
+    max: usize,
+    too_large: fn(usize, usize) -> CodecError,
+    decode: impl FnOnce(&mut Decoder<'b>) -> Result<T, CodecError>,
+    encode: impl FnOnce(&T) -> Result<Vec<u8>, CodecError>,
+) -> Result<T, CodecError> {
     // Size ceiling first: applied before any parsing or allocation.
-    if input.len() > MAX_REQUEST_BYTES {
-        return Err(CodecError::RequestTooLarge {
-            actual: input.len(),
-            max: MAX_REQUEST_BYTES,
-        });
+    if input.len() > max {
+        return Err(too_large(input.len(), max));
     }
-
     let mut d = Decoder::new(input);
+    let value = decode(&mut d)?;
+    if d.position() != input.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    if encode(&value)? != input {
+        return Err(CodecError::NonCanonical);
+    }
+    Ok(value)
+}
 
+fn decode_request_fields(d: &mut Decoder<'_>) -> Result<AdminRequest, CodecError> {
     // Definite 10-element array. `None` means an indefinite-length array.
     let arity = d
         .array()
@@ -370,8 +411,8 @@ pub fn decode_request(input: &[u8]) -> Result<AdminRequest, CodecError> {
         return Err(CodecError::UnsupportedVersion(version));
     }
 
-    let house_id = decode_bytes32(&mut d, "house_id")?;
-    let node_id = decode_bytes32(&mut d, "node_id")?;
+    let house_id = decode_bytes32(d, "house_id")?;
+    let node_id = decode_bytes32(d, "node_id")?;
 
     let authority_epoch = d
         .u64()
@@ -396,23 +437,19 @@ pub fn decode_request(input: &[u8]) -> Result<AdminRequest, CodecError> {
         1 => {
             expect_arity(1, 3, argument_count)?;
             Operation::ApplyNetworkPlan {
-                plan_id: decode_bytes32(&mut d, "plan_id")?,
-                expected_revision: decode_bytes32(&mut d, "expected_revision")?,
-                plan_digest: decode_bytes32(&mut d, "plan_digest")?,
+                plan_id: decode_bytes32(d, "plan_id")?,
+                expected_revision: decode_bytes32(d, "expected_revision")?,
+                plan_digest: decode_bytes32(d, "plan_digest")?,
             }
         }
         other => return Err(CodecError::UnknownOperation(other)),
     };
 
-    let token_identity = TokenIdentity::from_digest(decode_bytes32(&mut d, "token_identity")?);
-    let target_challenge = decode_bytes32(&mut d, "target_challenge")?;
-    let request_id = decode_bytes32(&mut d, "request_id")?;
+    let token_identity = TokenIdentity::from_digest(decode_bytes32(d, "token_identity")?);
+    let target_challenge = decode_bytes32(d, "target_challenge")?;
+    let request_id = decode_bytes32(d, "request_id")?;
 
-    if d.position() != input.len() {
-        return Err(CodecError::TrailingBytes);
-    }
-
-    let request = AdminRequest::new(
+    AdminRequest::new(
         house_id,
         node_id,
         authority_epoch,
@@ -420,22 +457,15 @@ pub fn decode_request(input: &[u8]) -> Result<AdminRequest, CodecError> {
         token_identity,
         target_challenge,
         request_id,
-    )?;
-
-    // Canonical gate: the typed form must re-encode to exactly the input. This
-    // is what rejects non-minimal integers and any other encoding variant the
-    // closed schema above did not already catch. Hostile bytes are never
-    // normalised and then accepted.
-    if request.encode()? != input {
-        return Err(CodecError::NonCanonical);
-    }
-
-    Ok(request)
+    )
 }
 
 /// Decode one definite-length 32-byte string. Borrows from the input, so a
 /// declared length never drives an allocation.
-fn decode_bytes32(d: &mut Decoder<'_>, field: &'static str) -> Result<[u8; 32], CodecError> {
+pub(crate) fn decode_bytes32(
+    d: &mut Decoder<'_>,
+    field: &'static str,
+) -> Result<[u8; 32], CodecError> {
     let _ = field;
     let raw = d
         .bytes()

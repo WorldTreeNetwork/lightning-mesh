@@ -95,6 +95,10 @@ impl GrantClass {
 }
 
 /// Destination-owned authenticated time. No wall-clock constructor.
+///
+/// The only public way to obtain one is [`crate::OwnerVerified::time_evidence`]:
+/// `authority_verified_at` is the signed `issued_at` of the newest owner-signed
+/// authority-state record, never a caller-supplied or node-vouched value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeEvidence {
     unix_seconds: u64,
@@ -103,7 +107,7 @@ pub struct TimeEvidence {
 
 impl TimeEvidence {
     /// Frozen authenticated evidence. Production must not pass `SystemTime::now()`.
-    pub fn authenticated(
+    pub(crate) fn authenticated(
         unix_seconds: u64,
         authority_verified_at: u64,
     ) -> Result<Self, AuthzError> {
@@ -144,18 +148,77 @@ impl HighWaterFloor {
 }
 
 /// Verifier-side authority snapshot. Not token-asserted.
+///
+/// There is no public constructor and no public field. The only producer is
+/// [`crate::AuthorityBook::verified_authority`], which returns it inside
+/// [`crate::OwnerVerified`] after verifying an owner-signed control record at
+/// this consumer. A node-vouched fact cannot become one.
+///
+/// Callers cannot assemble one from fields:
+///
+/// ```compile_fail,E0451
+/// use mjolnir_admin_capabilities::{GrantClass, SecurityProfile, VerifiedAuthority};
+/// let issuer = biscuit_auth::KeyPair::new().public();
+/// let _ = VerifiedAuthority {
+///     issuer,
+///     house_id: [0; 32],
+///     node_id: [0; 32],
+///     authority_epoch: 1,
+///     profile: SecurityProfile::Standard,
+///     grant_class: GrantClass::Ownership,
+///     revoked_lineage: Vec::new(),
+/// };
+/// ```
+///
+/// nor the [`crate::OwnerVerified`] wrapper:
+///
+/// ```compile_fail,E0451
+/// use mjolnir_admin_capabilities::{OwnerVerified, VerifiedAuthority};
+/// fn forge(authority: VerifiedAuthority) -> OwnerVerified {
+///     OwnerVerified { authority, authority_verified_at: 0 }
+/// }
+/// ```
+///
+/// nor [`TimeEvidence`] with a chosen `authority_verified_at`:
+///
+/// ```compile_fail,E0624
+/// let _ = mjolnir_admin_capabilities::TimeEvidence::authenticated(10, 10);
+/// ```
 #[derive(Debug, Clone)]
 pub struct VerifiedAuthority {
-    pub issuer: PublicKey,
-    pub house_id: [u8; 32],
-    pub node_id: [u8; 32],
-    pub authority_epoch: u64,
-    pub profile: SecurityProfile,
-    pub grant_class: GrantClass,
+    pub(crate) issuer: PublicKey,
+    pub(crate) house_id: [u8; 32],
+    pub(crate) node_id: [u8; 32],
+    pub(crate) authority_epoch: u64,
+    pub(crate) profile: SecurityProfile,
+    pub(crate) grant_class: GrantClass,
     /// Token lineage ids that must not authorize.
-    pub revoked_lineage: Vec<Vec<u8>>,
-    /// Issuer revoked on a replica the destination has not yet verified.
-    pub issuer_revoked: bool,
+    pub(crate) revoked_lineage: Vec<Vec<u8>>,
+}
+
+impl VerifiedAuthority {
+    /// Biscuit root key named by the verified control record.
+    pub fn issuer(&self) -> &PublicKey {
+        &self.issuer
+    }
+    pub fn house_id(&self) -> &[u8; 32] {
+        &self.house_id
+    }
+    pub fn node_id(&self) -> &[u8; 32] {
+        &self.node_id
+    }
+    pub fn authority_epoch(&self) -> u64 {
+        self.authority_epoch
+    }
+    pub fn profile(&self) -> SecurityProfile {
+        self.profile
+    }
+    pub fn grant_class(&self) -> GrantClass {
+        self.grant_class
+    }
+    pub fn revoked_lineage(&self) -> &[Vec<u8>] {
+        &self.revoked_lineage
+    }
 }
 
 /// Bound identifiers that `b6j.2` must reserve before execution.
@@ -283,9 +346,10 @@ pub fn authorize(
         return Err(AuthzError::Expired);
     }
 
-    // Issuer revoked: still ok inside the stale window (F-D positive control).
-    // Stale already refused above.
-    let _ = authority.issuer_revoked;
+    // An issuer withdrawal this destination has not verified cannot be seen
+    // here; exposure is bounded by the stale check above (F-D). A verified
+    // withdrawal never reaches this point: `AuthorityBook` refuses to build
+    // `VerifiedAuthority` for a withdrawn issuer.
 
     let op_name = match request.operation() {
         Operation::DiagnosticsStatus => "diagnostics_status",

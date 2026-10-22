@@ -78,6 +78,38 @@ possession of a key for those bytes. Issuer/rights/holder grant binding, trusted
 time, revocation, target-challenge matching and durable one-use execution are
 separate mandatory checks; the codec must not expose an execute/authorize API.
 
+## Owner-signed records (`add-control-record-integrity`)
+
+Records reuse this profile and the same gate (size ceiling, closed-schema
+decode, no trailing bytes, exact re-encode). There is no second canonicalizer.
+Each record is a definite CBOR array opened by its own domain string, version 1,
+and a shared header:
+
+```
+[domain, 1, house_id: bstr32, authority_epoch: uint, signer: bstr32,
+ sequence: uint, issued_at: uint, subject: bstr32, ...body]
+```
+
+| Domain | Arity | `subject` | Body |
+|---|---|---|---|
+| `lightning-admin/record/head` | 12 | previous head digest (zero for genesis) | `owner: bstr32, profile: uint, issuers: [bstr32], revoked_lineage: [bstr]` |
+| `lightning-admin/record/snapshot` | 10 | head digest it chains to | `issuers: [bstr32], revoked_lineage: [bstr]` |
+| `lightning-admin/record/withdrawal` | 8 | withdrawn issuer key | none |
+| `lightning-admin/record/control` | 11 | node id | `grant_class: uint, token_root: bstr32, expires_at: uint` |
+
+Profile codes are 0 strict, 1 standard and 2 relaxed. Grant-class codes are
+0 diagnostics-read, 1 network-radio, 2 firmware, 3 ownership and 4 guest-wifi.
+Issuers and revoked lineage are strictly ascending. There are at most 64
+issuers and 32 lineage ids of 1–128 bytes, and a record is at most 8192 bytes.
+`issued_at` and `expires_at` are at most `i64::MAX`, and `expires_at` must be
+after `issued_at`. The signature is Ed25519 `verify_strict` by `signer` over
+exactly these bytes, with weak keys rejected. A head names its predecessor by
+`BLAKE3(ASCII("lightning-admin/record-digest/v1") || 0x00 || canonical_bytes)`.
+
+The persisted consumer freshness state (`lightning-admin/state/record-book`,
+version 1) is local and never gossiped. It is decoded through the same gate,
+and every entry is re-verified on restore.
+
 ## Authorization-engine pins (not implemented by the codec slice)
 
 Use `biscuit-auth = "=6.0.0"`. Documented
