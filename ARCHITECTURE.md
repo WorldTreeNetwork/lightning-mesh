@@ -116,6 +116,17 @@ A node-link stays off `br-mesh` and off resident DHCP. meshd feeds
 not drop a house-gateway `0.0.0.0/0` export. Living spec:
 `openspec/specs/node-connection-profiles/spec.md`.
 
+Household owner claim (`add-household-owner-claim`, bead
+`mjolnir-mesh-bf7.1`): one owner binds only when device proof, a card
+HMAC, and a fresh 120-second local button window match the same claim.
+The node stores `k`, not the card string. Recovery needs an enrolled
+credential plus a new window, advances the ownership epoch and the
+authority epoch, and does not elect a fork winner. The setup button
+toggles WAN SSH when there is no verifier, or when the node is already
+owned and no recovery credential has verified. A ceremony press does
+not. hello.mesh relays and never sees the secret. Living spec:
+`openspec/specs/household-owner-claim/spec.md`.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
@@ -126,6 +137,7 @@ not drop a house-gateway `0.0.0.0/0` export. Living spec:
 - Owner-signed admin records: `openspec/specs/admin-record-integrity/spec.md`
 - Station internet uplink: `openspec/specs/wifi-internet-uplink/spec.md`
 - Wired node profiles: `openspec/specs/node-connection-profiles/spec.md`
+- Household owner claim: `openspec/specs/household-owner-claim/spec.md`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
