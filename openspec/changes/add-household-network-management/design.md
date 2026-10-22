@@ -78,7 +78,7 @@ that contradicts the current per-node L3 architecture and risks DHCP conflicts.
 | NodeConnection | Peer/segment, Ethernet or mesh, band/channel, measured state | Prefer validated wire; retain required relay links |
 | RadioAssignment | Physical radio ID, supported roles/combinations, active role, band/channel/width/power | Capability-gated; unsupported sharing unavailable |
 | PortAssignment | Physical label, WAN / node link / client / disabled / advanced trunk | Per-model defaults; ambiguous ports require confirmation |
-| WiFiProfile | SSID, resident/guest/device purpose, security reference, bands, schedule | Confirmed target: private residents; isolated guests optional |
+| WiFiProfile | One SSID, class (published service / member / unidentified), schedule order | Confirmed 2026-10-22: one SSID; member ahead of unidentified; no second SSID; no rate cap |
 | AccessPolicy | Client isolation, cross-node policy, local service exceptions, internet permission | Enforced on all paths, not just within one AP |
 | OptimizationPolicy | Balanced / Coverage / Local performance / Custom; min service bands, fallback reserve | Balanced and stability-first; explain custom constraints |
 | Authorization | Principal, role, node/house/service scope, credential bindings, expiry, version | Least scope needed; owner separate from network admin |
@@ -92,7 +92,7 @@ secrets remain referenced, never returned in normal config responses.
 
 Later expert options: static WAN, PPPoE, WAN VLAN, routed upstream with static
 return routes, IPv6 PD/prefix changes, DNS overrides, maintenance schedules,
-approved guest service exceptions, SQM/fairness, VPN egress, remote access,
+SQM/fairness for the member schedule, VPN egress, remote access,
 per-service exposure, export/import and diagnostic bundles. Each needs its own
 support declaration; Linux's capability is not proof the product supports it.
 
@@ -280,8 +280,8 @@ fleet transactions across partitions. Retry must reconcile observed state.
 |---|---|---|
 | Calls during model downloads | Fairness / latency-under-load policy | Measure shaping CPU and actual uplink; radio headline rates are insufficient |
 | NAS, GPU hosts, local inference | Prefer wired local paths; service discovery and scoped access | Do not route local transfers through the external Wi-Fi receiver unnecessarily |
-| Guests during events | Expiring invitation or guest Wi-Fi; internet-only default | Enforce isolation across every node and IPv4/IPv6; captive portal is not a firewall |
-| Printers, speakers, IoT | Optional Devices profile and selected discovery/service exceptions | Avoid broad multicast reflection or merging resident/guest networks |
+| Visitors during events | Same SSID, unidentified class, best effort | No second SSID; published `.mesh` names stay reachable; a rate cap is a later decision |
+| Printers, speakers, IoT | Optional Devices profile and selected discovery/service exceptions | Avoid broad multicast reflection or bridging client LANs across nodes |
 | Residents moving out | Revoke member/service grants; rotate shared Wi-Fi secret if needed | Revoking identity alone does not revoke knowledge of a shared PSK |
 | Development servers / demos | Explicit service publish and visibility | LAN presence is not authorization for internet exposure |
 | Public webhook / remote SSH | Opt-in remote access proposal with authenticated endpoints | Upstream NAT/CGNAT may prevent inbound connections; no implicit port opening |

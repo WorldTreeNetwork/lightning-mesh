@@ -2,24 +2,22 @@
 
 `mjolnir-mesh-ai0.7` owns this architecture change.
 
+Decision 2026-10-22: one SSID, three classes, priority only. The
+guest-SSID rounds through r7 are superseded. Their reviews stay on
+disk and are not authority.
+
 - [ ] Fresh advise after preparation
-- [x] Answered N1–N6 (2026-10-22). `psk2` plus `wpa_psk_file` lines `00:00:00:00:00:00 <passphrase>`; snapshot/restore and `secret_generation`; aggregate destination deny with guest egress kept; IPv6 read from committed config; guests re-DHCP and never touch `br-lan`; commit scenario is the planned `wireless`, not association; default guest plan has no hello.mesh exception.
-- [x] Answered r2 R1–R3 (2026-10-22). Guest-sourced INPUT is rejected on every house node except DHCP and DNS on that node's guest interface. The upstream LAN past the node's own addresses is internet. The guest CIDR is a CRDT `/subnets/{cidr}` input. Babel return routes are a meshd follow-up. Guest profiles are refused while IPv6 is enabled.
-- [x] Answered r3 R3-1 and R3-2 (2026-10-22). The guest-source class lives in each node's committed `mjolnir` config. A guest SSID on node N waits until every house node's committed config already rejects INPUT from N's guest CIDR. A passphrase-only revision names the iface whose `wpa_psk_file` hostapd re-reads on apply and on restore.
-- [x] Aligned the open task lines and the IPv6 scenarios with that refusal (2026-10-22). A guest profile is refused when IPv6 is enabled or unknown. The cross-node deny scenario is IPv4. Fresh advise stays open.
-- [x] Answered r4 R4-1 through R4-4 (2026-10-22). Any revision that drops a guest CIDR while a guest SSID for it is committed is refused. The class is each node's committed `mjolnir` config, not a fleet plan object. `guest_routes` excludes that class. IPv6 is enabled on `ula_prefix`, `ip6assign`, `wan6`/`dhcpv6`, or odhcpd `ra`/`dhcpv6`, and a guest iface sets no `ip6assign`. A joiner (`mjolnir-mesh-fyby`) carries the class before it exports routes.
-- [x] Answered r5 R5-1 through R5-3 (2026-10-22). The guest device sets `ipv6` to `0`. The submitter re-reads peer revisions immediately before submit and refuses if any moved; the residual window is two transactions that both pass that check. The deny aggregate is the committed mesh client space (default `10.42.0.0/16`) plus `10.254.0.0/16`, and a guest CIDR outside the client space is refused.
-- [x] Answered r6 R6-1 and R6-2 (2026-10-22). An uncovered joiner blocks a new guest plan. The export hold is `mjolnir-mesh-fyby.4`. The profile id is lowercase hex of a domain-separated blake3 over role and SSID bytes. The secret file is one line.
-- [ ] Owed r7 R7-1 (`reviews/2026-10-22-advise-r7.md`): name the principal that reads the PSK file. OpenWrt `wpad.init` runs hostapd as `network:network` in a ujail with no DAC override, so a `root:root 0600` file is unreadable. Pin owner/group/mode, parent-directory traversal, and the jail-visible path (or a runtime copy and which one the snapshot covers), or record fleet evidence that hostapd runs as unjailed root. Align the spec's "root-only" and add a test on the planned owner/group/mode.
-- [ ] Owed r7 R7-2: the isolation statement requires the guest-serving node to drop guest-ingress packets whose source is outside its guest CIDR and to key its forward deny on the guest ingress, not on a source match. Add a scenario (spoofed resident source toward a house WAN address is denied at ingress) and a builder test.
-- [ ] Resident and optional guest plan builder. Passphrase stays out of the four UCI files, receipts, and hello.mesh. Uncommitted plans leave the open client SSID unchanged. The passphrase type is uplink `Passphrase`.
-- [ ] Roam exclusion: `guest_routes` does not install a proto-158 `/32` for an address in the committed guest-source class. Test a `10.42` address in that class.
-- [ ] Isolation gate: a plan is labeled isolated only when guest-to-resident and cross-node denies hold for IPv4, with no `br-lan` bridge. A guest profile is refused when IPv6 is enabled or unknown. Otherwise the plan is refused and the previous revision stays.
-- [ ] Tests for open-SSID non-mutation, a different SSID as a different profile, guest secret not equal to the resident secret, an SSID containing `/` and `..` still naming one file under `/etc/mjolnir/secrets/wifi/`, a guest profile refused when `ula_prefix` or `ip6assign` is set or the configs are missing, a guest device with `ipv6` `0`, a guest CIDR outside the mesh client space refused, a peer revision that moved before submit refused, a revision that drops a committed guest CIDR while that SSID is committed, a named service exception, and refusal to call `OpenWrtAdapter`.
+- [x] Superseded the guest-SSID contract (2026-10-22). No second SSID, no guest prefix, no guest isolation gate, no rate cap. Classes are published service, member, and unidentified.
+- [ ] Class plan builder. One SSID, radio unchanged until a later owner-committed plan. Member flows scheduled ahead of unidentified flows. No rate cap. Published `.mesh` names reachable. Management plane closed. No `OpenWrtAdapter`.
+- [ ] Tests for radio non-mutation, association is not membership, a member scheduled ahead without a cap, an unidentified client reaching a published name and not the management plane, and refusal to call `OpenWrtAdapter`.
 
 Not owed here:
 
+- A second SSID, a guest prefix, roam exclusion, or nftables for a guest class (`mjolnir-mesh-mzgw`, `mjolnir-mesh-fyby.4`, `mjolnir-mesh-nx1k` closed as superseded).
+- A hard rate cap.
+- Encrypting the one SSID.
 - Live radio writes (`mjolnir-mesh-lpv`).
 - Health probes (`mjolnir-mesh-2mgv`).
-- Biscuit issuance (`mjolnir-mesh-ai0.1`).
+- Biscuit issuance (`mjolnir-mesh-ai0.1`). The plan states the mark and does not invent one.
 - CAPPORT and the welcome page.
+- Installing a guild admin's SSH key.

@@ -5,7 +5,8 @@
 
 ## Intent and boundaries
 
-Resident Wi-Fi remains private, with optional isolated guest Wi-Fi. Separately,
+The house keeps one client SSID and schedules members ahead of unidentified
+clients. Separately,
 explore an open node backhaul where unfamiliar nodes can discover/connect but
 forwarding traffic requires an explicit **right to pass**. A future payment method
 could move tokens on a locally synchronized EVM. This does not assert that an EVM

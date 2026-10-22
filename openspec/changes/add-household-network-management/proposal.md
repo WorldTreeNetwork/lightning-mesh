@@ -60,9 +60,11 @@ evidence, Biscuit attenuation, FOKS-style keyspaces, and secure-context boundari
 Also confirmed: house-owned network and visible authenticated **Manage network**
 entry, with physical proof for claiming nodes. Secret-knock entry is superseded.
 
-Also confirmed: private resident Wi-Fi by default, with optional isolated guest
-Wi-Fi. Identity remains optional for internet access. This changes the target
-household profile; it does not change the currently deployed open SSID.
+Confirmed 2026-10-22, replacing the 2026-09-14 guest-SSID default: one client
+SSID, three classes (published service, member, unidentified), member flows
+scheduled ahead when the link is busy, no rate cap. Identity remains optional
+for internet access and for published `.mesh` names. This does not change the
+currently deployed open SSID and does not add a second one.
 
 Standalone phone-browser ownership still needs
 a trusted-origin/bootstrap decision before it can be promised as supported.

@@ -4,18 +4,22 @@
 
 ## ADDED Requirements
 
-### Requirement: Private resident Wi-Fi with optional isolated guests
+### Requirement: One client SSID and three classes
 
-The household setup profile SHALL default to private resident Wi-Fi and SHALL
-offer an optional isolated guest network. Creating an identity SHALL NOT be
-required for internet access. Guest isolation SHALL satisfy the cross-node and
-address-family requirements below before being offered as supported.
+The household setup profile SHALL use one client SSID. It SHALL NOT offer a
+second SSID for visitors or for a QoS class. Client flows SHALL be a published
+service, a member, or unidentified. When the link is busy, verified member
+flows SHALL be scheduled ahead of unidentified flows, with no rate cap. A
+published `.mesh` name SHALL stay reachable from every client on the SSID.
+Creating an identity SHALL NOT be required for internet access or for those
+names. SSID association SHALL NOT count as membership.
 
 #### Scenario: Owner sets up household Wi-Fi
 
 - GIVEN a new household setup
 - WHEN the owner reviews the default Wi-Fi profile
-- THEN resident Wi-Fi requires network credentials and guest Wi-Fi is optional
+- THEN there is one client SSID and no guest SSID
+- AND a verified member is scheduled ahead of an unidentified client when the link is busy
 - AND neither internet access nor anonymous hub browsing requires identity creation
 
 #### Scenario: Existing open deployment is reviewed
@@ -239,14 +243,16 @@ identity storage SHALL NOT be treated as owner credential custody.
 ### Requirement: Network access and identity have distinct scopes
 
 Internet access SHALL follow network policy without mandatory community identity.
-Guest isolation SHALL cover cross-node, wired, wireless, IPv4, and enabled IPv6
-paths before the UI labels a profile isolated.
+A published `.mesh` name SHALL be reachable from unidentified clients. The
+management plane SHALL stay closed to client traffic. The plan SHALL NOT label
+a second SSID as isolated, because this profile has no second SSID.
 
-#### Scenario: Guest joins another node
+#### Scenario: Unidentified client opens a published service
 
-- GIVEN an isolated guest profile and a private resident service on a different node
-- WHEN the guest tries to reach that service over any enabled address family
-- THEN policy denies access unless an explicit service exception exists
+- GIVEN a published `.mesh` name and an unidentified client on the one SSID
+- WHEN the client opens that name
+- THEN the plan allows it
+- AND the management plane stays closed
 
 #### Scenario: Upstream disappears
 
