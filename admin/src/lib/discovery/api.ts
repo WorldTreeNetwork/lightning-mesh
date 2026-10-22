@@ -8,6 +8,7 @@ export interface LinkLocalInterface {
 	is_loopback: boolean;
 	link_local: string[];
 	unique_local: string[];
+	ipv4?: string[];
 }
 
 export interface LinkLocalNeighbor {
@@ -23,6 +24,17 @@ export interface LinkLocalNeighbor {
 	state: string;
 	kind: 'local' | 'neighbor' | string;
 	source: string;
+	/** Kernel marked this neighbor as a router on the link. */
+	router?: boolean;
+	/** mDNS hostname, such as `edgebox.local`. */
+	hostname?: string | null;
+	/** Present when `GET /api/node` on this address answered as a Lightning node. */
+	mesh_name?: string | null;
+	mesh_node_id?: string | null;
+	mesh_subnet?: string | null;
+	mesh_backhaul?: string | null;
+	/** Iroh endpoint id, when this host publishes mesh resources. */
+	iroh?: string | null;
 }
 
 export interface ScanResult {

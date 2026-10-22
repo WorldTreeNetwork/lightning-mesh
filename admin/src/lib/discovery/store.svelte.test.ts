@@ -129,11 +129,12 @@ describe('DiscoveryStore', () => {
 		const store = new DiscoveryStore();
 		mockScan(sample);
 		await store.scan();
-		expect(store.selectedScope).toBe('unique-local');
+		expect(store.selectedScope).toBe('all');
+		expect(store.visibleNeighbors).toHaveLength(4);
+		store.selectScope('unique-local');
 		expect(store.visibleNeighbors).toHaveLength(1);
 		expect(store.visibleNeighbors[0].address).toBe('fd01:d28c:7e4a::1');
 		store.selectIface('eth0');
-		expect(store.visibleNeighbors).toHaveLength(1);
 		store.selectScope('all');
 		expect(store.visibleNeighbors).toHaveLength(3);
 		expect(store.neighborCount('wlan0')).toBe(1);

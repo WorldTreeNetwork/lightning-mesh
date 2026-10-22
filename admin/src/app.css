@@ -1,25 +1,159 @@
-:root {
-	--ink: #07110e;
-	--panel: #0d1814;
-	--panel-2: #12201b;
-	--line: #1c332b;
-	--line-strong: #2a4a3e;
+/*
+ * Named themes (data-theme) each have a light and a dark variant
+ * (data-variant). "System" resolves to one of those before paint.
+ * Tokens drive color, type, radius, and chrome so a new theme is a block here.
+ */
+:root,
+[data-theme='plain'][data-variant='dark'] {
+	color-scheme: dark;
+	--bg: #121417;
+	--surface: #1b1f24;
+	--surface-2: #232830;
+	--border: #313843;
+	--border-strong: #46505c;
+	--text: #e7eaee;
+	--muted: #9aa3ae;
+	--accent: #4c8dff;
+	--accent-ink: #f4f8ff;
+	--accent-soft: #1c2c48;
+	--primary-bg: #4c8dff;
+	--primary-fg: #f4f8ff;
+	--primary-border: #4c8dff;
+	--ok: #3dbe7a;
+	--warn: #d9a441;
+	--bad: #e36b68;
+	--amber: #e0b15a;
+	--row-hover: #262c35;
+	--local-bg: #1a2433;
+	--focus: #4c8dff;
+	--shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+	--radius: 6px;
+	--font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+	--canvas: var(--bg);
+	--track: 0;
+	--case: none;
+	--title-color: var(--text);
+	--title-track: -0.01em;
+	--show-mark: none;
+	--up-glow: none;
+	--control-size: 13px;
+}
+
+[data-theme='plain'][data-variant='light'] {
+	color-scheme: light;
+	--bg: #f3f4f6;
+	--surface: #ffffff;
+	--surface-2: #f7f8fa;
+	--border: #e2e5ea;
+	--border-strong: #c5ccd6;
+	--text: #1c2128;
+	--muted: #5c6773;
+	--accent: #1d5fd0;
+	--accent-ink: #ffffff;
+	--accent-soft: #e7f0ff;
+	--primary-bg: #1d5fd0;
+	--primary-fg: #ffffff;
+	--primary-border: #1d5fd0;
+	--ok: #157a45;
+	--warn: #8a5a00;
+	--bad: #b42318;
+	--amber: #8a5a00;
+	--row-hover: #f0f3f7;
+	--local-bg: #eef4fc;
+	--focus: #1d5fd0;
+	--shadow: 0 8px 24px rgb(16 24 40 / 0.12);
+	--radius: 6px;
+	--font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+	--canvas: var(--bg);
+	--track: 0;
+	--case: none;
+	--title-color: var(--text);
+	--title-track: -0.01em;
+	--show-mark: none;
+	--up-glow: none;
+	--control-size: 13px;
+}
+
+[data-theme='cyber'][data-variant='dark'] {
+	color-scheme: dark;
+	--bg: #07110e;
+	--surface: #0d1814;
+	--surface-2: #12201b;
+	--border: #1c332b;
+	--border-strong: #2a4a3e;
 	--text: #d6ece3;
 	--muted: #7f9a8e;
-	--mint: #3ee0b0;
-	--mint-dim: #1b6f58;
-	--amber: #e6b84c;
+	--accent: #3ee0b0;
+	--accent-ink: #3ee0b0;
+	--accent-soft: #12362c;
+	--primary-bg: #0e2a22;
+	--primary-fg: #3ee0b0;
+	--primary-border: #1b6f58;
 	--ok: #7dff9a;
 	--warn: #e0b35a;
 	--bad: #ef6f6c;
+	--amber: #e6b84c;
 	--row-hover: #163028;
 	--local-bg: #1a2410;
-	font-family: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
-		monospace;
-	font-size: 13px;
-	line-height: 1.35;
+	--focus: #3ee0b0;
+	--shadow: 0 10px 28px #00000088;
+	--radius: 0px;
+	--font: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+	--mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+	--canvas: radial-gradient(1200px 400px at 10% -10%, #12352b 0%, transparent 55%), var(--bg);
+	--track: 0.08em;
+	--case: uppercase;
+	--title-color: #3ee0b0;
+	--title-track: 0.16em;
+	--show-mark: block;
+	--up-glow: 0 0 6px #7dff9a88;
+	--control-size: 11px;
+}
+
+[data-theme='cyber'][data-variant='light'] {
+	color-scheme: light;
+	--bg: #e7f6f0;
+	--surface: #f4fbf8;
+	--surface-2: #dff3ea;
+	--border: #b7d9cb;
+	--border-strong: #7eae9a;
+	--text: #07110e;
+	--muted: #3d6556;
+	--accent: #0c7a56;
+	--accent-ink: #0c7a56;
+	--accent-soft: #c8efe2;
+	--primary-bg: #d7f6eb;
+	--primary-fg: #085c40;
+	--primary-border: #0c7a56;
+	--ok: #0d7a3d;
+	--warn: #8a5a00;
+	--bad: #b42318;
+	--amber: #8a5a00;
+	--row-hover: #d5efe4;
+	--local-bg: #e4f6c8;
+	--focus: #0c7a56;
+	--shadow: 0 10px 24px rgb(7 40 28 / 0.12);
+	--radius: 0px;
+	--font: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+	--mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+	--canvas: radial-gradient(1200px 400px at 10% -10%, #b7ead8 0%, transparent 55%), var(--bg);
+	--track: 0.08em;
+	--case: uppercase;
+	--title-color: #0c7a56;
+	--title-track: 0.16em;
+	--show-mark: block;
+	--up-glow: none;
+	--control-size: 11px;
+}
+
+:root {
+	font-family: var(--font);
+	font-size: 14px;
+	line-height: 1.45;
 	color: var(--text);
-	background: var(--ink);
+	background: var(--bg);
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
 	-webkit-font-smoothing: antialiased;
@@ -35,17 +169,94 @@ html,
 body {
 	margin: 0;
 	height: 100%;
-	background: var(--ink);
+	background: var(--bg);
 	color: var(--text);
 }
 
-button {
+button,
+input,
+select {
 	font: inherit;
 	color: inherit;
+}
+
+button {
 	cursor: pointer;
+	letter-spacing: var(--track);
+	text-transform: var(--case);
+	font-size: var(--control-size);
 }
 
 button:disabled {
 	cursor: default;
 	opacity: 0.55;
+}
+
+.lm-menu {
+	z-index: 50;
+	min-width: 11rem;
+	padding: 0.35rem;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: var(--text);
+	box-shadow: var(--shadow);
+}
+
+.lm-menu-label {
+	padding: 0.35rem 0.5rem 0.15rem;
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.lm-menu-item {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	width: 100%;
+	min-height: 32px;
+	padding: 0.25rem 0.5rem;
+	border: 0;
+	border-radius: calc(var(--radius) - 2px);
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	letter-spacing: 0;
+	text-transform: none;
+	cursor: pointer;
+}
+
+.lm-menu-item[data-highlighted] {
+	background: var(--row-hover);
+}
+
+.lm-menu-item[data-state='checked'] {
+	color: var(--accent);
+}
+
+.lm-menu-mark {
+	width: 0.8rem;
+	font-size: 10px;
+}
+
+.lm-menu-sep {
+	height: 1px;
+	margin: 0.3rem 0.25rem;
+	background: var(--border);
+}
+
+:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		transition: none !important;
+	}
 }

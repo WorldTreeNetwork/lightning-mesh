@@ -9,7 +9,7 @@ export class DiscoveryStore {
 	probed = $state(false);
 	lastScan = $state<number | null>(null);
 	selectedIface = $state<string | 'all'>('all');
-	selectedScope = $state<'all' | 'unique-local' | 'link-local'>('unique-local');
+	selectedScope = $state<'all' | 'unique-local' | 'link-local'>('all');
 
 	get scopedNeighbors(): LinkLocalNeighbor[] {
 		if (this.selectedScope === 'all') return this.neighbors;

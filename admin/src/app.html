@@ -5,6 +5,25 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lightning Admin</title>
+    <script>
+      try {
+        var name = localStorage.getItem('lightning-admin-theme-name');
+        var variant = localStorage.getItem('lightning-admin-variant');
+        if (name !== 'plain' && name !== 'cyber') {
+          var legacy = localStorage.getItem('lightning-admin-theme');
+          name = 'plain';
+          if (variant !== 'light' && variant !== 'dark' && variant !== 'system') {
+            variant = legacy === 'light' || legacy === 'dark' ? legacy : 'system';
+          }
+        }
+        if (variant !== 'light' && variant !== 'dark' && variant !== 'system') variant = 'system';
+        var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var resolved = variant === 'light' || variant === 'dark' ? variant : dark ? 'dark' : 'light';
+        document.documentElement.dataset.theme = name;
+        document.documentElement.dataset.variant = resolved;
+        document.documentElement.dataset.variantChoice = variant;
+      } catch (e) {}
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

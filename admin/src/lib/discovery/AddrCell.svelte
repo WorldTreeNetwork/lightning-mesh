@@ -77,11 +77,10 @@
 	.b58 {
 		border: 0;
 		background: transparent;
-		color: var(--mint);
+		color: var(--accent);
 		padding: 0;
-		font: inherit;
-		font-size: 12.5px;
-		letter-spacing: 0.02em;
+		font-family: var(--mono);
+		font-size: 13px;
 		text-align: left;
 	}
 
@@ -100,9 +99,10 @@
 		min-width: 22rem;
 		max-width: min(38rem, 70vw);
 		padding: 0.55rem 0.65rem 0.45rem;
-		border: 1px solid var(--line-strong);
-		background: color-mix(in srgb, var(--panel-2) 94%, black);
-		box-shadow: 0 10px 28px #00000088;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius);
+		background: var(--surface);
+		box-shadow: var(--shadow);
 	}
 
 	.cell:hover .pop,
@@ -120,13 +120,11 @@
 
 	.k {
 		color: var(--muted);
-		font-size: 10px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
+		font-size: 12px;
 	}
 
 	.v {
-		font: inherit;
+		font-family: var(--mono);
 		font-size: 12px;
 		color: var(--text);
 		user-select: all;
@@ -136,23 +134,22 @@
 	}
 
 	.copy {
-		border: 1px solid var(--line-strong);
-		background: #0e2a22;
-		color: var(--mint);
-		padding: 0.08rem 0.4rem;
-		font-size: 10px;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		border: 1px solid var(--border-strong);
+		background: var(--surface-2);
+		color: var(--text);
+		border-radius: var(--radius);
+		padding: 0.15rem 0.45rem;
+		font-size: 12px;
 	}
 
 	.copy:hover {
-		border-color: var(--mint);
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 
 	.hint {
 		margin-top: 0.2rem;
 		color: var(--muted);
-		font-size: 10px;
-		letter-spacing: 0.06em;
+		font-size: 12px;
 	}
 </style>

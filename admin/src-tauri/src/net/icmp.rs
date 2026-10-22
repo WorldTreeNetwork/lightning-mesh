@@ -74,10 +74,11 @@ pub fn probe_all_nodes(interfaces: &[LinkLocalInterface]) -> (Vec<RawNeighbor>, 
                     }
                     found.push(RawNeighbor {
                         ifindex: *ifindex,
-                        address: ip,
+                        address: std::net::IpAddr::V6(ip),
                         mac: None,
                         state: "reachable".into(),
                         source: "probe",
+                        router: false,
                     });
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}

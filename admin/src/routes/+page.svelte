@@ -1,12 +1,26 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { DropdownMenu } from 'bits-ui';
 	import { copyText } from '$lib/clipboard';
 	import AddrCell from '$lib/discovery/AddrCell.svelte';
+	import { classifyIface, ifaceTitle, KIND_ORDER, kindLabel, type IfaceKind } from '$lib/discovery/groups';
+	import { groupResources, resourceLabel, type Resource } from '$lib/discovery/resources';
 	import { discovery } from '$lib/discovery/store.svelte';
 	import { GUILD_LABEL, guild } from '$lib/guild/store.svelte';
 	import { NETWORK_NAME_LABEL, networkName } from '$lib/network-name/store.svelte';
+	import {
+		applyAppearance,
+		readAppearance,
+		THEME_NAMES,
+		VARIANT_CHOICES,
+		type ThemeName,
+		type VariantChoice
+	} from '$lib/theme';
 
 	onMount(() => {
+		const saved = readAppearance();
+		themeName = saved.name;
+		variantChoice = saved.variant;
 		void discovery.scan();
 	});
 
@@ -18,14 +32,120 @@
 		return `${Math.floor(s / 60)}m ${s % 60}s ago`;
 	}
 
-	const neighborRows = $derived(discovery.visibleNeighbors);
 	const ifaceList = $derived(discovery.networkInterfaces);
 	const scanned = $derived(ago(discovery.lastScan));
 
+	type View = 'resources' | IfaceKind;
+	const PRIMARY = new Set<IfaceKind>(['ethernet', 'wifi', 'vpn']);
+	let view = $state<View>('resources');
+	let showAll = $state(false);
+	let lightningOnly = $state(false);
+	type SortKey = 'address' | 'where' | 'mac' | 'state' | 'scope' | 'iroh';
+	let sortKey = $state<SortKey | null>(null);
+	let sortDir = $state<'asc' | 'desc'>('asc');
+
+	function toggleSort(key: SortKey) {
+		if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		else {
+			sortKey = key;
+			sortDir = 'asc';
+		}
+	}
+
+	function stateText(kind: string, state: string): string {
+		return kind === 'local' ? 'this computer' : state;
+	}
+
+	function resourceState(resource: Resource): string {
+		if (resource.rows.every((row) => row.kind === 'local')) return 'this computer';
+		return resource.state || 'unknown';
+	}
+
+	function sortValue(resource: Resource, key: SortKey): string {
+		switch (key) {
+			case 'address':
+				return resourceLabel(resource);
+			case 'where':
+				return resource.primary.address;
+			case 'mac':
+				return resource.via.join(',');
+			case 'state':
+				return resourceState(resource);
+			case 'scope':
+				return resource.primary.scope;
+			case 'iroh':
+				return resource.iroh ?? '';
+		}
+	}
+
+	const observed = $derived(
+		discovery.neighbors.filter((n) => showAll || n.state !== 'failed')
+	);
+
+	const groups = $derived(
+		KIND_ORDER.map((kind) => ({
+			kind,
+			label: kindLabel(kind),
+			ifaces: ifaceList.filter((i) => classifyIface(i.name) === kind)
+		})).filter((g) => g.ifaces.length > 0 && (showAll || PRIMARY.has(g.kind)))
+	);
+
+	const hiddenCount = $derived(
+		ifaceList.filter((i) => !PRIMARY.has(classifyIface(i.name))).length
+	);
+
+	const viewRows = $derived.by(() => {
+		const pool = observed.filter((n) => {
+			if (showAll || view !== 'resources') return true;
+			const kind = classifyIface(n.iface);
+			return kind !== 'bridge' && kind !== 'virtual';
+		});
+		if (view === 'resources') return pool;
+		const names = new Set(
+			ifaceList.filter((i) => classifyIface(i.name) === view).map((i) => i.name)
+		);
+		return pool.filter((n) => names.has(n.iface));
+	});
+
+	const viewIfaces = $derived(
+		view === 'resources' ? [] : ifaceList.filter((i) => classifyIface(i.name) === view)
+	);
+
+	const resources = $derived(groupResources(viewRows));
+	const lightningResources = $derived(resources.filter((resource) => resource.meshName));
+	const listedResources = $derived(lightningOnly ? lightningResources : resources);
+	let expanded = $state<Record<string, boolean>>({});
+
+	const sortedResources = $derived.by(() => {
+		if (!sortKey) return listedResources;
+		const dir = sortDir === 'asc' ? 1 : -1;
+		const key = sortKey;
+		return [...listedResources].sort(
+			(a, b) =>
+				dir * sortValue(a, key).localeCompare(sortValue(b, key)) ||
+				a.primary.address.localeCompare(b.primary.address)
+		);
+	});
+
+	function toggleShowAll() {
+		showAll = !showAll;
+		if (!showAll && view !== 'resources' && !PRIMARY.has(view)) view = 'resources';
+	}
+
 	let listCopied = $state(false);
+	let themeName = $state<ThemeName>('plain');
+	let variantChoice = $state<VariantChoice>('system');
+
+	function setAppearance(next: { name?: ThemeName; variant?: VariantChoice }) {
+		if (next.name) themeName = next.name;
+		if (next.variant) variantChoice = next.variant;
+		applyAppearance({ name: themeName, variant: variantChoice });
+	}
 
 	async function copyList() {
-		const text = discovery.visibleListText();
+		const text = sortedResources
+			.flatMap((resource) => resource.rows.map((n) => `${n.address}\t${n.iface}\t${n.mac ?? ''}`))
+			.join('\n');
 		if (!text) return;
 		const ok = await copyText(text);
 		listCopied = ok;
@@ -47,7 +167,7 @@
 			<span class="mark" aria-hidden="true"></span>
 			<div>
 				<div class="title">Lightning Admin</div>
-				<div class="sub">Unique Local IPv6 as base58 · hover for the address</div>
+				<div class="sub">Machines on the links this computer can hear, with the name and address each one announced.</div>
 			</div>
 		</div>
 		<div class="actions">
@@ -80,14 +200,58 @@
 			<button
 				type="button"
 				class="scan ghost"
-				disabled={neighborRows.length === 0}
+				disabled={sortedResources.length === 0}
 				onclick={() => copyList()}
 			>
 				{listCopied ? 'Copied list' : 'Copy list'}
 			</button>
-			<button type="button" class="scan" disabled={discovery.loading} onclick={() => discovery.scan()}>
+			<button type="button" class="scan primary" disabled={discovery.loading} onclick={() => discovery.scan()}>
 				{discovery.loading ? 'Scanning…' : 'Scan'}
 			</button>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<button type="button" class="scan ghost" {...props}>Appearance</button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Portal>
+					<DropdownMenu.Content class="lm-menu" align="end" sideOffset={6}>
+						<DropdownMenu.Group>
+							<DropdownMenu.GroupHeading class="lm-menu-label">Theme</DropdownMenu.GroupHeading>
+							<DropdownMenu.RadioGroup
+								value={themeName}
+								onValueChange={(value) => setAppearance({ name: value as ThemeName })}
+							>
+								{#each THEME_NAMES as theme (theme.id)}
+									<DropdownMenu.RadioItem class="lm-menu-item" value={theme.id} closeOnSelect={false}>
+										{#snippet children({ checked })}
+											<span class="lm-menu-mark" aria-hidden="true">{checked ? '●' : ''}</span>
+											{theme.label}
+										{/snippet}
+									</DropdownMenu.RadioItem>
+								{/each}
+							</DropdownMenu.RadioGroup>
+						</DropdownMenu.Group>
+						<DropdownMenu.Separator class="lm-menu-sep" />
+						<DropdownMenu.Group>
+							<DropdownMenu.GroupHeading class="lm-menu-label">Variant</DropdownMenu.GroupHeading>
+							<DropdownMenu.RadioGroup
+								value={variantChoice}
+								onValueChange={(value) => setAppearance({ variant: value as VariantChoice })}
+							>
+								{#each VARIANT_CHOICES as variant (variant.id)}
+									<DropdownMenu.RadioItem class="lm-menu-item" value={variant.id} closeOnSelect={false}>
+										{#snippet children({ checked })}
+											<span class="lm-menu-mark" aria-hidden="true">{checked ? '●' : ''}</span>
+											{variant.label}
+										{/snippet}
+									</DropdownMenu.RadioItem>
+								{/each}
+							</DropdownMenu.RadioGroup>
+						</DropdownMenu.Group>
+					</DropdownMenu.Content>
+				</DropdownMenu.Portal>
+			</DropdownMenu.Root>
 		</div>
 	</header>
 
@@ -106,7 +270,7 @@
 		/>
 		<button
 			type="button"
-			class="scan"
+			class="scan primary"
 			disabled={!networkName.canApply}
 			onclick={() => networkName.apply()}
 		>
@@ -199,31 +363,49 @@
 
 	<div class="body">
 		<aside class="rail">
-			<div class="rail-head">Interfaces</div>
+			<div class="rail-head">Look at</div>
+			<button type="button" class="iface" class:active={view === 'resources'} onclick={() => (view = 'resources')}>
+				<span class="iname">Resources</span>
+				<span class="icount">{view === 'resources' ? resources.length : groupResources(observed.filter((n) => showAll || (classifyIface(n.iface) !== 'bridge' && classifyIface(n.iface) !== 'virtual'))).length}</span>
+			</button>
 			<button
 				type="button"
 				class="iface"
-				class:active={discovery.selectedIface === 'all'}
-				onclick={() => discovery.selectIface('all')}
+				class:active={lightningOnly}
+				onclick={() => (lightningOnly = !lightningOnly)}
 			>
-				<span class="iname">all</span>
-				<span class="icount">{discovery.scopedNeighbors.length}</span>
+				<span class="iname">Lightning nodes</span>
+				<span class="icount">{lightningResources.length}</span>
 			</button>
-			{#each ifaceList as iface (iface.name)}
+			<div class="rail-head">Interfaces</div>
+			{#each groups as group (group.kind)}
 				<button
 					type="button"
 					class="iface"
-					class:active={discovery.selectedIface === iface.name}
-					class:down={!iface.is_up}
-					onclick={() => discovery.selectIface(iface.name)}
+					class:active={view === group.kind}
+					onclick={() => (view = group.kind)}
 				>
-					<span class="idot" class:up={iface.is_up}></span>
-					<span class="iname">{iface.name}</span>
-					<span class="icount">{discovery.neighborCount(iface.name)}</span>
+					<span class="idot" class:up={group.ifaces.some((i) => i.is_up)}></span>
+					<span class="iname">{group.label}</span>
+					<span class="icount">{group.ifaces.length}</span>
 				</button>
 			{/each}
-			{#if ifaceList.length === 0 && !discovery.loading}
-				<p class="empty">No non-loopback interfaces.</p>
+			{#if hiddenCount > 0 || showAll}
+				<button type="button" class="show-all" onclick={toggleShowAll}>
+					{showAll ? 'Hide extra' : `Show all · ${hiddenCount}`}
+				</button>
+			{/if}
+			{#if showAll && view !== 'resources'}
+				{#each viewIfaces as iface (iface.name)}
+					<button
+						type="button"
+						class="iface sub"
+						class:down={!iface.is_up}
+						onclick={() => discovery.selectIface(iface.name)}
+					>
+						<span class="iname" title={iface.name}>{iface.name}</span>
+					</button>
+				{/each}
 			{/if}
 		</aside>
 
@@ -239,44 +421,105 @@
 				</div>
 			{/if}
 
-			{#if neighborRows.length === 0 && !discovery.loading && !discovery.error}
+			{#if view !== 'resources' && viewIfaces.length > 0}
+				<ul class="cards">
+					{#each viewIfaces as iface (iface.name)}
+						<li>
+							<strong>{ifaceTitle(iface.name)}</strong>
+							<span class="muted">{iface.is_up ? 'up' : 'down'}</span>
+							{#if showAll}
+								<code>{iface.name}</code>
+							{/if}
+							{#if iface.unique_local.length}
+								<span class="addr-line">{iface.unique_local[0]}</span>
+							{:else if showAll && iface.link_local.length}
+								<span class="addr-line">{iface.link_local[0]}</span>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+
+			{#if listedResources.length === 0 && !discovery.loading && !discovery.error}
 				<div class="empty-main">
-					{#if discovery.selectedScope === 'unique-local' && discovery.linkLocalCount > 0}
-						No Unique Local IPv6 on this view. Switch to LL or All, or join a mesh that hands out ULA.
+					{#if lightningOnly}
+						No Lightning node answered on this view. A node is recognized when its LAN gateway answers /api/node.
+					{:else if view === 'resources'}
+						Nothing answered yet. The scan reads IPv4 ARP and IPv6 neighbors, marks routers, and asks Avahi for hostnames. Failed ARP entries stay hidden until Show all.
 					{:else}
-						No Unique Local or link-local IPv6 yet. Plug into a LAN (or a mesh node) and Scan.
+						No addresses on {kindLabel(view)}.
 					{/if}
 				</div>
-			{:else}
+			{:else if sortedResources.length > 0}
 				<table>
 					<thead>
 						<tr>
-							<th>Base58</th>
-							<th>Scope</th>
-							<th>MAC</th>
-							<th>Interface</th>
-							<th>Kind</th>
-							<th>State</th>
-							<th>Source</th>
+							<th></th>
+							{#each [{ key: 'address', label: 'Name' }, { key: 'where', label: 'Address' }, { key: 'mac', label: 'Via' }, { key: 'state', label: 'State' }] as col (col.key)}
+								<th aria-sort={sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+									<button type="button" class="sort" onclick={() => toggleSort(col.key as SortKey)}>
+										{col.label}{sortKey === col.key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+									</button>
+								</th>
+							{/each}
 						</tr>
 					</thead>
 					<tbody>
-						{#each neighborRows as n (`${n.ifindex}:${n.address}`)}
-							<tr class:local={n.kind === 'local'} class:ula={n.scope === 'unique-local'}>
+						{#each sortedResources as resource (resource.id)}
+							<tr class:local={resource.primary.kind === 'local'}>
+								<td class="twist">
+									{#if resource.rows.length > 1}
+										<button
+											type="button"
+											class="twist-btn"
+											aria-expanded={expanded[resource.id] ?? false}
+											aria-label={expanded[resource.id] ? 'Hide addresses' : 'Show addresses'}
+											onclick={() => (expanded[resource.id] = !expanded[resource.id])}
+										>
+											{expanded[resource.id] ? '▾' : '▸'}
+										</button>
+									{/if}
+								</td>
 								<td class="addr">
-									<AddrCell neighbor={n} />
+									<strong>{resourceLabel(resource)}</strong>
+									{#if resource.meshName}
+										<span class="chip">Lightning</span>
+									{:else if resource.router}
+										<span class="chip quiet">gateway</span>
+									{/if}
+									{#if resource.meshSubnet}
+										<div class="muted">{resource.meshSubnet} · {resource.meshBackhaul}</div>
+									{/if}
+									{#if resource.rows.length > 1}
+										<span class="more">+{resource.rows.length - 1}</span>
+									{/if}
 								</td>
 								<td>
-									<span class="scope {n.scope}">{scopeLabel(n.scope)}</span>
+									<button type="button" class="plain-addr" onclick={() => copyText(resource.primary.address)}>
+										{resource.primary.address}
+									</button>
 								</td>
-								<td class="mac">{n.mac ?? '—'}</td>
-								<td>{n.iface}</td>
-								<td>
-									<span class="kind {n.kind}">{n.kind === 'local' ? 'this host' : 'neighbor'}</span>
-								</td>
-								<td class="state {n.state}">{n.state}</td>
-								<td class="src">{n.source}</td>
+								<td title={resource.via.join(', ')}>{resource.local ? '—' : resource.via.join(', ') || ifaceTitle(resource.primary.iface)}</td>
+								<td class="state {resource.state}">{resourceState(resource)}</td>
 							</tr>
+							{#if resource.rows.length > 1 && expanded[resource.id]}
+								{#each resource.rows as n (`${n.ifindex}:${n.address}`)}
+									<tr class="detail" class:local={n.kind === 'local'}>
+										<td></td>
+										<td class="addr">
+											<span class="scope {n.scope}">{n.router ? 'gateway' : scopeLabel(n.scope)}</span>
+											<span class="muted"> {n.iface}</span>
+										</td>
+										<td>
+											<button type="button" class="plain-addr" onclick={() => copyText(n.scoped || n.address)}>
+												{n.address}
+											</button>
+										</td>
+										<td class="mac">{n.mac ?? '—'}</td>
+										<td class="state {n.state}">{stateText(n.kind, n.state)}</td>
+									</tr>
+								{/each}
+							{/if}
 						{/each}
 					</tbody>
 				</table>
@@ -302,19 +545,7 @@
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
-		background:
-			radial-gradient(1200px 400px at 10% -10%, #12352b 0%, transparent 55%),
-			var(--ink);
-	}
-
-	.top {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		padding: 0.85rem 1rem 0.75rem;
-		border-bottom: 1px solid var(--line);
-		background: color-mix(in srgb, var(--panel) 86%, black);
+		background: var(--canvas);
 	}
 
 	.brand {
@@ -324,96 +555,163 @@
 	}
 
 	.mark {
+		display: var(--show-mark);
 		width: 10px;
 		height: 28px;
-		background: linear-gradient(180deg, var(--mint), #0b5c47);
-		box-shadow: 0 0 12px #3ee0b088;
+		background: linear-gradient(180deg, var(--accent), #0b5c47);
+		box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
+	}
+
+	.top {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem 1rem;
+		flex-wrap: wrap;
+		padding: 0.7rem 1rem;
+		border-bottom: 1px solid var(--border);
+		background: var(--surface);
 	}
 
 	.title {
-		font-size: 13px;
-		letter-spacing: 0.16em;
-		text-transform: uppercase;
-		color: var(--mint);
+		font-size: 15px;
+		font-weight: 600;
+		letter-spacing: var(--title-track);
+		text-transform: var(--case);
+		color: var(--title-color);
 	}
 
 	.sub {
 		color: var(--muted);
-		font-size: 11px;
-		margin-top: 2px;
+		font-size: 13px;
+		margin-top: 1px;
 	}
 
 	.scan {
-		border: 1px solid var(--mint-dim);
-		background: #0e2a22;
-		color: var(--mint);
-		padding: 0.4rem 0.9rem;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		font-size: 11px;
+		min-height: 36px;
+		border: 1px solid var(--border-strong);
+		background: var(--surface);
+		color: var(--text);
+		padding: 0.3rem 0.75rem;
+		border-radius: var(--radius);
+		font-size: 13px;
 	}
 
 	.scan:hover:not(:disabled) {
-		border-color: var(--mint);
-		background: #12362c;
+		background: var(--row-hover);
+	}
+
+	.scan.primary {
+		background: var(--primary-bg);
+		border-color: var(--primary-border);
+		color: var(--primary-fg);
+	}
+
+	.scan.primary:hover:not(:disabled) {
+		filter: brightness(1.08);
 	}
 
 	.scan.ghost {
-		border-color: var(--line-strong);
 		background: transparent;
-		color: var(--text);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.45rem;
+		gap: 0.4rem;
 		align-items: center;
+		flex-wrap: wrap;
 	}
 
 	.scopes {
 		display: flex;
-		gap: 2px;
-		margin-right: 0.35rem;
+		gap: 0;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius);
+		overflow: hidden;
+	}
+
+	.scopes .scan {
+		border: 0;
+		border-radius: 0;
+		border-right: 1px solid var(--border);
+	}
+
+	.scopes .scan:last-child {
+		border-right: 0;
 	}
 
 	.scan.ghost.on {
-		border-color: var(--mint);
-		color: var(--mint);
-		background: #12362c;
+		background: var(--accent-soft);
+		color: var(--accent);
+	}
+
+	.nn-bar input {
+		min-height: 36px;
+		background: var(--bg);
+		border: 1px solid var(--border-strong);
+		color: var(--text);
+		border-radius: var(--radius);
+		padding: 0.3rem 0.55rem;
+	}
+
+	.nn-bar input:focus {
+		outline: 2px solid var(--focus);
+		outline-offset: 1px;
 	}
 
 	.body {
 		flex: 1;
 		min-height: 0;
-		display: grid;
-		grid-template-columns: 220px 1fr;
+		display: flex;
+		flex-direction: column;
+	}
+
+	@media (min-width: 720px) {
+		.body {
+			display: grid;
+			grid-template-columns: 200px 1fr;
+		}
+
+		.rail {
+			border-bottom: 0;
+			border-right: 1px solid var(--border);
+			max-height: none;
+		}
 	}
 
 	.rail {
-		border-right: 1px solid var(--line);
-		background: var(--panel);
-		padding: 0.6rem 0.45rem;
+		border-bottom: 1px solid var(--border);
+		background: var(--surface);
+		padding: 0.5rem 0.4rem;
 		overflow: auto;
 	}
 
+	@media (max-width: 719px) {
+		.rail {
+			max-height: 16rem;
+		}
+	}
+
 	.rail-head {
-		font-size: 10px;
-		letter-spacing: 0.14em;
-		text-transform: uppercase;
+		font-size: 12px;
+		font-weight: 600;
 		color: var(--muted);
-		padding: 0.25rem 0.55rem 0.5rem;
+		padding: 0.35rem 0.55rem 0.4rem;
+		letter-spacing: var(--track);
+		text-transform: var(--case);
 	}
 
 	.iface {
 		display: flex;
 		align-items: center;
-		gap: 0.45rem;
+		gap: 0.5rem;
 		width: 100%;
-		border: 1px solid transparent;
+		min-height: 36px;
+		border: 0;
+		border-radius: var(--radius);
 		background: transparent;
 		text-align: left;
-		padding: 0.38rem 0.5rem;
-		margin-bottom: 2px;
+		padding: 0.3rem 0.5rem;
 	}
 
 	.iface:hover {
@@ -421,8 +719,127 @@
 	}
 
 	.iface.active {
-		border-color: var(--line-strong);
-		background: #16362c;
+		background: var(--accent-soft);
+		color: var(--accent);
+	}
+
+	.iface.sub {
+		padding-left: 1.1rem;
+		min-height: 28px;
+	}
+
+	.show-all {
+		display: block;
+		width: 100%;
+		margin-top: 0.45rem;
+		padding: 0.35rem 0.5rem;
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-size: 12px;
+		text-align: left;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.show-all:hover {
+		color: var(--text);
+	}
+
+	.sort {
+		border: 0;
+		background: transparent;
+		padding: 0;
+		color: inherit;
+		font: inherit;
+		letter-spacing: inherit;
+		text-transform: inherit;
+	}
+
+	.cards {
+		list-style: none;
+		margin: 0;
+		padding: 0.75rem;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.cards li {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		min-width: 10rem;
+		padding: 0.55rem 0.7rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--surface);
+	}
+
+	.muted,
+	.addr-line {
+		color: var(--muted);
+		font-size: 12px;
+	}
+
+	.plain-addr {
+		border: 0;
+		background: transparent;
+		padding: 0;
+		color: var(--accent);
+		font-family: var(--mono);
+		font-size: 13px;
+		text-align: left;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.twist {
+		width: 1.6rem;
+		padding-right: 0;
+	}
+
+	.twist-btn {
+		border: 0;
+		background: transparent;
+		padding: 0 0.2rem;
+		color: var(--muted);
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.more {
+		margin-left: 0.4rem;
+		color: var(--muted);
+		font-size: 12px;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.chip {
+		display: inline-block;
+		margin-left: 0.4rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		background: var(--accent-soft);
+		color: var(--accent);
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0;
+		text-transform: none;
+		vertical-align: 1px;
+	}
+
+	.chip.quiet {
+		background: transparent;
+		border: 1px solid var(--border);
+		color: var(--muted);
+		font-weight: 500;
+	}
+
+	tr.detail td {
+		background: var(--surface-2);
+		font-size: 13px;
 	}
 
 	.iface.down .iname {
@@ -430,16 +847,16 @@
 	}
 
 	.idot {
-		width: 7px;
-		height: 7px;
+		width: 8px;
+		height: 8px;
 		border-radius: 99px;
-		background: #4a5c54;
+		background: var(--border-strong);
 		flex: 0 0 auto;
 	}
 
 	.idot.up {
 		background: var(--ok);
-		box-shadow: 0 0 6px #7dff9a88;
+		box-shadow: var(--up-glow);
 	}
 
 	.iname {
@@ -453,12 +870,12 @@
 	.icount {
 		color: var(--muted);
 		font-variant-numeric: tabular-nums;
-		font-size: 11px;
+		font-size: 12px;
 	}
 
 	.main {
 		overflow: auto;
-		padding: 0;
+		min-height: 0;
 	}
 
 	table {
@@ -471,19 +888,19 @@
 		position: sticky;
 		top: 0;
 		text-align: left;
-		font-size: 10px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
+		font-size: 12px;
+		font-weight: 600;
 		color: var(--muted);
-		background: var(--panel-2);
-		border-bottom: 1px solid var(--line);
-		padding: 0.55rem 0.75rem;
-		font-weight: 500;
+		background: var(--surface-2);
+		border-bottom: 1px solid var(--border);
+		padding: 0.5rem 0.75rem;
+		letter-spacing: var(--track);
+		text-transform: var(--case);
 	}
 
 	td {
 		padding: 0.45rem 0.75rem;
-		border-bottom: 1px solid var(--line);
+		border-bottom: 1px solid var(--border);
 		vertical-align: middle;
 	}
 
@@ -492,54 +909,38 @@
 	}
 
 	tr.local td {
-		background: color-mix(in srgb, var(--local-bg) 70%, transparent);
+		background: var(--local-bg);
 	}
 
 	.addr {
-		color: var(--mint);
-		font-size: 12.5px;
 		overflow: visible;
 	}
 
-	.scope {
+	.scope,
+	.kind {
 		display: inline-block;
-		padding: 0.08rem 0.4rem;
-		border: 1px solid var(--line-strong);
-		font-size: 10px;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		font-size: 12px;
 	}
 
 	.scope.unique-local {
-		color: var(--mint);
-		border-color: var(--mint-dim);
+		color: var(--accent);
+		background: var(--accent-soft);
+		border-color: transparent;
 	}
 
-	.scope.link-local {
-		color: var(--muted);
-	}
-
+	.scope.link-local,
 	.mac,
 	.src {
 		color: var(--muted);
-	}
-
-	.kind {
-		display: inline-block;
-		padding: 0.08rem 0.4rem;
-		border: 1px solid var(--line-strong);
-		font-size: 10px;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		font-family: var(--mono);
 	}
 
 	.kind.local {
 		color: var(--amber);
-		border-color: #6a5420;
-	}
-
-	.kind.neighbor {
-		color: var(--text);
 	}
 
 	.state.reachable,
@@ -554,81 +955,73 @@
 	}
 
 	.banner {
-		margin: 0.75rem 0.75rem 0;
-		padding: 0.5rem 0.65rem;
-		border: 1px solid var(--line);
-		font-size: 12px;
+		margin: 0.75rem;
+		padding: 0.55rem 0.7rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--surface);
+		font-size: 13px;
 	}
 
 	.banner.bad {
-		border-color: #6a2e2c;
 		color: var(--bad);
 	}
 
 	.banner.warn {
-		border-color: #5a4a22;
 		color: var(--warn);
 	}
 
 	.empty,
 	.empty-main {
 		color: var(--muted);
-		padding: 1.25rem 0.85rem;
-		font-size: 12px;
+		padding: 1.25rem 1rem;
+		font-size: 14px;
+		max-width: 42rem;
 	}
 
 	.status {
 		display: flex;
-		gap: 0.45rem;
+		gap: 0.4rem;
 		align-items: center;
-		padding: 0.4rem 0.85rem;
-		border-top: 1px solid var(--line);
+		flex-wrap: wrap;
+		padding: 0.4rem 1rem;
+		border-top: 1px solid var(--border);
 		color: var(--muted);
-		font-size: 11px;
-		background: var(--panel);
+		font-size: 12px;
+		background: var(--surface);
 	}
 
 	.sep {
-		opacity: 0.5;
+		opacity: 0.45;
 	}
 
 	.nn-bar {
 		display: flex;
 		align-items: center;
-		gap: 0.65rem;
-		padding: 0.45rem 1rem;
-		border-bottom: 1px solid var(--line);
-		background: var(--panel);
+		gap: 0.6rem;
+		padding: 0.55rem 1rem;
+		border-bottom: 1px solid var(--border);
+		background: var(--surface);
 		flex-wrap: wrap;
 	}
 
 	.nn-bar label {
-		font-size: 10px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-		color: var(--muted);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text);
 		white-space: nowrap;
+		letter-spacing: var(--track);
+		text-transform: var(--case);
 	}
 
 	.nn-bar input {
 		flex: 1;
 		min-width: 12rem;
-		background: #0e2a22;
-		border: 1px solid var(--mint-dim);
-		color: var(--text);
-		padding: 0.35rem 0.6rem;
-		font: inherit;
-	}
-
-	.nn-bar input:focus {
-		outline: none;
-		border-color: var(--mint);
 	}
 
 	.nn-status {
 		color: var(--muted);
-		font-size: 11px;
-		min-width: 0;
+		font-size: 13px;
 	}
 
 	.nn-status.bad {
@@ -638,26 +1031,24 @@
 	.nn-log {
 		flex-basis: 100%;
 		color: var(--muted);
-		font-size: 11px;
+		font-size: 13px;
 	}
 
 	.nn-log summary {
 		cursor: pointer;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		font-size: 10px;
 	}
 
 	.nn-log pre {
 		margin: 0.35rem 0 0;
 		max-height: 8rem;
 		overflow: auto;
-		padding: 0.45rem 0.55rem;
-		border: 1px solid var(--line);
-		background: var(--panel-2);
+		padding: 0.5rem 0.65rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--surface-2);
 		color: var(--text);
-		font: inherit;
-		font-size: 11px;
+		font-family: var(--mono);
+		font-size: 12px;
 		white-space: pre-wrap;
 	}
 </style>

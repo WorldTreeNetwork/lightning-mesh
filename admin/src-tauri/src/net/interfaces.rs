@@ -42,6 +42,7 @@ fn collect_sysfs(by_name: &mut BTreeMap<String, LinkLocalInterface>) -> Result<(
                 is_loopback: is_loopback_iface(&name),
                 link_local: Vec::new(),
                 unique_local: Vec::new(),
+                ipv4: Vec::new(),
             });
     }
     Ok(())
@@ -68,6 +69,7 @@ fn collect_if_inet6(by_name: &mut BTreeMap<String, LinkLocalInterface>) {
                 is_loopback: is_loopback_iface(&parsed.name),
                 link_local: Vec::new(),
                 unique_local: Vec::new(),
+                ipv4: Vec::new(),
             });
         if entry.index == 0 {
             entry.index = parsed.index;
@@ -102,19 +104,28 @@ fn collect_if_addrs_fallback(by_name: &mut BTreeMap<String, LinkLocalInterface>)
                 is_loopback: a.is_loopback() || is_loopback_iface(&a.name),
                 link_local: Vec::new(),
                 unique_local: Vec::new(),
+                ipv4: Vec::new(),
             });
-        if let IpAddr::V6(v6) = a.ip() {
-            if is_unicast_link_local(v6) {
+        match a.ip() {
+            IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_unspecified() && !v4.is_broadcast() => {
+                let addr = v4.to_string();
+                if !entry.ipv4.contains(&addr) {
+                    entry.ipv4.push(addr);
+                }
+            }
+            IpAddr::V6(v6) if is_unicast_link_local(v6) => {
                 let scoped = scoped_addr(v6, &a.name);
                 if !entry.link_local.contains(&scoped) {
                     entry.link_local.push(scoped);
                 }
-            } else if is_unique_local(v6) {
+            }
+            IpAddr::V6(v6) if is_unique_local(v6) => {
                 let addr = v6.to_string();
                 if !entry.unique_local.contains(&addr) {
                     entry.unique_local.push(addr);
                 }
             }
+            _ => {}
         }
     }
 }

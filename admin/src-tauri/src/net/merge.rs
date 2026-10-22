@@ -2,7 +2,7 @@
 // Copyright (C) 2026 World Tree Network Foundation and the Lightning Mesh contributors
 
 use std::collections::BTreeMap;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use super::interfaces::if_name;
 use super::types::{LinkLocalInterface, LinkLocalNeighbor, RawNeighbor, ScanResult};
@@ -19,7 +19,7 @@ pub fn merge_scan(
         by_index.insert(iface.index, iface);
     }
 
-    let mut rows: BTreeMap<(u32, Ipv6Addr), LinkLocalNeighbor> = BTreeMap::new();
+    let mut rows: BTreeMap<(u32, IpAddr), LinkLocalNeighbor> = BTreeMap::new();
 
     for iface in &interfaces {
         if iface.is_loopback {
@@ -31,7 +31,7 @@ pub fn merge_scan(
                 continue;
             };
             rows.insert(
-                (iface.index, addr),
+                (iface.index, IpAddr::V6(addr)),
                 LinkLocalNeighbor::from_addr(
                     iface.name.clone(),
                     iface.index,
@@ -48,11 +48,28 @@ pub fn merge_scan(
                 continue;
             };
             rows.insert(
-                (iface.index, addr),
+                (iface.index, IpAddr::V6(addr)),
                 LinkLocalNeighbor::from_addr(
                     iface.name.clone(),
                     iface.index,
                     addr,
+                    iface.mac.clone(),
+                    state,
+                    "local",
+                    "addr",
+                ),
+            );
+        }
+        for v4 in &iface.ipv4 {
+            let Some(addr) = v4.parse::<std::net::Ipv4Addr>().ok() else {
+                continue;
+            };
+            rows.insert(
+                (iface.index, IpAddr::V4(addr)),
+                LinkLocalNeighbor::from_ip(
+                    iface.name.clone(),
+                    iface.index,
+                    IpAddr::V4(addr),
                     iface.mac.clone(),
                     state,
                     "local",
@@ -69,15 +86,14 @@ pub fn merge_scan(
             .or_else(|| if_name(raw.ifindex))
             .unwrap_or_else(|| format!("if{}", raw.ifindex));
         let is_local = by_index.get(&raw.ifindex).is_some_and(|i| {
-            i.link_local
-                .iter()
-                .any(|s| parse_addr(s) == Some(raw.address))
+            i.link_local.iter().any(|s| parse_ip(s) == Some(raw.address))
                 || i.unique_local
                     .iter()
-                    .any(|s| parse_addr(s) == Some(raw.address))
+                    .any(|s| parse_ip(s) == Some(raw.address))
+                || i.ipv4.iter().any(|s| parse_ip(s) == Some(raw.address))
         });
         let entry = rows.entry((raw.ifindex, raw.address)).or_insert_with(|| {
-            LinkLocalNeighbor::from_addr(
+            LinkLocalNeighbor::from_ip(
                 iface_name.clone(),
                 raw.ifindex,
                 raw.address,
@@ -87,6 +103,9 @@ pub fn merge_scan(
                 raw.source,
             )
         });
+        if raw.router {
+            entry.router = true;
+        }
         if entry.mac.is_none() {
             entry.mac = raw.mac.clone();
         }
@@ -121,6 +140,11 @@ pub fn merge_scan(
 }
 
 fn parse_addr(addr: &str) -> Option<Ipv6Addr> {
+    let host = addr.split('%').next()?;
+    host.parse().ok()
+}
+
+fn parse_ip(addr: &str) -> Option<IpAddr> {
     let host = addr.split('%').next()?;
     host.parse().ok()
 }
@@ -173,6 +197,7 @@ mod tests {
             unique_local: unique_local
                 .map(|ip| vec![ip.to_string()])
                 .unwrap_or_default(),
+            ipv4: Vec::new(),
         }
     }
 
@@ -189,6 +214,7 @@ mod tests {
             mac: mac.map(|s| s.into()),
             state: state.into(),
             source,
+            router: false,
         }
     }
 

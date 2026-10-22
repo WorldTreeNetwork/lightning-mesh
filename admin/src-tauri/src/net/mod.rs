@@ -6,7 +6,9 @@
 //! all-nodes (`ff02::1`) probe. Addresses are also encoded as base58 of the
 //! 16 raw octets for the admin list.
 
+mod hello;
 mod interfaces;
+mod mdns;
 mod merge;
 mod types;
 
@@ -42,13 +44,13 @@ pub async fn scan_link_local() -> Result<ScanResult, String> {
         .await
         .unwrap_or_default();
     let (from_probe, probe_error) = icmp::probe_all_nodes(&interfaces);
-    Ok(merge_scan(
-        interfaces,
-        from_neigh,
-        from_probe,
-        probe_error,
-        true,
-    ))
+    let names = mdns::browse().await;
+    let mut scan = merge_scan(interfaces, from_neigh, from_probe, probe_error, true);
+    mdns::apply_names(&mut scan.neighbors, &names);
+    let candidates = hello::lan_gateway_candidates(&scan.neighbors);
+    let nodes = hello::probe_nodes(&candidates);
+    hello::apply_nodes(&mut scan.neighbors, &nodes);
+    Ok(scan)
 }
 
 pub fn scoped_addr(ip: std::net::Ipv6Addr, iface: &str) -> String {
@@ -164,6 +166,10 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         for n in &scan.neighbors {
+            if n.scope == "ipv4" {
+                assert!(n.address.parse::<std::net::Ipv4Addr>().is_ok(), "{}", n.address);
+                continue;
+            }
             let ip: Ipv6Addr = n.address.parse().expect("neighbor address");
             assert!(is_ula_or_link_local(ip), "non-ULA/LL leaked: {}", n.address);
             if is_unicast_link_local(ip) {
