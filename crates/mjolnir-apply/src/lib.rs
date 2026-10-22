@@ -8,6 +8,7 @@ mod model;
 mod node_profile;
 mod openwrt;
 mod storage;
+mod uplink;
 
 pub use engine::{
     ApplyAdapter, Engine, EngineError, FaultInjector, FaultPoint, NoFaults, Runtime, SystemRuntime,
@@ -24,6 +25,12 @@ pub use node_profile::{
 };
 pub use openwrt::{OpenWrtAdapter, active_plan, write_result_from_receipt};
 pub use storage::{NodeLock, TxnPaths};
+pub use uplink::{
+    Authorization, Candidate, DefaultExport, EXPORT_GATE, HOUSE_CLIENT_SSID, MeshInventory,
+    Passphrase, ProvesUpstream, REQUIRED_HEALTH, RESTORATION_HEALTH, SECRET_DIR, SECRET_MODE,
+    SecretFile, UplinkEffect, UplinkFacts, UplinkPlan, UplinkRefusal, UplinkRequest,
+    build_uplink_plan, check_restoration, default_export, lease_conflicts, submit_uplink_plan,
+};
 
 #[cfg(test)]
 mod tests;
