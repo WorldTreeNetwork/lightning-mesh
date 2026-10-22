@@ -9,6 +9,7 @@
 	import { identityStore } from '$lib/identity/store.svelte';
 	import ConsentSheet from '$lib/components/ConsentSheet.svelte';
 	import IdentityManager from '$lib/components/IdentityManager.svelte';
+	import { qrSvgPath } from './qr';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import {
 		initialInvitation,
@@ -19,6 +20,8 @@
 		storageVerdict,
 		regularBrowserLimit,
 		regularBrowserPath,
+		hubUrls,
+		HUB_URL,
 		type Action,
 		type StorageProbe,
 		type Upstream
@@ -56,7 +59,10 @@
 	});
 
 	const unverified = $derived(storageVerdict(probe) === 'unverified');
-	const paths = $derived(regularBrowserPath());
+	const lanGateway =
+		browser && /^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname) ? location.hostname : undefined;
+	const qr = qrSvgPath(HUB_URL);
+	const paths = $derived(regularBrowserPath(lanGateway));
 </script>
 
 {#if !identityStore.identity}
@@ -65,6 +71,23 @@
 	>
 		{#if invite.phase === 'invited' || invite.phase === 'consenting'}
 			<h2 class="text-base font-semibold">Welcome. Look around, or introduce yourself.</h2>
+			<div class="flex items-center gap-3" data-testid="hub-address">
+				<svg
+					viewBox="0 0 {qr.size} {qr.size}"
+					class="size-24 shrink-0 rounded bg-white"
+					role="img"
+					aria-label="QR code for {HUB_URL}"
+					data-testid="hub-qr"
+				>
+					<path d={qr.d} fill="#000" />
+				</svg>
+				<p class="text-sm text-muted-foreground">
+					Return to this hub any time at
+					{#each hubUrls(lanGateway) as url, i (url)}{i ? ' or ' : ' '}<code
+							class="font-mono text-xs">{url}</code
+						>{/each}.
+				</p>
+			</div>
 			<p class="text-sm text-muted-foreground">
 				Everything below works without an identity. Creating one is optional and never required to
 				browse.

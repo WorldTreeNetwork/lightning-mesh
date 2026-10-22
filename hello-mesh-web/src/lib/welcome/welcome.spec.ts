@@ -77,3 +77,17 @@ describe('portal key limit', () => {
 		expect(portalAsksForSeed).toBe(false);
 	});
 });
+
+describe('hub QR', () => {
+	it('encodes the stable hub URL as a fixed 25x25 symbol with finder patterns', async () => {
+		const { qrMatrix, qrSvgPath } = await import('./qr');
+		const { HUB_URL } = await import('./welcome');
+		const m = qrMatrix(HUB_URL);
+		expect(m.length).toBe(25);
+		expect(m[0].slice(0, 7)).toEqual([true, true, true, true, true, true, true]);
+		expect(m[3][3]).toBe(true);
+		expect(m[24 - 3][3]).toBe(true);
+		expect(qrSvgPath(HUB_URL)).toEqual(qrSvgPath(HUB_URL));
+		expect(HUB_URL).not.toMatch(/[?#]/);
+	});
+});
