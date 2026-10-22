@@ -47,28 +47,41 @@ required to use either network.
 ### Requirement: Guest isolation is a gate, not a label
 
 The system SHALL offer guest Wi-Fi only as an optional second profile.
-It SHALL label that profile isolated only when each guest-serving node
-denies guest destinations in the house aggregates (`10.42.0.0/16`,
-`10.254.0.0/16`, and, when IPv6 is enabled, the house ULA and GUA
-prefixes), including that node's own addresses, while still allowing
-destinations outside those aggregates. Guest input SHALL accept only
-DHCP, DNS, and ND/RA when IPv6 is enabled. The default guest plan
-SHALL NOT name hello.mesh as an exception. IPv6-enabled SHALL be read
-from the committed config, and unknown SHALL refuse the plan. A later
-plan that enables IPv6 SHALL carry the IPv6 deny in that same revision
-or be refused. Guest prefixes SHALL be a per-node slice of
-`10.42.0.0/16` that is not the resident `/24`, SHALL NOT be bridged
-onto `br-lan`, and SHALL NOT be installed or exported by roam. A plan
-that cannot state those denies SHALL be refused and SHALL leave the
-previous revision in place. The only extra permit SHALL be an explicit
-named service exception in that plan.
+It SHALL label that profile isolated only when forwarded guest
+destinations in `10.42.0.0/16` and `10.254.0.0/16` are denied, and
+every house node rejects INPUT from the committed guest-source class
+except DHCP and DNS on its own guest interface. Destinations outside
+those aggregates that are not an address of a house node SHALL stay
+allowed. The guest-source class SHALL be the CIDRs listed in the
+committed fleet guest plan. Each CIDR SHALL be a CRDT claim under
+`/subnets/{cidr}` supplied to the builder, never a prefix the builder
+invents. The default guest plan SHALL NOT name hello.mesh as an
+exception. IPv6-enabled SHALL be read from the committed config.
+Unknown SHALL refuse the plan. A guest profile on an IPv6-enabled
+house SHALL be refused in this change. Enabling IPv6 while a guest
+profile is committed SHALL be refused unless that revision drops the
+guest profile. Guest prefixes SHALL NOT be bridged onto `br-lan` and
+SHALL NOT be installed or exported by roam. A plan that cannot state
+those denies SHALL be refused and SHALL leave the previous revision
+in place. The only extra permit SHALL be an explicit named service
+exception in that plan.
 
-#### Scenario: Guest on a satellite still reaches the internet
+#### Scenario: Guest on a satellite still has an internet forward allow
 
 - GIVEN an isolated guest profile on a node that is not the gateway
-- WHEN the guest addresses a destination outside the house aggregates
-- THEN the plan allows it toward the gateway
-- AND a resident address on that gateway is still denied
+- WHEN the guest addresses a destination that is outside `10.42.0.0/16`
+  and `10.254.0.0/16` and is not an address of a house node
+- THEN the plan's forward policy allows it
+- AND the return route for the guest CIDR is a meshd follow-up, not
+  this plan
+
+#### Scenario: Satellite guest addresses the gateway WAN
+
+- GIVEN a guest on a satellite and a gateway WAN or recovery address
+  configured on that gateway
+- WHEN the guest addresses that address
+- THEN the plan denies it as INPUT from the guest-source class
+- AND a resident client address in `10.42.0.0/16` is still denied
 
 #### Scenario: Guest reaches a resident service on another node
 

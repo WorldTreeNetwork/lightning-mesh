@@ -34,28 +34,41 @@ the owner enables it. Guest does not reuse the resident secret.
 Isolation is a property of the plan, not a label the UI may add later.
 The plan may say `isolated` only when all of these are true:
 
-- Each guest-serving node denies guest destinations that fall in the
-  house aggregates. For IPv4 those are `10.42.0.0/16` and
-  `10.254.0.0/16`. For IPv6 they are the house ULA and the house GUA
-  prefixes when IPv6 is enabled. The deny is not a list of current
-  peers and not a ban on forwarding to the mesh. Traffic to the
-  internet (anything outside those aggregates, including a double-NAT
-  upstream) stays allowed, so a guest on a satellite still reaches
-  the gateway's WAN.
+- Each guest-serving node denies forwarded guest destinations in
+  `10.42.0.0/16` and `10.254.0.0/16`. The deny is not a list of
+  current peers and not a ban on forwarding to the mesh.
+- Every house node rejects INPUT whose source is in the committed
+  guest-source class, except DHCP and DNS on that node's own guest
+  interface. That covers the gateway's WAN address, `wwan`, recovery
+  `192.168.1.1` when it is an address of the node, and any public
+  address configured on a house node. A satellite guest forwarded
+  toward the internet is FORWARD, not INPUT, and stays allowed.
+- The upstream LAN beyond a house node's own addresses is internet
+  for this change, not resident space. Devices that live only on the
+  ISP router's LAN are outside the mesh client aggregates.
 - The same-node deny includes the node's own addresses. Guest input
   accepts only DHCP, DNS, and, when IPv6 is enabled, ND and RA.
 - The default guest plan names no hello.mesh exception. Guests do not
   reach `10.42.x.1:80` until a later change. Anonymous hub browsing
   stays on the resident network, or on the open SSID before commit.
 - IPv6-enabled is read from the committed `network` and `mjolnir`
-  config. If the builder cannot tell, it refuses. A later plan that
-  enables IPv6 while a committed guest profile has no IPv6 deny is
-  refused unless that same revision carries the IPv6 deny.
-- Guest addresses are a per-node slice inside `10.42.0.0/16` that is
-  not the resident `/24`. They are not bridged onto `br-lan`. `roam`
-  does not install a guest `/32` on `br-lan` and does not export one.
-  Guests do not roam in this change. They re-DHCP on the node they
-  join.
+  config. If the builder cannot tell, it refuses. This change refuses
+  a guest profile when IPv6 is enabled. It does not invent a house
+  GUA or a shared ULA list. A later change can add the v6 deny.
+  Enabling IPv6 while a guest profile is already committed is refused
+  unless that same revision drops the guest profile.
+- The guest slice is a CIDR the CRDT already claimed under
+  `/subnets/{cidr}`. The builder receives it as an input and does not
+  allocate. The committed fleet guest plan lists every such CIDR;
+  that list is the guest-source class. A slice that is not in the
+  committed plan is not yet guest traffic.
+- Babel redistribution of that CIDR, so the gateway has a return
+  route, is a meshd follow-up. This builder does not claim the route
+  exists. The satellite-internet scenario is a forward-policy allow.
+- Guest addresses are not the resident `/24`. They are not bridged
+  onto `br-lan`. `roam` does not install a guest `/32` on `br-lan`
+  and does not export one. Guests do not roam in this change. They
+  re-DHCP on the node they join.
 - The only extra permit is an explicit named service exception in the
   same plan.
 
