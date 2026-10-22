@@ -5,10 +5,13 @@
 - [x] Independent architecture advise r1 send-back (`reviews/opus-arch-review.md`)
 - [x] Answer B1–B5 in design.md and the spec delta (2026-10-22)
 - [x] Fresh advise after preparation — accept (`reviews/opus-arch-review-r2.md`)
-- [ ] Profile decider: one role per port and radio, node-link not in `br-mesh`, omitted mapped ports disabled, default `ethernet-gateway-satellites`, refuse unqualified `wired-core`
-- [ ] Plan builder on a fake adapter: `mjolnir.node_link`, required health, previous revision on failure. Do not submit to `OpenWrtAdapter` until live probes exist
-- [ ] Babel renderer reads `mjolnir.node_link` as wired interfaces
-- [ ] Tests for loop refusals: client babel, node-link in `br-mesh`, node-link DHCP, WAN bridged into `br-lan`, unassigned mapped port, cross-node client bridge, AP3000 `192.168.1.1/24` add, silent deletion of a house-gateway default export, and default-profile no-op on a current fixture
+- [x] Profile decider: one role per port and radio, node-link not in `br-mesh`, omitted mapped ports disabled, default `ethernet-gateway-satellites`, refuse unqualified `wired-core`
+- [x] Plan builder on a fake adapter: `mjolnir.node_link`, required health, previous revision on failure. Do not submit to `OpenWrtAdapter` until live probes exist
+- [x] Babel renderer reads `mjolnir.node_link` as wired interfaces (renderer input +
+  `parse_uci_node_links`; the meshd call site that feeds it is follow-up work)
+- [x] Tests for loop refusals: client babel, node-link in `br-mesh`, node-link DHCP, WAN bridged into `br-lan`, unassigned mapped port, cross-node client bridge, AP3000 `192.168.1.1/24` add, silent deletion of a house-gateway default export, and default-profile no-op on a current fixture
+
+- [ ] meshd passes `parse_uci_node_links` into `render_babeld_conf` (`mjolnir-mesh-1f5s`)
 
 Not owed here:
 
