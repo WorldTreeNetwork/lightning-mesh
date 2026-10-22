@@ -63,12 +63,22 @@ name. The router-specific part stops two routers' devices from colliding.
 ### Step 3: Add details (optional)
 
 **Do:** add repeatable `--txt` key/value pairs, for example
-`--txt path=/app --txt proto=http`.
+`--txt proto=http`. For a mini-app, add `--app` and, when the entry is not
+`/`, `--app-path /entry`:
+
+```sh
+mjolnir-meshd publish keyed --port 3000 --txt proto=http --app --app-path /entry
+```
+
+`--app` sets TXT `app=v1`. An omitted path means `/` and is not stored as
+`path=`. `--app-path` without `--app` is rejected. A plain
+`--txt path=print` with no `--app` still publishes; that `path` is ordinary
+TXT, not a mini-app. `--txt app=v1` is the same marker and is checked the
+same way (`app` must be the bytes `v1`).
 
 For a web app, include `--txt proto=http` (or `proto=https`). That's what
 makes hello.mesh show it as a clickable link; without it the entry shows as a
-bare address. Add `--txt app=v1` (and optionally `--txt path=/entry`) to
-put it on the **Apps** shelf — [Mini-apps](02-mini-apps.md).
+bare address. See [Mini-apps](02-mini-apps.md).
 
 ### Step 4: Check it from anywhere on the mesh
 
@@ -126,12 +136,18 @@ normalize anything. Use port `0` for a plain address record.
 POST /api/name-claim
 Content-Type: application/json
 
-{"pubkey":"<64 hex>","sig":"<128 hex>","challenge":"<hex>","name":"keyed","port":3000,"ip":"10.42.7.42","scheme":"https"}
+{"pubkey":"<64 hex>","sig":"<128 hex>","challenge":"<hex>","name":"keyed","port":3000,"ip":"10.42.7.42","scheme":"https","app":{"v":1,"path":"/entry"}}
 ```
-`ip` and `scheme` are optional and aren't covered by the signature. Without
-`ip`, the router uses your request's source address. Set `scheme` to `http`
-or `https` so hello.mesh lists your name as a clickable link; without it the
-name shows as a bare address.
+`ip`, `scheme`, and `app` are optional and aren't covered by the signature.
+The signed bytes stay `mjolnir-name-claim:v1`, the challenge, the name, and
+the port — the same signature verifies with or without `app`. Without `ip`,
+the router uses your request's source address. Set `scheme` to `http` or
+`https` so hello.mesh lists your name as a clickable link; without it the
+name shows as a bare address. `app` marks a mini-app: `{"v":1}` with no
+`path` means `/`, and the directory lists TXT `app=v1` (and `path=` only when
+the path is not `/`). Leave `app` off for a plain service. Send it again on
+every renewal; a renewal without `app` clears TXT `app` and `path`. An
+invalid path or version is `400` and does not change the current lease.
 
 **Expect:** accepted. Within about 5 seconds the router publishes the name,
 and it resolves mesh-wide.

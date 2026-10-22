@@ -40,15 +40,16 @@ use mjolnir_mesh::tun::{
     classify, spawn_overlay_tun, spawn_tunnel,
 };
 use mjolnir_mesh::{
-    AddrBook, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport, HLC,
-    LeaseBook, LeaseEntry, LeasedName, LeasedNameBook, LivenessTracker, LostNameMap, MergeResult,
-    NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome, ServiceBook,
-    ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError, ServiceTombstone,
-    ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry, alloc,
-    apply_coordinate, apply_lease, apply_leased_name, apply_service_publish_v2_tracking_loss,
-    apply_service_unpublish_v2, device_service_key, merge_node_name, merge_peer_addr,
-    merge_service, merge_subnet_claim, merge_user, name_owned_by, observe_hlc, parse_host_mac,
-    parse_mac, project_coordinate, publish_service_v2, reap_expired, render_roam_conf, tick_hlc,
+    AddrBook, AppMarker, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport,
+    HLC, LeaseBook, LeaseEntry, LeasedName, LeasedNameBook, LivenessTracker, LostNameMap,
+    MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome,
+    ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError,
+    ServiceTombstone, ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry,
+    alloc, apply_coordinate, apply_lease, apply_leased_name,
+    apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
+    merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, name_owned_by,
+    observe_hlc, parse_host_mac, parse_mac, project_coordinate, publish_service_v2,
+    publish_txt_with_marker, reap_expired, render_roam_conf, tick_hlc, validate_app_marker,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -162,8 +163,17 @@ enum Command {
         #[arg(long)]
         mac: Option<String>,
         /// Extra `key=value` TXT record (repeatable), e.g. `--txt path=/wiki`.
+        /// Without `--app`, `path` is ordinary TXT and is not validated as an
+        /// entry path (`--txt path=print` still publishes).
         #[arg(long = "txt", value_parser = parse_txt_kv)]
         txt: Vec<(String, String)>,
+        /// Mark the service as a mini-app (TXT `app=v1`).
+        #[arg(long)]
+        app: bool,
+        /// Mini-app entry path. Requires `--app`. Omitted with `--app` means `/`
+        /// (the directory then omits `path`).
+        #[arg(long = "app-path")]
+        app_path: Option<String>,
     },
     /// Release a `/services/` name this node owns, via the control API (bead
     /// e21.2.6, FR27). Thin HTTP client of `POST /v0/unpublish`.
@@ -353,9 +363,20 @@ async fn main() -> Result<()> {
         ip,
         mac,
         txt,
+        app,
+        app_path,
     } = &cli.command
     {
-        return run_publish_cli(name, *port, *ip, mac.as_deref(), txt).await;
+        return run_publish_cli(
+            name,
+            *port,
+            *ip,
+            mac.as_deref(),
+            txt,
+            *app,
+            app_path.as_deref(),
+        )
+        .await;
     }
     if let Command::Unpublish { name, device } = &cli.command {
         return run_unpublish_cli(name, *device).await;
@@ -1637,9 +1658,9 @@ async fn run_mesh(
                     let leases = lease_book.clone();
                     let leases_path = lease_book_file.clone();
                     let me = self_id_str.clone();
-                    tokio::spawn(async move {
-                        dhcp_roam_loop(sync, leases, leases_path, me).await
-                    });
+                    tokio::spawn(
+                        async move { dhcp_roam_loop(sync, leases, leases_path, me).await },
+                    );
                 }
 
                 // Control API (S3.1, bead e21.2.5): needs `sync` for the immediate
@@ -2913,6 +2934,11 @@ struct NameClaimSpool {
     /// `#[serde(default)]` so pre-scheme spool files still parse (mjolnir-mesh-kgq).
     #[serde(default)]
     scheme: Option<String>,
+    /// Mini-app marker. Absent (including a renewal that omits it) clears any
+    /// previous marker. `#[serde(default)]` so older spool files still parse.
+    /// `{"v":1}` with no path deserializes as path `/`.
+    #[serde(default)]
+    app: Option<AppMarker>,
 }
 
 /// Sweep the name-claim spool (`<spool>/names/*.json`), applying each accepted
@@ -2972,6 +2998,17 @@ fn ingest_name_claim_spool(
             let _ = std::fs::remove_file(&path);
             continue;
         }
+        let app = match claim.app.as_ref() {
+            Some(marker) => match validate_app_marker(marker.v, Some(marker.path.as_str())) {
+                Ok(marker) => Some(marker),
+                Err(err) => {
+                    warn!(name = %claim.name, error = err.as_str(), "name-claim spool: invalid app marker, dropping");
+                    let _ = std::fs::remove_file(&path);
+                    continue;
+                }
+            },
+            None => None,
+        };
         {
             let mut book = leased_names.lock().expect("leased names poisoned");
             let now = now_hlc(self_id);
@@ -3002,6 +3039,7 @@ fn ingest_name_claim_spool(
                 scheme: claim.scheme.clone(),
                 first_claimed_at,
                 renewed_at: now,
+                app,
             };
             match apply_leased_name(&mut book, &claim.name, entry.clone()) {
                 MergeResult::Inserted | MergeResult::Updated => {
@@ -3739,6 +3777,16 @@ fn leased_directory_services(book: &LeasedNameBook, now_ms: u64) -> Vec<Director
         .map(|(name, e)| {
             let mut txt = BTreeMap::new();
             txt.insert("owner".to_string(), short_pubkey(&e.owner_pubkey));
+            // Project a validated marker as TXT `app=v1`, plus `path` only when
+            // it is not `/`. A renewal that stored `app: None` clears both.
+            if let Some(marker) = &e.app
+                && let Ok(marker) = validate_app_marker(marker.v, Some(marker.path.as_str()))
+            {
+                txt.insert("app".to_string(), "v1".to_string());
+                if marker.path != "/" {
+                    txt.insert("path".to_string(), marker.path);
+                }
+            }
             // A web scheme (http/https) projects as the directory protocol so the
             // front desk renders a clickable `scheme://ip:port` link; anything
             // else (or no scheme, e.g. a pre-scheme claim) stays a bare `_tcp`
@@ -3901,10 +3949,7 @@ async fn dhcp_roam_loop<T: GossipTransport>(
     }
 }
 
-fn ingest_dhcp_event_spool(
-    lease_book: &Arc<Mutex<LeaseBook>>,
-    self_id: &str,
-) -> Vec<LeaseEntry> {
+fn ingest_dhcp_event_spool(lease_book: &Arc<Mutex<LeaseBook>>, self_id: &str) -> Vec<LeaseEntry> {
     let dir = Path::new(DHCP_EVENT_SPOOL);
     let rd = match std::fs::read_dir(dir) {
         Ok(r) => r,
@@ -3921,12 +3966,21 @@ fn ingest_dhcp_event_spool(
             continue;
         };
         let mut parts = text.split_whitespace();
-        let Some(_action) = parts.next() else { continue };
+        let Some(_action) = parts.next() else {
+            continue;
+        };
         let Some(mac_s) = parts.next() else { continue };
         let Some(ip_s) = parts.next() else { continue };
-        let host = parts.next().map(str::to_string).filter(|s| !s.is_empty() && s != "*");
-        let Some(mac) = parse_mac(mac_s) else { continue };
-        let Ok(ip) = ip_s.parse::<std::net::IpAddr>() else { continue };
+        let host = parts
+            .next()
+            .map(str::to_string)
+            .filter(|s| !s.is_empty() && s != "*");
+        let Some(mac) = parse_mac(mac_s) else {
+            continue;
+        };
+        let Ok(ip) = ip_s.parse::<std::net::IpAddr>() else {
+            continue;
+        };
         let incoming = LeaseEntry {
             mac,
             ip,
@@ -3970,7 +4024,9 @@ fn project_dhcp_roam_conf(conf: &str) {
         return;
     }
     match hup_dnsmasq() {
-        Ok(n) if n > 0 => info!(path = %dest.display(), pids = n, "dhcp roam: projected conf, HUP dnsmasq"),
+        Ok(n) if n > 0 => {
+            info!(path = %dest.display(), pids = n, "dhcp roam: projected conf, HUP dnsmasq")
+        }
         Ok(_) => warn!("dhcp roam: wrote conf but found no dnsmasq pid file"),
         Err(e) => warn!("dhcp roam: HUP dnsmasq: {e}"),
     }
@@ -4005,14 +4061,16 @@ fn hup_dnsmasq() -> std::io::Result<usize> {
     let rd = match std::fs::read_dir("/var/run/dnsmasq") {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return hup_dnsmasq_pidfile(Path::new("/var/run/dnsmasq.pid"))
+            return hup_dnsmasq_pidfile(Path::new("/var/run/dnsmasq.pid"));
         }
         Err(e) => return Err(e),
     };
     for ent in rd.flatten() {
         let path = ent.path();
         if path.extension().is_some_and(|ext| ext == "pid")
-            || path.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".pid"))
+            || path
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".pid"))
         {
             n += hup_dnsmasq_pidfile(&path)?;
         }
@@ -4047,11 +4105,7 @@ fn hup_dnsmasq_pidfile(path: &Path) -> std::io::Result<usize> {
 
 async fn reconcile_dhcp_roam_uci() {
     use tokio::process::Command;
-    let get = |opt: &str| {
-        Command::new("uci")
-            .args(["-q", "get", opt])
-            .output()
-    };
+    let get = |opt: &str| Command::new("uci").args(["-q", "get", opt]).output();
     let script_now = get("dhcp.@dnsmasq[0].dhcpscript")
         .await
         .ok()
@@ -5881,6 +5935,10 @@ async fn control_api_handle_publish<T: GossipTransport>(
     if req.name.is_empty() {
         return (400, control_api_error_body("malformed_body"));
     }
+    let txt = match publish_txt_with_marker(req.txt) {
+        Ok(txt) => txt,
+        Err(err) => return (400, control_api_error_body(err.as_str())),
+    };
     // A `--ip` publish is a stationary device (bead e21.3): scope the name to
     // this node (`<host>.<scope>`, authority-free and unforgeable) and use the
     // device's explicit IP. Otherwise it is the legacy node-hosted service,
@@ -5916,7 +5974,7 @@ async fn control_api_handle_publish<T: GossipTransport>(
         ip,
         port: req.port.unwrap_or(0),
         protocol: req.protocol,
-        txt: req.txt,
+        txt,
         host_mac,
     };
     match publish_service(
@@ -6333,6 +6391,10 @@ fn control_api_publish_error_message(name: &str, status: u16, body: &[u8]) -> St
         Some("invalid_mac") => {
             format!("cannot publish '{name}': invalid --mac (expected aa:bb:cc:dd:ee:ff)")
         }
+        Some("unsupported app version") => {
+            format!("cannot publish '{name}': unsupported app version")
+        }
+        Some("invalid app path") => format!("cannot publish '{name}': invalid app path"),
         Some(kind) => format!("cannot publish '{name}': control API returned {status} ({kind})"),
         None => format!("cannot publish '{name}': control API returned {status}"),
     }
@@ -6355,6 +6417,26 @@ fn control_api_unpublish_error_message(name: &str, status: u16, body: &[u8]) -> 
     }
 }
 
+/// Fold CLI `--txt` / `--app` / `--app-path` into the publish TXT map.
+/// `--app-path` without `--app` is rejected here, before any HTTP call.
+fn publish_cli_txt(
+    txt: &[(String, String)],
+    app: bool,
+    app_path: Option<&str>,
+) -> Result<BTreeMap<String, String>, String> {
+    if app_path.is_some() && !app {
+        return Err("--app-path requires --app".to_string());
+    }
+    let mut map: BTreeMap<String, String> = txt.iter().cloned().collect();
+    if app {
+        map.insert("app".to_string(), "v1".to_string());
+    }
+    if let Some(path) = app_path {
+        map.insert("path".to_string(), path.to_string());
+    }
+    Ok(map)
+}
+
 /// `meshd publish <name> --port N [--txt k=v ...]`: thin HTTP client of
 /// `POST /v0/publish` (FR26). Prints the published entry plainly on success;
 /// on any failure, renders the exact error wording to stderr and exits
@@ -6365,8 +6447,10 @@ async fn run_publish_cli(
     ip: Option<IpAddr>,
     mac: Option<&str>,
     txt: &[(String, String)],
+    app: bool,
+    app_path: Option<&str>,
 ) -> Result<()> {
-    let txt_map: BTreeMap<String, String> = txt.iter().cloned().collect();
+    let txt_map = publish_cli_txt(txt, app, app_path).map_err(anyhow::Error::msg)?;
     let mut body_json = serde_json::json!({
         "name": name,
         "txt": txt_map,
@@ -6584,10 +6668,7 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
             merge_ticks = 0;
             enable_roam_sysctls(&client_iface);
         }
-        if mjolnir_mesh::heal::iface_has_ipv4(
-            &addr_show,
-            mjolnir_mesh::heal::STOCK_LAN_ALIAS,
-        ) {
+        if mjolnir_mesh::heal::iface_has_ipv4(&addr_show, mjolnir_mesh::heal::STOCK_LAN_ALIAS) {
             strip_stock_lan_alias(&client_iface).await;
         }
         if !mjolnir_mesh::heal::iface_has_ipv4(&addr_show, gw) {
@@ -7283,7 +7364,12 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
     }) else {
         return;
     };
-    info!(hw = map.id, board = board.as_deref().map(str::trim), "led: {}", map.label);
+    info!(
+        hw = map.id,
+        board = board.as_deref().map(str::trim),
+        "led: {}",
+        map.label
+    );
     let set_trigger_none = |name: &str| {
         let _ = std::fs::write(led_root.join(name).join("trigger"), "none\n");
     };
@@ -9163,6 +9249,31 @@ mod tests {
     fn parse_txt_kv_rejects_missing_equals_or_empty_key() {
         assert!(parse_txt_kv("noequals").is_err());
         assert!(parse_txt_kv("=value").is_err());
+    }
+
+    #[test]
+    fn publish_cli_txt_app_path_requires_app() {
+        let err = publish_cli_txt(&[], false, Some("/x")).unwrap_err();
+        assert!(err.contains("--app-path requires --app"), "{err}");
+
+        let plain = publish_cli_txt(&[("path".into(), "print".into())], false, None).unwrap();
+        assert_eq!(plain.get("path").map(String::as_str), Some("print"));
+        assert!(!plain.contains_key("app"));
+
+        let marked = publish_cli_txt(&[], true, Some("/entry")).unwrap();
+        assert_eq!(marked.get("app").map(String::as_str), Some("v1"));
+        assert_eq!(marked.get("path").map(String::as_str), Some("/entry"));
+
+        let root = publish_cli_txt(&[], true, None).unwrap();
+        assert_eq!(root.get("app").map(String::as_str), Some("v1"));
+        assert!(!root.contains_key("path"));
+    }
+
+    #[test]
+    fn publish_error_message_names_unsupported_app_version() {
+        let body = control_api_error_body("unsupported app version");
+        let msg = control_api_publish_error_message("foo", 400, &body);
+        assert!(msg.contains("unsupported app version"), "{msg}");
     }
 
     #[test]
@@ -11120,6 +11231,91 @@ config meshd 'meshd'
     }
 
     #[tokio::test]
+    async fn control_api_publish_validates_app_marker_without_touching_a_bad_update() {
+        let fixture = start_test_control_api("node-a", Some("10.42.5.1".parse().unwrap())).await;
+
+        let (status, _) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"printer","port":631,"txt":{"path":"print"}}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"printer","port":631,"txt":{"app":"v2","path":"print"}}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "unsupported app version");
+
+        let (_, body) = control_api_request(fixture.addr, "GET", "/v0/directory", b"").await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let printer = json["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "printer")
+            .unwrap();
+        assert_eq!(printer["txt"]["path"], "print");
+        assert!(printer["txt"].get("app").is_none());
+
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"printer","port":631,"txt":{"app":"v1","path":"/ipp","proto":"http"}}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["txt"]["app"], "v1");
+        assert_eq!(json["txt"]["path"], "/ipp");
+
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"printer","port":631,"txt":{"app":"v1","path":"//evil.example"}}"#,
+        )
+        .await;
+        assert_eq!(status, 400);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid app path");
+
+        let (status, body) = control_api_request(
+            fixture.addr,
+            "POST",
+            "/v0/publish",
+            br#"{"name":"notes","port":80,"txt":{"app":"v1","path":"/","proto":"http"}}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["txt"]["app"], "v1");
+        assert!(json["txt"].get("path").is_none());
+        assert_eq!(json["txt"]["proto"], "http");
+
+        let (_, body) = control_api_request(fixture.addr, "GET", "/v0/directory", b"").await;
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let printer = json["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "printer")
+            .unwrap();
+        assert_eq!(printer["txt"]["path"], "/ipp");
+        assert_eq!(printer["txt"]["app"], "v1");
+
+        fixture.handle.abort();
+    }
+
+    #[tokio::test]
     async fn control_api_unpublish_not_owner_is_rejected() {
         // Two "logical nodes" (distinct self_id, distinct API port) sharing
         // one service directory, the way two real daemons share it over
@@ -11207,6 +11403,7 @@ config meshd 'meshd'
                 counter: 0,
                 node_id: "n".into(),
             },
+            app: None,
         }
     }
 
@@ -11263,6 +11460,129 @@ config meshd 'meshd'
             .collect();
         assert!(names.contains(&"fresh".to_string()));
         assert!(!names.contains(&"stale".to_string()));
+    }
+
+    #[test]
+    fn leased_directory_services_projects_app_marker_and_clears_it() {
+        let now = 1_000_000;
+        let mut marked = leased(Some("https"), now);
+        marked.app = Some(AppMarker {
+            v: 1,
+            path: "/entry".to_string(),
+        });
+        let mut root = leased(Some("http"), now);
+        root.app = Some(AppMarker {
+            v: 1,
+            path: "/".to_string(),
+        });
+        let mut book = LeasedNameBook::new();
+        book.insert("walkie-talkie".into(), marked);
+        book.insert("notes".into(), root);
+        book.insert("plain".into(), leased(Some("https"), now));
+
+        let services = leased_directory_services(&book, now);
+        let txt = |name: &str| {
+            services
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .txt
+                .clone()
+        };
+        let app_txt = txt("walkie-talkie");
+        assert_eq!(app_txt.get("app").map(String::as_str), Some("v1"));
+        assert_eq!(app_txt.get("path").map(String::as_str), Some("/entry"));
+        assert!(app_txt.contains_key("owner"));
+        let root_txt = txt("notes");
+        assert_eq!(root_txt.get("app").map(String::as_str), Some("v1"));
+        assert!(!root_txt.contains_key("path"));
+        let plain_txt = txt("plain");
+        assert!(!plain_txt.contains_key("app"));
+        assert!(!plain_txt.contains_key("path"));
+    }
+
+    fn spool_claim(dir: &std::path::Path, pubkey: &str, body: &str) {
+        let names = dir.join("names");
+        std::fs::create_dir_all(&names).unwrap();
+        std::fs::write(names.join(format!("{pubkey}.json")), body).unwrap();
+    }
+
+    #[test]
+    fn ingest_name_claim_carries_app_and_renewal_without_app_clears_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let book = Arc::new(Mutex::new(LeasedNameBook::new()));
+        let pubkey = "ab".repeat(32);
+        spool_claim(
+            temp.path(),
+            &pubkey,
+            &format!(
+                r#"{{"pubkey":"{pubkey}","sig":"{}","challenge":"{}","name":"walkie-talkie","port":3000,"ip":"10.42.5.23","scheme":"https","app":{{"v":1}}}}"#,
+                "00".repeat(64),
+                "cd".repeat(32),
+            ),
+        );
+        let applied = ingest_name_claim_spool(temp.path(), &book, "node-a");
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].1.app.as_ref().unwrap().path, "/");
+        let now = applied[0].1.renewed_at.wall_clock;
+        let services = leased_directory_services(&book.lock().unwrap(), now);
+        let txt = &services
+            .iter()
+            .find(|s| s.name == "walkie-talkie")
+            .unwrap()
+            .txt;
+        assert_eq!(txt.get("app").map(String::as_str), Some("v1"));
+        assert!(!txt.contains_key("path"));
+        assert!(
+            !temp
+                .path()
+                .join("names")
+                .join(format!("{pubkey}.json"))
+                .exists()
+        );
+
+        spool_claim(
+            temp.path(),
+            &pubkey,
+            &format!(
+                r#"{{"pubkey":"{pubkey}","sig":"{}","challenge":"{}","name":"walkie-talkie","port":3000,"ip":"10.42.5.23","scheme":"https"}}"#,
+                "00".repeat(64),
+                "ce".repeat(32),
+            ),
+        );
+        let applied = ingest_name_claim_spool(temp.path(), &book, "node-a");
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].1.app.is_none());
+        let now = applied[0].1.renewed_at.wall_clock;
+        let services = leased_directory_services(&book.lock().unwrap(), now);
+        let txt = &services
+            .iter()
+            .find(|s| s.name == "walkie-talkie")
+            .unwrap()
+            .txt;
+        assert!(!txt.contains_key("app"));
+        assert!(!txt.contains_key("path"));
+
+        spool_claim(
+            temp.path(),
+            &pubkey,
+            &format!(
+                r#"{{"pubkey":"{pubkey}","sig":"{}","challenge":"{}","name":"walkie-talkie","port":3000,"ip":"10.42.5.23","app":{{"v":1,"path":"//evil.example"}}}}"#,
+                "00".repeat(64),
+                "cf".repeat(32),
+            ),
+        );
+        let applied = ingest_name_claim_spool(temp.path(), &book, "node-a");
+        assert!(applied.is_empty());
+        assert!(book.lock().unwrap()["walkie-talkie"].app.is_none());
+        assert!(book.lock().unwrap()["walkie-talkie"].scheme.as_deref() == Some("https"));
+        assert!(
+            !temp
+                .path()
+                .join("names")
+                .join(format!("{pubkey}.json"))
+                .exists()
+        );
     }
 
     #[test]

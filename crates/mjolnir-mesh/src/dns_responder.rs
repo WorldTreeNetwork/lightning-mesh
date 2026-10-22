@@ -1112,6 +1112,7 @@ mod leased_name_table_tests {
                 counter: 0,
                 node_id: "n".into(),
             },
+            app: None,
         }
     }
 

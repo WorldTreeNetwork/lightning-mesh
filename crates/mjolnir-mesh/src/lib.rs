@@ -22,6 +22,7 @@
 //! See `docs/network-coordination/` in the repo root for the design specs.
 
 pub mod alloc;
+pub mod app_marker;
 pub mod babel;
 pub mod bootstrap;
 pub mod claim_cooldown;
@@ -39,6 +40,10 @@ pub mod roam;
 pub mod roster;
 pub mod tun;
 
+pub use app_marker::{
+    AppMarker, AppMarkerError, publish_txt_with_marker, validate_app_marker,
+    validate_txt_app_marker,
+};
 pub use crdt::{
     coordinate::{
         CoordinateBook, CoordinateProjection, CoordinateStamp, MICRODEGREES, degrees_to_e7,

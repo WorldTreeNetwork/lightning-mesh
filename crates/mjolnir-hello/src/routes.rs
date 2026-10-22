@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use data_encoding::HEXLOWER;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use mjolnir_mesh::{AppMarker, validate_app_marker};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
@@ -173,6 +174,19 @@ struct NameClaimRequest {
     /// so an older client that omits it still claims (name renders non-clickable).
     #[serde(default)]
     scheme: Option<String>,
+    /// Mini-app marker. Self-reported and, like `ip` and `scheme`, NOT part of
+    /// [`name_claim_signing_message`]. Absent → plain service. Omitted `path`
+    /// means `/`. An invalid marker is rejected before anything is spooled.
+    #[serde(default)]
+    app: Option<NameClaimApp>,
+}
+
+/// Unsigned `app` object on `POST /api/name-claim`. Absent `path` means `/`.
+#[derive(Debug, Deserialize)]
+struct NameClaimApp {
+    v: u8,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 /// What meshd's name-claim sweep (bead 71x) ingests. Unlike [`IdentityRecord`],
@@ -194,6 +208,10 @@ struct NameClaimRecord<'a> {
     /// the claimant didn't supply one (the name then lists as a bare address).
     #[serde(skip_serializing_if = "Option::is_none")]
     scheme: &'a Option<String>,
+    /// Canonical mini-app marker. Omitted entirely when the claim is not an app,
+    /// so a renewal without `app` clears the marker at ingest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app: Option<AppMarker>,
 }
 
 /// The exact bytes a name claim signs: the domain prefix, the hex challenge,
@@ -459,7 +477,8 @@ fn submit_identity(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path) -
 
     // Reject a bad wrap target before the challenge is consumed. Missing
     // recipient is not an error: authentication alone is not membership.
-    if let Err(err) = crate::guildspace::decide(spool_dir, &req.pubkey, req.wrap_recipient.as_deref())
+    if let Err(err) =
+        crate::guildspace::decide(spool_dir, &req.pubkey, req.wrap_recipient.as_deref())
     {
         return bad_request(&err);
     }
@@ -560,6 +579,16 @@ fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path)
         return bad_request("reserved name");
     }
 
+    // Reject a bad marker before the signature check or the spool write, so a
+    // typo cannot burn the nonce or replace a live lease.
+    let app = match &req.app {
+        Some(app) => match validate_app_marker(app.v, app.path.as_deref()) {
+            Ok(marker) => Some(marker),
+            Err(err) => return bad_request(err.as_str()),
+        },
+        None => None,
+    };
+
     let Ok(pubkey_bytes) = HEXLOWER.decode(req.pubkey.as_bytes()) else {
         return bad_request("invalid pubkey encoding");
     };
@@ -616,6 +645,7 @@ fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path)
         port,
         ip: req.ip,
         scheme: &req.scheme,
+        app,
     };
     let record_json = serde_json::to_string(&record).expect("record serializes");
 
@@ -1263,7 +1293,8 @@ mod tests {
         assert_eq!(logged["guildspace_profile"], "access-node");
         let wrap: serde_json::Value = serde_json::from_slice(
             &std::fs::read(
-                spool.path()
+                spool
+                    .path()
                     .join("guildspace")
                     .join(format!("{pubkey_hex}.json")),
             )
@@ -2006,6 +2037,127 @@ mod tests {
         // Single-use nonce: replaying the exact same claim now fails.
         let replay = post_name_claim(&challenges, spool.path(), &body);
         assert_eq!(replay.status, 400);
+    }
+
+    #[test]
+    fn name_claim_app_is_outside_the_signed_preimage() {
+        // The same signing function verifies with and without `app`.
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+
+        let (challenges, spool) = no_state();
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let sig = key.sign(&name_claim_signing_message(
+            &challenge_hex,
+            "walkie-talkie",
+            3000,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let with_app = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000,"app":{{"v":1,"path":"/entry"}}}}"#
+        );
+        let resp = post_name_claim(&challenges, spool.path(), &with_app);
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        let spooled = spool
+            .path()
+            .join("names")
+            .join(format!("{pubkey_hex}.json"));
+        let rec: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&spooled).unwrap()).unwrap();
+        assert_eq!(rec["app"]["v"], 1);
+        assert_eq!(rec["app"]["path"], "/entry");
+        assert!(
+            !String::from_utf8_lossy(&name_claim_signing_message(
+                &challenge_hex,
+                "walkie-talkie",
+                3000
+            ))
+            .contains("app"),
+            "app must not enter the signed preimage"
+        );
+
+        let (challenges, spool) = no_state();
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let sig = key.sign(&name_claim_signing_message(
+            &challenge_hex,
+            "walkie-talkie",
+            3000,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let omitted_path = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000,"app":{{"v":1}}}}"#
+        );
+        let resp = post_name_claim(&challenges, spool.path(), &omitted_path);
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        let rec: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                spool
+                    .path()
+                    .join("names")
+                    .join(format!("{pubkey_hex}.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rec["app"]["path"], "/");
+
+        let (challenges, spool) = no_state();
+        let challenge_hex = fresh_challenge(&challenges, spool.path());
+        let sig = key.sign(&name_claim_signing_message(
+            &challenge_hex,
+            "walkie-talkie",
+            3000,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        let without = format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000}}"#
+        );
+        let resp = post_name_claim(&challenges, spool.path(), &without);
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        let rec: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                spool
+                    .path()
+                    .join("names")
+                    .join(format!("{pubkey_hex}.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(rec.get("app").is_none());
+    }
+
+    #[test]
+    fn name_claim_invalid_app_is_rejected_and_spools_nothing() {
+        let key = test_keypair();
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+        for (app, error) in [
+            (r#"{"v":1,"path":"//evil.example"}"#, "invalid app path"),
+            (r#"{"v":2,"path":"/"}"#, "unsupported app version"),
+        ] {
+            let (challenges, spool) = no_state();
+            let challenge_hex = fresh_challenge(&challenges, spool.path());
+            let sig = key.sign(&name_claim_signing_message(
+                &challenge_hex,
+                "walkie-talkie",
+                3000,
+            ));
+            let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+            let body = format!(
+                r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge_hex}","name":"walkie-talkie","port":3000,"app":{app}}}"#
+            );
+            let resp = post_name_claim(&challenges, spool.path(), &body);
+            assert_eq!(resp.status, 400, "{error}");
+            let json: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+            assert_eq!(json["error"], error);
+            assert!(
+                !spool
+                    .path()
+                    .join("names")
+                    .join(format!("{pubkey_hex}.json"))
+                    .exists()
+            );
+        }
     }
 
     #[test]

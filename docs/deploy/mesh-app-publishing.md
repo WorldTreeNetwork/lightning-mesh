@@ -86,8 +86,15 @@ Note the printed name for a `--ip` publish: it is scoped to
 give out. Add TXT metadata with repeatable `--txt`:
 
 ```bash
-mjolnir-meshd publish keyed --port 3000 --txt path=/app --txt proto=http
+mjolnir-meshd publish keyed --port 3000 --txt proto=http --app --app-path /app
 ```
+
+`--app` sets TXT `app=v1`. `--app-path` sets `path` and is rejected unless
+`--app` is also set. Omit `--app-path` (or pass `/`) and the directory lists
+`app=v1` with no `path` key. Without `--app`, TXT stays opaque:
+`--txt path=print` still publishes and is not a mini-app. `--txt app=v1` is
+the same marker; anything other than the bytes `v1`, or a `path` that fails
+the shared rules, is `400` and does not change the service record.
 
 `--txt proto=http` (or `https`) is what makes hello.mesh render the entry as
 a clickable link: the CLI stores the record's protocol as `_tcp`, and the
@@ -173,16 +180,22 @@ names as convenient, not as proof of identity.
      "name": "keyed",
      "port": 3000,
      "ip": "10.42.7.42",
-     "scheme": "https"
+     "scheme": "https",
+     "app": { "v": 1, "path": "/entry" }
    }
    ```
 
-   `ip` and `scheme` are optional and **not** covered by the signature
-   (self-reported, node-vouched only). Omit `ip` and meshd falls back to your
+   `ip`, `scheme`, and `app` are optional and **not** covered by the signature
+   (self-reported, node-vouched only). The preimage stays
+   `mjolnir-name-claim:v1\n<challenge>\n<name>\n<port>`, so the same signature
+   verifies with or without `app`. Omit `ip` and meshd falls back to your
    request's source address. Set `scheme` to `http` or `https` so hello.mesh
    lists the name as a clickable link; without it the name lists as a bare
-   address. The challenge is single-use; get a fresh one per claim and per
-   renewal.
+   address. `app` is the mini-app marker: `{"v":1}` (no `path`) means `/` and
+   projects as TXT `app=v1` with no `path` key. Omit `app` for a plain service.
+   A renewal without `app` clears TXT `app` and `path`. An invalid marker is
+   `400` and nothing is spooled, so the existing lease is unchanged. The
+   challenge is single-use; get a fresh one per claim and per renewal.
 4. **Renewal is on you**: re-run the ceremony (fresh challenge, fresh
    signature) well inside the 90s fade window. The `walkie-talkie` app's
    republish loop (`src/lib/server/mesh.ts` in that app) is a working
@@ -237,10 +250,13 @@ is the only action required for both DNS resolution and UI discoverability.
 A mini-app is a published service that hello.mesh can show as an app card.
 The contract:
 
-- **Marker.** Add `app=v1` to the service's TXT record, and optionally
-  `path=/entry` for the entry path. Works with today's publish, no schema
-  change: `mjolnir-meshd publish keyed --port 3000 --txt proto=http --txt app=v1 --txt path=/app`.
-  (A `--app` convenience flag is planned, `ncy.2`.)
+- **Marker.** TXT `app=v1`, and `path` only when it is not `/`. Operator:
+  `mjolnir-meshd publish keyed --port 3000 --txt proto=http --app --app-path /app`.
+  `--app-path` requires `--app`. Without `app`, `path` is ordinary TXT
+  (`--txt path=print` still publishes). A key-owned claim carries the same
+  marker outside the signed preimage: `"app":{"v":1,"path":"/app"}`.
+  `{"app":{"v":1}}` means path `/`. Invalid markers are rejected before
+  publish (`400`). Consumers still re-validate.
 - **Manifest.** The app serves `/.well-known/mesh-app.json`:
 
   ```json
@@ -268,7 +284,7 @@ The contract:
   Identity over the bridge is a separate accepted design, not built:
   [identity-assertion.md, "Planned: embedded transport"](../network-coordination/identity-assertion.md#8-planned-embedded-transport-not-built).
 
-What you can do today: publish with `--txt app=v1` and serve a valid
+What you can do today: publish with `--app` (or `--txt app=v1`) and serve a valid
 manifest. Nothing displays it yet, but both are already valid under the
 contract. To sign visitors in now, use the full-page `/assert` redirect.
 

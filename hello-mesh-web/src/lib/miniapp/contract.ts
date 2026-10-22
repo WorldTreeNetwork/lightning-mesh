@@ -61,18 +61,56 @@ function recordOrigin(svc: DirectoryService): string | undefined {
 	}
 }
 
+const APP_PATH_SCHEME = /(?:^|\/)[a-z][a-z\d+.-]*:/i;
+const APP_PATH_CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** Publish-time path rule. Same predicate `appPath` uses. No length ceiling. */
+function appPathAllowed(path: string): boolean {
+	return (
+		path.startsWith('/') &&
+		!path.includes('//') &&
+		!path.includes('\\') &&
+		!APP_PATH_CONTROL.test(path) &&
+		!APP_PATH_SCHEME.test(path)
+	);
+}
+
 export function appPath(svc: DirectoryService): string | undefined {
 	const path = svc.txt?.path ?? '/';
-	if (
-		!path.startsWith('/') ||
-		path.includes('//') ||
-		path.includes('\\') ||
-		/[\u0000-\u001f\u007f]/.test(path) ||
-		/(?:^|\/)[a-z][a-z\d+.-]*:/i.test(path)
-	) {
-		return undefined;
+	return appPathAllowed(path) ? path : undefined;
+}
+
+export type AppMarker = { v: 1; path: string };
+export type AppMarkerFailure = { error: 'unsupported app version' | 'invalid app path' };
+
+/** Name-claim `app` object. Omitted `path` is `/`. Version is checked first. */
+export function validateAppMarker(marker: {
+	v?: unknown;
+	path?: unknown;
+}): AppMarker | AppMarkerFailure {
+	if (marker.v !== 1) return { error: 'unsupported app version' };
+	if (marker.path !== undefined && typeof marker.path !== 'string') {
+		return { error: 'invalid app path' };
 	}
-	return path;
+	const path = typeof marker.path === 'string' ? marker.path : '/';
+	if (!appPathAllowed(path)) return { error: 'invalid app path' };
+	return { v: 1, path };
+}
+
+/**
+ * Control-API TXT. Marker present iff `app` is present. Without it, `path`
+ * stays opaque (`{ marker: null }`, not an error). `app` must be byte-exact `v1`.
+ */
+export function validatePublishTxt(
+	txt: Record<string, string>
+): { marker: AppMarker | null } | AppMarkerFailure {
+	if (!Object.prototype.hasOwnProperty.call(txt, 'app')) return { marker: null };
+	if (txt.app !== 'v1') return { error: 'unsupported app version' };
+	const marker = Object.prototype.hasOwnProperty.call(txt, 'path')
+		? validateAppMarker({ v: 1, path: txt.path })
+		: validateAppMarker({ v: 1 });
+	if ('error' in marker) return marker;
+	return { marker };
 }
 
 export function entryUrl(svc: DirectoryService): string | undefined {

@@ -34,6 +34,7 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::app_marker::AppMarker;
 use crate::crdt::hlc::HLC;
 use crate::crdt::merge::MergeResult;
 
@@ -82,6 +83,13 @@ pub struct LeasedName {
     /// HLC of the most recent renewal. The lease expires at
     /// `wall_clock + `[`LEASE_TTL_MS`]; a newer value (same owner) extends it.
     pub renewed_at: HLC,
+    /// Mini-app marker (`app=v1` plus an entry path). Absent means a plain
+    /// service; a renewal that omits it clears a previous marker. Unsigned,
+    /// like `scheme`. `#[serde(default)]` so older JSON records parse.
+    /// Postcard is not self-describing — same whole-fleet caveat as `scheme`:
+    /// on-disk load falls back to an empty book if an older encoding fails.
+    #[serde(default)]
+    pub app: Option<AppMarker>,
 }
 
 /// Mesh-wide leased-name directory: flat name → current owner's lease.
@@ -218,6 +226,7 @@ mod tests {
             scheme: None,
             first_claimed_at: hlc(first_ms),
             renewed_at: hlc(renewed_ms),
+            app: None,
         }
     }
 
@@ -226,6 +235,34 @@ mod tests {
         let e = entry("aa", 1_000, 1_000);
         let bytes = postcard::to_allocvec(&e).unwrap();
         assert_eq!(postcard::from_bytes::<LeasedName>(&bytes).unwrap(), e);
+    }
+
+    #[test]
+    fn json_without_app_parses_and_omitted_path_is_root() {
+        let raw = r#"{"owner_pubkey":"aa","sig":"bb","challenge":"cc","ip":"10.42.5.23","port":9,"first_claimed_at":{"wall_clock":1,"counter":0,"node_id":"n"},"renewed_at":{"wall_clock":1,"counter":0,"node_id":"n"}}"#;
+        let parsed: LeasedName = serde_json::from_str(raw).unwrap();
+        assert!(parsed.app.is_none());
+        assert!(parsed.scheme.is_none());
+
+        let with_app = r#"{"owner_pubkey":"aa","sig":"bb","challenge":"cc","ip":"10.42.5.23","port":9,"scheme":"https","app":{"v":1},"first_claimed_at":{"wall_clock":1,"counter":0,"node_id":"n"},"renewed_at":{"wall_clock":2,"counter":0,"node_id":"n"}}"#;
+        let parsed: LeasedName = serde_json::from_str(with_app).unwrap();
+        assert_eq!(parsed.app.unwrap().path, "/");
+    }
+
+    #[test]
+    fn same_owner_renewal_without_app_clears_marker() {
+        let mut book = LeasedNameBook::new();
+        let mut marked = entry("aa", 1_000, 1_000);
+        marked.app = Some(AppMarker {
+            v: 1,
+            path: "/entry".to_string(),
+        });
+        apply_leased_name(&mut book, "wt", marked);
+        assert_eq!(book["wt"].app.as_ref().unwrap().path, "/entry");
+
+        apply_leased_name(&mut book, "wt", entry("aa", 1_000, 2_000));
+        assert!(book["wt"].app.is_none());
+        assert_eq!(book["wt"].renewed_at.wall_clock, 2_000);
     }
 
     #[test]

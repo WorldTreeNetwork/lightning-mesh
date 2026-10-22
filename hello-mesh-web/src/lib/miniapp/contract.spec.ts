@@ -13,7 +13,9 @@ import {
 	parseAppsResponse,
 	parseManifest,
 	safeOpenUrl,
-	sendBridgeMessage
+	sendBridgeMessage,
+	validateAppMarker,
+	validatePublishTxt
 } from './contract';
 
 function service(overrides: Partial<DirectoryService> = {}): DirectoryService {
@@ -55,6 +57,46 @@ describe('App marker on service records', () => {
 	it('Non-web protocol is not an app', () => {
 		expect(isMiniApp(service({ protocol: 'ipp' }))).toBe(false);
 	});
+});
+
+describe('App marker publish rules', () => {
+	type AppMarkerFixture = {
+		name: string;
+		marker?: { v: number; path?: string };
+		txt?: Record<string, string>;
+		expect: { v: 1; path: string } | null;
+		error?: string;
+		opaque?: boolean;
+	};
+	const files = import.meta.glob('./fixtures/app-marker/*.json', {
+		eager: true,
+		import: 'default'
+	}) as Record<string, AppMarkerFixture[]>;
+
+	for (const [path, cases] of Object.entries(files)) {
+		for (const fixture of cases) {
+			it(`${path.split('/').at(-1)} ${fixture.name}`, () => {
+				if (fixture.txt) {
+					const result = validatePublishTxt(fixture.txt);
+					if (fixture.opaque) {
+						expect(result).toEqual({ marker: null });
+					} else if (fixture.error) {
+						expect(result).toEqual({ error: fixture.error });
+					} else {
+						expect(result).toEqual({ marker: fixture.expect });
+					}
+					return;
+				}
+				expect(fixture.marker).toBeTruthy();
+				const result = validateAppMarker(fixture.marker!);
+				if (fixture.expect === null) {
+					expect(result).toEqual({ error: fixture.error });
+				} else {
+					expect(result).toEqual(fixture.expect);
+				}
+			});
+		}
+	}
 });
 
 describe('App manifest', () => {
