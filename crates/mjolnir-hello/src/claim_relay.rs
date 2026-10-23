@@ -143,6 +143,63 @@ pub fn effective_wait(wait: Duration) -> Duration {
     wait.min(MAX_RELAY_WAIT)
 }
 
+/// meshd's localhost control API. Same fixed port as `CONTROL_API_PORT`.
+const MESHD_CONTROL: &str = "127.0.0.1:5380";
+
+/// Validate `body`, then hand those same bytes to meshd. The card secret
+/// never has a field here. A meshd that is down or has no claim service
+/// comes back as 502 / the daemon's own JSON, not as a successful claim.
+pub fn forward_to_meshd(body: &[u8]) -> RelayResponse {
+    if let Err(reject) = parse_body(body) {
+        return match reject {
+            Reject::SecretField(name) => error(400, &format!("refusing field {name}")),
+            Reject::RawSecret => error(400, "refusing a raw card secret"),
+            Reject::Malformed(msg) => error(400, &msg),
+        };
+    }
+    match post_control(body) {
+        Ok((status, resp)) => json(status, resp),
+        Err(msg) => error(502, &msg),
+    }
+}
+
+fn post_control(body: &[u8]) -> Result<(u16, Vec<u8>), String> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let mut stream = TcpStream::connect(MESHD_CONTROL)
+        .map_err(|e| format!("meshd control API unreachable at {MESHD_CONTROL} ({e})"))?;
+    stream
+        .set_read_timeout(Some(MAX_RELAY_WAIT))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(MAX_RELAY_WAIT))
+        .map_err(|e| e.to_string())?;
+    let head = format!(
+        "POST /v0/owner-claim HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .and_then(|_| stream.write_all(body))
+        .and_then(|_| stream.flush())
+        .map_err(|e| e.to_string())?;
+    let mut resp = Vec::new();
+    stream.read_to_end(&mut resp).map_err(|e| e.to_string())?;
+    let split = resp
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "meshd response had no header".to_string())?;
+    let head = String::from_utf8_lossy(&resp[..split]);
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| "meshd response had no status".to_string())?;
+    Ok((status, resp[split + 4..].to_vec()))
+}
+
 fn json(status: u16, body: Vec<u8>) -> RelayResponse {
     RelayResponse {
         status,
@@ -242,6 +299,13 @@ mod tests {
     }
 
     #[test]
+    fn forward_rejects_a_secret_field_without_calling_meshd() {
+        let resp = forward_to_meshd(br#"{"op":"request","owner":"aa","secret":"no"}"#);
+        assert_eq!(resp.status, 400);
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(body.contains("secret"));
+    }
+
     fn claim_relay_rejects_the_raw_secret_and_k() {
         let bodies = [
             prove_body(r#","secret":"abcdefghijk23456""#),

@@ -32,6 +32,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net",
 # Admin signs membership ops. It does not mint or wrap a guild PTK.
 identikey-log = { git = "https://github.com/identikey/identikey-protocol.git", rev = "093ceb13148d5fb5267ad309ecdfea15f2637d9e" }
 dcbor = "=0.25.2"
+mjolnir-mesh = { path = "../../crates/mjolnir-mesh" }
+ed25519-dalek = { version = "=2.2.0", features = ["rand_core"] }
+rand = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

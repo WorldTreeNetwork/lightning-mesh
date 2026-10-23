@@ -60,3 +60,10 @@ a guild secret, and they do not call Apply on the network name.
 
 The frontend talks to Rust through `invoke('scan_link_local')`,
 `invoke('apply_network_name')`, and `invoke('sign_guild_op')`.
+
+**Become the admin** (`/become`) is the first-owner claim client. The
+card secret and the owner seed stay in the window. The node is asked
+at `POST http://<lan>/api/owner-claim`. A later admin's biscuit is not
+an SSH key, and the grant button stays closed until a claim succeeds.
+meshd does not host that service yet: the page reports
+`owner_claim_not_hosted` instead of pretending the press worked.

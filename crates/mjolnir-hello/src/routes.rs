@@ -220,6 +220,17 @@ struct NameClaimRecord<'a> {
 /// byte, so the name is required to be pre-normalized (see [`submit_name_claim`])
 /// rather than normalized here, keeping the browser from having to reproduce
 /// meshd's normalization to know what it signed.
+fn owner_claim(body: &[u8]) -> RouteResponse {
+    let relayed = crate::claim_relay::forward_to_meshd(body);
+    RouteResponse {
+        status: relayed.status,
+        content_type: relayed.content_type,
+        body: relayed.body,
+        cors: true,
+        frame_ancestors_self: false,
+    }
+}
+
 fn name_claim_signing_message(challenge_hex: &str, name: &str, port: u16) -> Vec<u8> {
     format!("{NAME_CLAIM_DOMAIN}\n{challenge_hex}\n{name}\n{port}").into_bytes()
 }
@@ -980,6 +991,10 @@ fn route_with_internet_state(
         ("POST", "/api/coordinate-stamp") => {
             submit_coordinate_stamp(body, challenges, spool_dir, directory_cache, directory_file)
         }
+
+        // Owner claim. hello relays. It does not see the card secret.
+        // Lightning Admin is the client (mjolnir-mesh-bf7.1).
+        ("POST", "/api/owner-claim") => owner_claim(body),
 
         ("GET", _) => {
             let mut page = serve_static(path, static_root);

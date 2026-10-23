@@ -6183,7 +6183,11 @@ async fn control_api_route<T: GossipTransport>(
             self_id,
             backhaul_ip,
         ),
-        "/v0/publish" | "/v0/unpublish" | "/v0/directory" => {
+        "/v0/owner-claim" if method == "POST" => (
+            501,
+            control_api_error_body("owner_claim_not_hosted"),
+        ),
+        "/v0/publish" | "/v0/unpublish" | "/v0/directory" | "/v0/owner-claim" => {
             (405, control_api_error_body("method_not_allowed"))
         }
         _ => (404, control_api_error_body("not_found")),

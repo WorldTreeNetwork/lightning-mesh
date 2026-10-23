@@ -167,6 +167,7 @@
 			<span class="mark" aria-hidden="true"></span>
 			<div>
 				<div class="title">Lightning Admin</div>
+				<a class="become" href="/become">Become the admin</a>
 				<div class="sub">Machines on the links this computer can hear, with the name and address each one announced.</div>
 			</div>
 		</div>
@@ -571,6 +572,14 @@
 		padding: 0.7rem 1rem;
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
+	}
+
+	.become {
+		display: inline-block;
+		margin-top: 0.15rem;
+		color: var(--accent);
+		font-size: 0.8rem;
+		text-decoration: none;
 	}
 
 	.title {
