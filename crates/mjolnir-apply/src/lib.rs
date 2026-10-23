@@ -3,6 +3,7 @@
 //! This crate owns the journal and recovery state machine. It deliberately does
 //! not contain an OpenWrt service adapter, launcher, init script, or radio code.
 
+mod client_class;
 mod engine;
 mod model;
 mod node_profile;
@@ -10,6 +11,11 @@ mod openwrt;
 mod storage;
 mod uplink;
 
+pub use client_class::{
+    ClassPlan, ClassRefusal, ClassRequest, ClientClass, Destination, FlowInput, OpenAttempt,
+    RadioEffect, Reach, ReachDecision, Schedule, SchedulesClients, build_class_plan,
+    submit_class_plan,
+};
 pub use engine::{
     ApplyAdapter, Engine, EngineError, FaultInjector, FaultPoint, NoFaults, Runtime, SystemRuntime,
 };

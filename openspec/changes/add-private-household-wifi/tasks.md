@@ -8,8 +8,8 @@ disk and are not authority.
 
 - [ ] Fresh advise after preparation
 - [x] Superseded the guest-SSID contract (2026-10-22). No second SSID, no guest prefix, no guest isolation gate, no rate cap. Classes are published service, member, and unidentified.
-- [ ] Class plan builder. One SSID, radio unchanged until a later owner-committed plan. Member flows scheduled ahead of unidentified flows. No rate cap. Published `.mesh` names reachable. Management plane closed. No `OpenWrtAdapter`.
-- [ ] Tests for radio non-mutation, association is not membership, a member scheduled ahead without a cap, an unidentified client reaching a published name and not the management plane, and refusal to call `OpenWrtAdapter`.
+- [x] Class plan builder. One SSID, radio unchanged until a later owner-committed plan. Member flows scheduled ahead of unidentified flows. No rate cap. Published `.mesh` names reachable. Management plane closed. No `OpenWrtAdapter`. `crates/mjolnir-apply/src/client_class.rs`.
+- [x] Tests for radio non-mutation, association is not membership, a member scheduled ahead without a cap, an unidentified client reaching a published name and not the management plane, and refusal to call `OpenWrtAdapter`.
 
 Not owed here:
 
