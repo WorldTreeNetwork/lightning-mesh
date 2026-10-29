@@ -444,7 +444,7 @@
 			{#if listedResources.length === 0 && !discovery.loading && !discovery.error}
 				<div class="empty-main">
 					{#if lightningOnly}
-						No Lightning node answered on this view. A node is recognized when its LAN gateway answers /api/node.
+						No Lightning node answered on this view. A node is recognized when one of its addresses answers /api/node.
 					{:else if view === 'resources'}
 						Nothing answered yet. The scan reads IPv4 ARP and IPv6 neighbors, marks routers, and asks Avahi for hostnames. Failed ARP entries stay hidden until Show all.
 					{:else}

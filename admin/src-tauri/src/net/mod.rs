@@ -47,7 +47,7 @@ pub async fn scan_link_local() -> Result<ScanResult, String> {
     let names = mdns::browse().await;
     let mut scan = merge_scan(interfaces, from_neigh, from_probe, probe_error, true);
     mdns::apply_names(&mut scan.neighbors, &names);
-    let candidates = hello::lan_gateway_candidates(&scan.neighbors);
+    let candidates = hello::probe_candidates(&scan.neighbors);
     let nodes = hello::probe_nodes(&candidates);
     hello::apply_nodes(&mut scan.neighbors, &nodes);
     Ok(scan)
