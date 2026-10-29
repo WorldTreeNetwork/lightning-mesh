@@ -59,6 +59,10 @@ not written next to the op. Signed ops append as hex lines to
 `~/.config/lightning-admin/guild-ops.log`. These ops do not mint or wrap
 a guild secret, and they do not call Apply on the network name.
 
+To sign an Admin guild and a named workplace guild, then assign a node,
+use `lightning-guild` (`.grok/skills/guild-ceremony`). The op order is
+`scripts/guild/ceremony.rhai`.
+
 The frontend talks to Rust through `invoke('scan_link_local')`,
 `invoke('apply_network_name')`, and `invoke('sign_guild_op')`.
 

@@ -35,6 +35,7 @@ dcbor = "=0.25.2"
 mjolnir-mesh = { path = "../../crates/mjolnir-mesh" }
 ed25519-dalek = { version = "=2.2.0", features = ["rand_core"] }
 rand = "0.8"
+rhai = "1.22"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -12,11 +12,13 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dcbor::prelude::*;
-use identikey_log::{Author, Hlc, Op, codec, sign};
+use identikey_log::{codec, sign, Author, Hlc, Op};
 use serde::{Deserialize, Serialize};
 
 pub const KIND_JOIN: &str = "keyspace.join";
@@ -85,7 +87,24 @@ pub fn default_log_path() -> Result<PathBuf, String> {
 }
 
 /// Sign one guild verb and append the signed op to `log_path`.
-pub fn sign_guild(input: &GuildSignInput, now_ms: u64, log_path: &Path) -> Result<GuildReceipt, String> {
+///
+/// The HLC counter is 0. A ceremony that signs several ops in the same
+/// millisecond uses [`sign_guild_at`] with distinct counters.
+pub fn sign_guild(
+    input: &GuildSignInput,
+    now_ms: u64,
+    log_path: &Path,
+) -> Result<GuildReceipt, String> {
+    sign_guild_at(input, now_ms, 0, log_path)
+}
+
+/// Sign one guild verb with an explicit HLC counter.
+pub fn sign_guild_at(
+    input: &GuildSignInput,
+    now_ms: u64,
+    counter: u64,
+    log_path: &Path,
+) -> Result<GuildReceipt, String> {
     let verb = GuildVerb::parse(&input.verb)?;
     let seed = parse_hex32(&input.actor_seed_hex, "actor seed")?;
     let author = Author::from_seed(&seed);
@@ -116,7 +135,7 @@ pub fn sign_guild(input: &GuildSignInput, now_ms: u64, log_path: &Path) -> Resul
         }
     };
 
-    let mut op = Op::new(verb.kind(), actor, Hlc::new(now_ms, 0)).with_body(body);
+    let mut op = Op::new(verb.kind(), actor, Hlc::new(now_ms, counter)).with_body(body);
     if let Some(fp) = target {
         op = op.with_target_fp(fp);
     }
@@ -153,7 +172,10 @@ pub fn sign_guild_now(input: &GuildSignInput) -> Result<GuildReceipt, String> {
     sign_guild(input, now_ms, &default_log_path()?)
 }
 
-fn encode_join(actor: [u8; 32], guild_id: Option<[u8; 32]>) -> Result<(Vec<u8>, Option<[u8; 32]>), String> {
+fn encode_join(
+    actor: [u8; 32],
+    guild_id: Option<[u8; 32]>,
+) -> Result<(Vec<u8>, Option<[u8; 32]>), String> {
     let admin = guild_id.is_none();
     let mut body = Map::new();
     body.insert("roster", vec![roster_entry(actor, admin)]);
@@ -209,11 +231,11 @@ fn append_log(path: &Path, signed: &[u8]) -> Result<(), String> {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
     }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut file = opts.open(path).map_err(|e| e.to_string())?;
     writeln!(file, "{}", hex_bytes(signed)).map_err(|e| e.to_string())
 }
 
@@ -303,7 +325,13 @@ mod tests {
             let raw = decode_hex(line);
             let (signed, hash) = sign::decode_and_verify(&raw).unwrap();
             assert!(signed.op.kind.starts_with("keyspace."));
-            assert!(!signed.op.body.as_deref().unwrap().windows(5).any(|w| w == b"guild"));
+            assert!(!signed
+                .op
+                .body
+                .as_deref()
+                .unwrap()
+                .windows(5)
+                .any(|w| w == b"guild"));
             assert_eq!(hex32(&hash).len(), 64);
         }
         let _ = fs::remove_dir_all(&dir);

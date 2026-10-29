@@ -138,6 +138,10 @@ The window discovers neighbors, sets the fleet network name through
 `keyspace.assign-node`, `keyspace.nest`). No rename. Guild signing does not
 write the client SSID. See `admin/README.md`.
 
+An Admin house guild plus a named workplace guild (assign a node, nest
+its access-node guild) is `.grok/skills/guild-ceremony`. Run
+`lightning-guild`; the order is `admin/scripts/guild/ceremony.rhai`.
+
 ## Lightning Admin Windows build (morphist-win11)
 
 Recipe: [`admin/scripts/windows-build/README.md`](admin/scripts/windows-build/README.md).

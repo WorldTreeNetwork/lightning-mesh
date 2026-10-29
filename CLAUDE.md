@@ -62,6 +62,8 @@ deploy/openwrt/build.sh          # cross-build static aarch64 mjolnir-meshd for 
 # Lightning Admin is the native desktop editor (not hello.mesh):
 #   cd admin && bun install && bun run tauri dev
 # Discovery, fleet network name, and guild verbs (keyspace.* ops).
+# Admin + workplace guild ceremony: .grok/skills/guild-ceremony
+#   (lightning-guild, order in admin/scripts/guild/ceremony.rhai).
 # Windows MSI/NSIS: boot morphist-win11, then
 #   admin/scripts/windows-build/release.sh
 # (see AGENTS.md + admin/scripts/windows-build/README.md)
