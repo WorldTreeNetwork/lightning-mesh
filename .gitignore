@@ -95,6 +95,11 @@ deploy/mikrotik/secrets/
 # commit; only the checked-in .example template survives this ignore.
 deploy/openwrt/fleet-secrets/*
 !deploy/openwrt/fleet-secrets/*.example
+
+# Other installations (node ids for a household this repo does not publish).
+# The current installation stays deploy/openwrt/fleet-nodes.conf.
+deploy/openwrt/fleet.d/*
+!deploy/openwrt/fleet.d/*.example
 .playwright-mcp
 
 # Intention scratch (conductor isolate, spawn stage, harness session)

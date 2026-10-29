@@ -17,12 +17,19 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="$DIR/fleet-nodes.conf"
-[ -f "$CONF" ] || { echo "inventory missing: $CONF"; exit 1; }
+# shellcheck source=fleet-file.sh
+source "$DIR/fleet-file.sh"
+CONF="$(fleet_conf "$DIR")"
 
 FLEET=0 FAIL=0
 while IFS='|' read -r -u3 name addr node_id model notes; do
-	case "$name" in ''|\#*) continue ;; esac
+	case "$(fleet_kind "$name" "$addr" "$node_id")" in
+		skip) continue ;;
+		pending)
+			echo "===== $name (pending — no node id, not validated)"
+			continue
+			;;
+	esac
 	FLEET=$((FLEET + 1))
 	echo "===== $name (expect $addr)"
 	out=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$addr" '

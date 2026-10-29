@@ -240,7 +240,9 @@ fn spawn_error(err: std::io::Error) -> String {
 /// Stage `CLIENT_SSID` and run the wireless-only fleet apply
 /// (`apply-network-name.sh` → `mjolnir-apply` `RUN_WIRELESS=1`).
 /// Does not stage `mjolnir-meshd`. No live UCI SSH mutation.
-/// Hosts: overlay `fleet-nodes.conf`, or `LIGHTNING_FLEET_SSH` (WAN `root@ip` after WPS).
+/// Hosts: overlay addresses from the selected installation
+/// (`fleet-nodes.conf`, or `LIGHTNING_FLEET` / `LIGHTNING_FLEET_FILE`),
+/// or `LIGHTNING_FLEET_SSH` (WAN `root@ip` after WPS).
 #[tauri::command]
 pub async fn apply_network_name(name: String) -> Result<ApplyReport, String> {
     ssid_ok(&name)?;

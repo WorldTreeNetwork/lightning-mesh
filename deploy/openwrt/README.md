@@ -163,9 +163,14 @@ stock `babeld` service so the two don't both run. Note babeld 1.13 exits on
 
 ## Fleet rollout
 
-The fleet is inventoried in `fleet-nodes.conf` (name → derived `10.254.x` →
-node id → model; leaf-first order, wired jump node last). Roll an update to
-every reachable node, one at a time, with:
+The current installation is `fleet-nodes.conf` (name → derived `10.254.x` →
+node id → model; leaf-first order, wired jump node last). Another
+installation is a separate file: `LIGHTNING_FLEET_FILE=/path/to.conf`, or
+`LIGHTNING_FLEET=<name>` for gitignored `fleet.d/<name>.conf` (template
+`fleet.d/installation.conf.example`). `deploy/openwrt/fleet-file.sh` resolves that.
+Lines written `name|-|-|model|notes` are hardware in the installation that
+has no node id yet; rollout tools skip them. Roll an update to every
+reachable member, one at a time, with:
 
 ```sh
 deploy/openwrt/update-fleet.sh                       # binary/deps everywhere
@@ -199,7 +204,8 @@ in [`vendor-firmware/`](vendor-firmware/) (Git LFS — `git lfs pull` after
 clone). Flash the matching board bin from the stock web UI, then official
 OpenWrt sysupgrade, then provision over ethernet (`install-node.sh
 root@192.168.1.1`, then `--wireless`), get its id (`mjolnir-meshd id`), and
-add its line to `fleet-nodes.conf`. Design rationale:
+add its line to the installation file (`fleet-nodes.conf` for the current
+one). Design rationale:
 `docs/deploy/node-operations.md`. Wrong intermediate (indoor vs Outdoor vs
 Wall) bricks the box.
 

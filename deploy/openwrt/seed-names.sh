@@ -19,12 +19,14 @@
 #   restart of the daemon only (not mjolnir-apply); it briefly drops the CRDT
 #   plane on that one node while babel keeps routing — cheap and in-band safe.
 # - The inventory `name` column is the source of truth here; editing a node's
-#   name means editing fleet-nodes.conf, then re-running this.
+#   name means editing the selected installation file, then re-running this.
+#   Default file is fleet-nodes.conf (see fleet-file.sh).
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="$DIR/fleet-nodes.conf"
-[ -f "$CONF" ] || { echo "inventory missing: $CONF"; exit 1; }
+# shellcheck source=fleet-file.sh
+source "$DIR/fleet-file.sh"
+CONF="$(fleet_conf "$DIR")"
 
 ONLY=("$@")
 
@@ -34,11 +36,19 @@ want() {
 	return 1
 }
 
-SEEDED=() SKIPPED=()
+SEEDED=() SKIPPED=() PENDING=()
 # Read the inventory on FD 3 — the ssh calls inside the loop would otherwise
 # eat the remaining lines from stdin and end the walk early.
 while IFS='|' read -r -u3 name addr node_id model notes; do
-	case "$name" in ''|\#*) continue ;; esac
+	case "$(fleet_kind "$name" "$addr" "$node_id")" in
+		skip) continue ;;
+		pending)
+			want "$name" || continue
+			echo ">> $name: recorded, no node id yet — not seeded"
+			PENDING+=("$name")
+			continue
+			;;
+	esac
 	want "$name" || continue
 
 	echo
@@ -64,3 +74,4 @@ done 3<"$CONF"
 echo
 echo "seeded:  ${SEEDED[*]:-(none)}"
 echo "skipped: ${SKIPPED[*]:-(none)}"
+echo "pending: ${PENDING[*]:-(none)}"

@@ -1,0 +1,6 @@
+# Another installation. Copy to fleet.d/<name>.conf (that copy is gitignored)
+# and select it with LIGHTNING_FLEET=<name>.
+# Same columns as fleet-nodes.conf. Leaf-first order. Wired jump node last.
+# A node with no id yet is `name|-|-|model|notes` and is not rolled out.
+#
+# name|backhaul_addr|node_id|model|notes

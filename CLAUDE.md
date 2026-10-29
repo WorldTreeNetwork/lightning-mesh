@@ -78,7 +78,9 @@ than `sudo cargo`. `admin/` is not a workspace member; its crate uses
 deploy/openwrt/build-hello.sh    # web build → embed → cross-build (ORDER MATTERS:
                                  # rust-embed bakes crates/mjolnir-hello/static/ into
                                  # the binary; stale static/ = stale UI shipped)
-deploy/openwrt/update-fleet.sh   # sequential health-gated rollout over fleet-nodes.conf
+deploy/openwrt/update-fleet.sh   # sequential health-gated rollout over the
+                                 # selected installation (fleet-file.sh;
+                                 # default fleet-nodes.conf)
                                  # (leaf-first, wired jump node last; halts on failure;
                                  # unchanged binaries are not restarted)
 ```

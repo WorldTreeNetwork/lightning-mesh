@@ -4,7 +4,7 @@
 # rollback — see deploy/openwrt/README.md) over the fleet-nodes.conf inventory.
 #
 # Usage:  deploy/openwrt/update-fleet.sh [install-node options] [node-name ...]
-#   deploy/openwrt/update-fleet.sh                          # binary/deps to every node
+#   deploy/openwrt/update-fleet.sh                          # binary/deps to every member
 #   deploy/openwrt/update-fleet.sh --wireless node.env      # + radio config everywhere
 #   deploy/openwrt/update-fleet.sh m3000 tr3000             # only these nodes
 #
@@ -16,16 +16,19 @@
 #   the fleet. The failed node has rolled itself back (or says FAILED with
 #   nothing changed); fix, then re-run — applies are idempotent, already-updated
 #   nodes are touched-nothing no-ops.
-# - Walks fleet-nodes.conf top to bottom: keep it leaf-first, wired jump node
-#   last (see the inventory header).
+# - Walks one installation file top to bottom (fleet-file.sh): default
+#   fleet-nodes.conf, or LIGHTNING_FLEET / LIGHTNING_FLEET_FILE. Leaf-first,
+#   wired jump node last. Lines with no node id are recorded hardware, not
+#   rollout targets.
 # - Reaching 10.254.x from the workstation needs the jump-host ssh config from
 #   the README ("Fleet rollout" section); unreachable nodes are skipped and
 #   reported, not fatal — power-cycled/absent nodes are normal.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="$DIR/fleet-nodes.conf"
-[ -f "$CONF" ] || { echo "inventory missing: $CONF"; exit 1; }
+# shellcheck source=fleet-file.sh
+source "$DIR/fleet-file.sh"
+CONF="$(fleet_conf "$DIR")"
 
 INSTALL_ARGS=()
 ONLY=()
@@ -44,11 +47,19 @@ want() {
 	return 1
 }
 
-UPDATED=() SKIPPED=()
+UPDATED=() SKIPPED=() PENDING=()
 # Read the inventory on FD 3 — the ssh/scp calls inside the loop would
 # otherwise eat the remaining lines from stdin and end the rollout early.
 while IFS='|' read -r -u3 name addr node_id model notes; do
-	case "$name" in ''|\#*) continue ;; esac
+	case "$(fleet_kind "$name" "$addr" "$node_id")" in
+		skip) continue ;;
+		pending)
+			want "$name" || continue
+			echo ">> $name: recorded, no node id yet — not in this rollout"
+			PENDING+=("$name")
+			continue
+			;;
+	esac
 	want "$name" || continue
 
 	echo
@@ -96,4 +107,5 @@ echo
 echo "===== fleet rollout summary ====="
 echo "updated:     ${UPDATED[*]:-none}"
 echo "unreachable: ${SKIPPED[*]:-none}"
+echo "pending:     ${PENDING[*]:-none}"
 [ "${#SKIPPED[@]}" -eq 0 ] || echo "(skipped nodes keep their old version — re-run '$0 ${SKIPPED[*]}' when they're back)"

@@ -10,14 +10,16 @@
 #   apply-network-name.sh --ssid 'Lightning Mesh' [root@host ...]
 #   LIGHTNING_FLEET_SSH='root@192.168.0.15 root@192.168.0.22' apply-network-name.sh --env FILE
 #
-# With no hosts, uses overlay addrs from fleet-nodes.conf (same order as
-# update-fleet.sh). Unreachable nodes are skipped; a halt stops the rest.
+# With no hosts, uses overlay addrs from the selected installation (same
+# order as update-fleet.sh; fleet-file.sh). Unreachable nodes are skipped;
+# a halt stops the rest. Lines with no node id are not hosts.
 # Zero successful applies is a failure (Admin must not report OK for a
 # no-op skip of the whole inventory).
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF="$DIR/fleet-nodes.conf"
+# shellcheck source=fleet-file.sh
+source "$DIR/fleet-file.sh"
 STAGE=/root/mjolnir-stage
 HEALTH_TIMEOUT=120
 SSID=""
@@ -40,10 +42,12 @@ if [ -n "${LIGHTNING_FLEET_SSH:-}" ] && [ "${#HOSTS[@]}" -eq 0 ]; then
 fi
 
 if [ "${#HOSTS[@]}" -eq 0 ]; then
-	[ -f "$CONF" ] || { echo "inventory missing: $CONF (or pass root@host / LIGHTNING_FLEET_SSH)" >&2; exit 1; }
-	while IFS='|' read -r name addr _rest; do
-		case "$name" in ''|\#*) continue ;; esac
-		HOSTS+=("root@$addr")
+	CONF="$(fleet_conf "$DIR")"
+	while IFS='|' read -r name addr node_id _rest; do
+		case "$(fleet_kind "$name" "$addr" "$node_id")" in
+			member) HOSTS+=("root@$addr") ;;
+			pending) echo ">> $name: recorded, no node id yet — not applied" >&2 ;;
+		esac
 	done <"$CONF"
 fi
 

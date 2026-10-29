@@ -13,7 +13,8 @@ scoped per interface. The **Network name** control sets the client AP SSID
 (the name phones join) on every reachable node: Apply stages `CLIENT_SSID`
 and runs `deploy/openwrt/apply-network-name.sh` (`mjolnir-apply`
 `RUN_WIRELESS=1`, **no** `mjolnir-meshd` binary). From the overlay, that
-uses `fleet-nodes.conf`. From the house WAN LAN after WPS:
+uses the selected installation (`fleet-nodes.conf`, or
+`LIGHTNING_FLEET` / `LIGHTNING_FLEET_FILE`). From the house WAN LAN after WPS:
 `LIGHTNING_FLEET_SSH='root@192.168.0.15 root@192.168.0.22'`. Empty name
 does not apply. All-skipped is a failure. `update-fleet.sh --wireless`
 still exists for full node rollouts (binary + radio), not this knob.
