@@ -4,6 +4,7 @@
 mod commands;
 pub mod guild;
 pub mod guild_ceremony;
+pub mod guild_view;
 pub mod net;
 
 use commands::claim::{claim_owner_key, claim_prove, claim_request};

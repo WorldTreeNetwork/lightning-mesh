@@ -1,19 +1,43 @@
 ---
 name: guild-ceremony
 description: >
-  Sign an Admin house guild and a named workplace guild, then assign a
-  Lightning node and nest its access-node guild. Use when the user asks for
-  an admin group, a workplace group, a guild, or to add a node to a guild.
-  Run lightning-guild. The order is admin/scripts/guild/ceremony.rhai.
+  Sign an Admin house guild and a named workplace guild, assign a node,
+  and read the local log back. Use when the user asks for an admin group,
+  a workplace group, a guild, its id, or to add a node. Run lightning-guild
+  list, show, assign, or ceremony. The order is admin/scripts/guild/ceremony.rhai.
 ---
 
 # Guild ceremony
 
-Signer: `admin/src-tauri/src/bin/lightning-guild.rs`.
+Signer and reader: `admin/src-tauri/src/bin/lightning-guild.rs`.
 Order: `admin/scripts/guild/ceremony.rhai`.
-Bodies: `admin/src-tauri/src/guild.rs` (`sign_guild_at`). Do not write a second signer.
+Bodies: `admin/src-tauri/src/guild.rs` (`sign_guild_at`).
+View: `admin/src-tauri/src/guild_view.rs` replays the log. Do not write a second signer or a second decoder.
 
 Product word is guild. Wire kinds are `keyspace.*`. A display name is not a protocol field. There is no rename.
+
+The human guild id is base58 of the 32-byte keyspace content hash. That id is not an XID. An XID is the hash of an inception signing key for an identikey document, and this ceremony does not create one.
+
+## Look
+
+```bash
+lightning-guild
+lightning-guild show "Strawberry Creek"
+lightning-guild show <base58-or-hex-prefix>
+lightning-guild --json show "Strawberry Creek"
+```
+
+`you admin` means the actor seed on this machine is `admin: true` on that guild's roster and every log line verified. The replica is the local log. These ops are not on the router.
+
+## Change
+
+```bash
+lightning-guild assign --guild "Strawberry Creek" --node-name <name> --node-id <64-hex>
+lightning-guild ceremony --workplace NAME --node-name NAME --node-id HEX
+lightning-guild ceremony --workplace-id HEX --node-name NAME --node-id HEX
+```
+
+`assign` resolves the guild by name, base58 id, or hex prefix, then appends `assign-node` and `nest`. Genesis is still `ceremony` with `--workplace`, and only while the log is empty.
 
 ## Steps
 

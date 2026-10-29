@@ -139,8 +139,9 @@ The window discovers neighbors, sets the fleet network name through
 write the client SSID. See `admin/README.md`.
 
 An Admin house guild plus a named workplace guild (assign a node, nest
-its access-node guild) is `.grok/skills/guild-ceremony`. Run
-`lightning-guild`; the order is `admin/scripts/guild/ceremony.rhai`.
+its access-node guild) is `.grok/skills/guild-ceremony`. `lightning-guild`
+lists and shows the local log; the sign order is
+`admin/scripts/guild/ceremony.rhai`.
 
 ## Lightning Admin Windows build (morphist-win11)
 
