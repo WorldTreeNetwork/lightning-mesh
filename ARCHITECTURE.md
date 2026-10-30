@@ -38,9 +38,9 @@ Lightning Admin also hosts owner-drawn `canvas-*` overlays whose wells
 show allowlisted host stdout. The first source is macOS `/sbin/ifconfig`
 with no extra args, a 5 second timeout, and a 65536 byte capture cap.
 `scan_link_local` remains the neighbor list; the
-well is a raw transcript, not a second parser. One canvas now; source
-swap (`add-view-swap`) and a crystal-grid of many overlays
-(`add-crystal-grid`) are later. Living spec:
+well is a raw transcript, not a second parser. One canvas switches
+`ifconfig` and `netstat -ib`. A crystal-grid of many overlays
+(`add-crystal-grid`) is later. Living spec:
 `openspec/specs/admin-stdout-views/spec.md`.
 
 `/etc/config/mjolnir` (`radio`, `wan_admin`) is the live operator store.
