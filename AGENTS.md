@@ -138,6 +138,8 @@ The window discovers neighbors, sets the fleet network name through
 `keyspace.assign-node`, `keyspace.nest`). No rename. Guild signing does not
 write the client SSID. See `admin/README.md`.
 
+UI controls come from shadcn-svelte (`admin/src/lib/components/ui`). If there is no component for it, use Tailwind. Do not hand-roll chips, menus, or form controls. Tailwind is loaded without its reset so the named themes stay in charge.
+
 An Admin house guild plus a named workplace guild (assign a node, nest
 its access-node guild) is `.grok/skills/guild-ceremony`. `lightning-guild`
 lists and shows the local log; the sign order is

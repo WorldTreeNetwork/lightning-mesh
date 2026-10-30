@@ -1,4 +1,5 @@
 <script lang="ts">
+	import RoleBadge from '../RoleBadge.svelte';
 	import type { GuildRecord } from './types';
 
 	let {
@@ -13,15 +14,13 @@
 		onOpenOuter: () => void;
 	} = $props();
 
-	const rosterSummary = $derived(
-		guild.roster.length === 0 ? 'none' : guild.roster.length === 1 && guild.you === 'admin' ? 'you admin' : `${guild.roster.length}`
-	);
 </script>
 
 <section class="detail">
 	<div class="head">
 		<h3>{guild.name}</h3>
-		<span class="meta">{guild.workplace ? 'workplace' : guild.profile} · you {guild.you}</span>
+		<span class="meta">{guild.workplace ? 'workplace' : guild.profile}</span>
+		<RoleBadge role={guild.you} />
 	</div>
 	{#if outerName}
 		<button type="button" class="back" onclick={onOpenOuter}>In {outerName}</button>
@@ -50,13 +49,13 @@
 	</div>
 
 	<details>
-		<summary>Roster <span class="count">{rosterSummary}</span></summary>
+		<summary>Roster <span class="count">{guild.roster.length}</span></summary>
 		{#if guild.roster.length === 0}
 			<div class="empty">none</div>
 		{:else}
 			<ul>
 				{#each guild.roster as m (m.actor)}
-					<li><span>{m.role}</span> <code class="addr">{m.actor}</code></li>
+					<li><RoleBadge role={m.role} /> <code class="addr">{m.actor}</code></li>
 				{/each}
 			</ul>
 		{/if}

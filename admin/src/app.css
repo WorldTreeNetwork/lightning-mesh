@@ -1,3 +1,22 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "./lib/components/ui/badge/badge.css";
+
+@theme inline {
+	--color-primary: var(--accent);
+	--color-primary-foreground: var(--accent-ink);
+	--color-secondary: var(--surface-2);
+	--color-secondary-foreground: var(--text);
+	--color-destructive: var(--bad);
+	--color-muted: var(--surface-2);
+	--color-muted-foreground: var(--muted);
+	--color-foreground: var(--text);
+	--color-border: var(--border);
+	--color-ring: var(--focus);
+	--color-background: var(--bg);
+}
+
 /*
  * Named themes (data-theme) each have a light and a dark variant
  * (data-variant). "System" resolves to one of those before paint.

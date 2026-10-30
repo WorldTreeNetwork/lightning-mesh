@@ -17,16 +17,19 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
-    "bits-ui": "^2.19.3"
+    "bits-ui": "^2.19.3",
+    "tailwind-variants": "^4.0.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2",
     "jsdom": "^29.1.1",
     "svelte": "^5.57.0",
     "svelte-check": "^4.6.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "~5.9.2",
     "vite": "^8.0.16",
     "vitest": "^4.1.8"

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import RoleBadge from '../RoleBadge.svelte';
 	import type { GuildRecord } from './types';
 
 	let {
@@ -25,7 +26,7 @@
 				<span class="kind">{guild.workplace ? 'workplace' : 'house'}</span>
 			</span>
 			<span class="meta">
-				<span>you {guild.you}</span>
+				<RoleBadge role={guild.you} />
 				<span>{guild.nodes.length} {guild.nodes.length === 1 ? 'node' : 'nodes'}</span>
 			</span>
 		</button>
