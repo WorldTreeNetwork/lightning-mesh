@@ -23,7 +23,7 @@
     clip-path: polygon(var(--inner-cut-x) 0, calc(100% - var(--inner-cut-x)) 0, 100% var(--inner-cut-y),
       100% calc(100% - var(--inner-cut-y)), calc(100% - var(--inner-cut-x)) 100%, var(--inner-cut-x) 100%,
       0 calc(100% - var(--inner-cut-y)), 0 var(--inner-cut-y));
-    background: linear-gradient(165deg, oklch(0.28 0.04 210 / 0.55), oklch(0.16 0.04 230 / 0.7)); }
+    background: linear-gradient(165deg, oklch(0.28 0.04 210 / 0.92), oklch(0.16 0.04 230 / 0.94)); }
   .c { position: absolute; width: 11px; height: 11px; border: 0 solid var(--cyan);
     filter: drop-shadow(0 0 3px var(--cyan-glow)); pointer-events: none; }
   .c.tl { top: 4px; left: 4px; border-top-width: 1.15px; border-left-width: 1.15px; }
@@ -34,11 +34,21 @@
     border: 0; background: transparent; color: var(--cyan); opacity: 0.6; cursor: pointer; z-index: 5; }
   .close:hover, .close:focus-visible { opacity: 1; outline: none; }
   .close svg { width: 100%; height: 100%; stroke: currentColor; stroke-width: 1.4; fill: none; }
+  .well { padding: 24px 18px 16px; overflow: auto;
+    color: oklch(0.94 0.02 210); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    scrollbar-color: var(--cyan) transparent; }
+  .well:focus-visible { outline: 1px solid var(--cyan); outline-offset: -8px; }
+  .well ::selection { background: var(--cyan); color: oklch(0.16 0.04 230); }
+  .fill-status { margin-bottom: 12px; color: oklch(0.86 0.07 210); }
+  .transcript { font: inherit; white-space: pre; user-select: text; -webkit-user-select: text; }
 </style>
 </head>
 <body>
 <div class="pane" role="dialog" aria-label="Canvas">
-  <div class="well" id="well"></div>
+  <div class="well" id="well" tabindex="0" aria-label="Host ifconfig transcript" aria-busy="true">
+    <p class="fill-status" id="fill-status" role="status">Loading ifconfig…</p>
+    <pre class="transcript" id="transcript"></pre>
+  </div>
   <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
   <button type="button" class="close" aria-label="Close" title="Close">
     <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3 L11 11 M11 3 L3 11" /></svg>
@@ -49,6 +59,42 @@
   var MIN = 80, MAX = 4096;
   var pane = document.querySelector(".pane");
   var k = Object.assign({ cut: 18, bevel: 7, facet: 45 }, window.__LIGHTNING_CANVAS_CHROME || {});
+  var well = document.getElementById("well");
+  var fillStatus = document.getElementById("fill-status");
+  var transcript = document.getElementById("transcript");
+  var fillGeneration = 0;
+
+  function invoke(command, args) {
+    var inv = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+      (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+    if (typeof inv !== "function") return Promise.reject("Host connection unavailable.");
+    return inv(command, args);
+  }
+
+  function fillDefault() {
+    var generation = ++fillGeneration;
+    invoke("fill_canvas_source", { name: "ifconfig" }).then(function (result) {
+      if (generation !== fillGeneration) return;
+      var exit = result.exit_code === null ? "" : " (exit " + result.exit_code + ")";
+      var labels = {
+        success: result.text.length ? "ifconfig completed" : "ifconfig completed — no output",
+        failure: "ifconfig failed" + exit,
+        truncated: "ifconfig truncated at 65,536 bytes" + exit,
+        unsupported: "ifconfig unsupported on this host",
+        refused: "Source refused"
+      };
+      fillStatus.textContent = labels[result.status] || "ifconfig failed";
+      if (result.truncated && result.status !== "truncated") fillStatus.textContent += " — output truncated";
+      transcript.textContent = result.text;
+      well.setAttribute("aria-busy", "false");
+    }).catch(function (error) {
+      if (generation !== fillGeneration || error === "canvas fill superseded") return;
+      fillStatus.textContent = "ifconfig failed";
+      transcript.textContent = String(error);
+      well.setAttribute("aria-busy", "false");
+    });
+  }
+  fillDefault();
 
   function layout() {
     var w = window.innerWidth, h = window.innerHeight;
@@ -151,6 +197,7 @@
   window.addEventListener("blur", function () { pane.classList.remove("can-move", "can-resize"); });
 
   function closeSelf() {
+    ++fillGeneration;
     var id = window.__LIGHTNING_CANVAS_ID;
     var inv = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
       (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);

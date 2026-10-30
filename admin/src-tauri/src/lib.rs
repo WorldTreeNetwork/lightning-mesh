@@ -5,6 +5,7 @@ use tauri::Manager;
 
 mod canvas;
 mod commands;
+mod stdout;
 pub mod guild;
 pub mod guild_ceremony;
 pub mod guild_view;
@@ -15,6 +16,7 @@ use commands::claim::{claim_owner_key, claim_prove, claim_request};
 use commands::discovery::scan_link_local;
 use commands::guild::{sign_guild_op, guild_snapshot, guild_rename, guild_assign};
 use commands::network_name::apply_network_name;
+use stdout::fill_canvas_source;
 
 fn init_logging() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -59,7 +61,8 @@ pub fn run() {
             claim_prove,
             open_canvas,
             close_canvas,
-            list_canvases
+            list_canvases,
+            fill_canvas_source
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

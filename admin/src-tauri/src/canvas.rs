@@ -5,7 +5,7 @@
 //!
 //! One canvas in this landing: a fixed label, reused and focused when it is
 //! already open. No OS title bar, shadow, or traffic lights; the page draws
-//! the chrome. The well is empty.
+//! the chrome. The page fills the well from an allowlisted host source.
 
 use std::sync::Mutex;
 
@@ -68,6 +68,7 @@ impl Serialize for CanvasError {
 #[derive(Default)]
 pub struct CanvasState {
     ids: Mutex<Vec<String>>,
+    pub(crate) source: crate::stdout::SourceState,
 }
 
 impl CanvasState {
@@ -84,12 +85,14 @@ impl CanvasState {
             return false;
         }
         g.push(id.to_string());
+        self.source.activate();
         true
     }
 
     fn remove(&self, id: &str) {
         if let Ok(mut g) = self.ids.lock() {
             g.retain(|x| x != id);
+            self.source.deactivate();
         }
     }
 
@@ -225,14 +228,17 @@ fn open_with<R: Runtime>(
         );
     }
 
-    let win = builder
-        .build()
-        .map_err(|e| CanvasError::Window(e.to_string()))?;
-    clip_silhouette(&win);
-
+    // Register before the page can invoke its on-load fill.
     if let Some(state) = app.try_state::<CanvasState>() {
         state.insert(CANVAS_ID);
     }
+    let win = builder.build().map_err(|e| {
+        if let Some(state) = app.try_state::<CanvasState>() {
+            state.remove(CANVAS_ID);
+        }
+        CanvasError::Window(e.to_string())
+    })?;
+    clip_silhouette(&win);
     let _ = win.show();
     let _ = win.set_focus();
 
