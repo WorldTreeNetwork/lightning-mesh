@@ -34,6 +34,14 @@ SSH-mutate UCI. `update-fleet.sh` remains the full binary+radio rollout.
 WPS arms a prefix-boxed nft WAN SSH window; not UCI persist; overlay
 remains the management plane.
 
+Lightning Admin also hosts owner-drawn `canvas-*` overlays whose wells
+show allowlisted host stdout. The first source is macOS `/sbin/ifconfig`
+with no extra args. `scan_link_local` remains the neighbor list; the
+well is a raw transcript, not a second parser. One canvas now; source
+swap (`add-view-swap`) and a crystal-grid of many overlays
+(`add-crystal-grid`) are later. Living spec:
+`openspec/specs/admin-stdout-views/spec.md`.
+
 `/etc/config/mjolnir` (`radio`, `wan_admin`) is the live operator store.
 `mjolnir-apply` is the only projector of those knobs onto UCI `wireless`.
 A staged `wireless.env` writes the store and is then wiped. LuCI-edited
@@ -141,6 +149,9 @@ not. hello.mesh relays and never sees the secret. Living spec:
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
 - Client network name (SSID ≠ guild): `openspec/specs/client-network-name/spec.md`
 - Lightning settings store: `openspec/specs/mjolnir-settings/spec.md`
+- Lightning Admin stdout-view canvases (owner-drawn `canvas-*` overlays,
+  allowlisted host argv, first source macOS `/sbin/ifconfig`):
+  `openspec/specs/admin-stdout-views/spec.md`
 - Coverage survey (directory last-known coords, phone stamp, `/mesh` viz,
   fixture walk paint unknown/thin/covered + completeness):
   `openspec/specs/mesh-coverage/spec.md`
