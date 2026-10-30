@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-admin-stdout-views-advise-astra",
+  "node_id": "mjolnir-mesh-qap4",
+  "capability": "admin-stdout-views",
+  "change_id": "add-admin-stdout-views",
+  "goal": "Advise add-admin-stdout-views (ACTIVE BUILD, architecture). Author family is Grok. You are the other-family reader (astra-arch-review). High blast: protocol (host command stdout as a view pipe).\n\nWhy (from proposal.md, not design.md): Lightning Admin already scans Unique Local and link-local through if-addrs and scan_link_local. That is a structured neighbor list, not the Mac operator's first look at the machine's own NICs. On macOS that look is ifconfig. The product move is a Papyrus-style owner-drawn canvas (undecorated overlay, cyan ticks, 45° octagon, frost) whose well is stdout from an allowlisted host command, with room later for several such wells in a spatial grid.\nWhat: Name capability admin-stdout-views. Copy Papyrus D-043 overlay chrome into Admin; no Papyrus crate. Source is a fixed argv from an allowlist, spawned without a shell. First source is /sbin/ifconfig with no extra args. Main decorated window stays discovery / network name / guild. Many wells and a crystal grid are later landings. This change is the contract; chrome is add-admin-canvas; the pipe is add-host-ifconfig-view. Do not fold until those land.\nBanner ACTIVE BUILD. Human said activate and run 2026-10-30 on mjolnir-mesh-70wk. Lean auto-log: overlay copy, raw ifconfig allowlist, spike before act on chrome.\n\nCited (read before design.md):\n- admin/src-tauri/tauri.conf.json — one decorated main window, no transparent overlays\n- admin/src-tauri/Cargo.toml — tauri = { version = \"2\", features = [] } (no macos-private-api)\n- admin/src-tauri/src/lib.rs — invoke_handler is scan_link_local, apply_network_name, sign_guild_op\n- admin/README.md — the window is discovery, network name, guild\n- ARCHITECTURE.md — Lightning Admin is a writer of radio apply; discovery is a link-local scan\n- openspec/specs/ has no living admin-stdout-views spec yet. Proposed SHALLs: openspec/changes/add-admin-stdout-views/specs/admin-stdout-views/spec.md — AFTER the take.\n\nBLIND PASS first. From Why, living specs, and cited code only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md or tasks.md until that take is written. Then open those files and the spec delta, compare, steelman against your take.\n\nWrite openspec/changes/add-admin-stdout-views/reviews/2026-10-30-advise.md with:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** astra-arch-review\n> **SPAWN:** <this spawn dir>\nNotes in the body. If send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits. Do not implement. Do not fold. Do not flip the banner.",
+  "non_goals": [
+    "Implement canvas or ifconfig",
+    "Fold",
+    "Flip the change banner",
+    "Arbitrary shell",
+    "Replace scan_link_local"
+  ],
+  "anchors": [
+    {
+      "symbol": "admin/src-tauri/tauri.conf.json",
+      "invariant": "Lightning Admin ships one decorated main window; no canvas-* overlays exist."
+    },
+    {
+      "symbol": "admin/src-tauri/Cargo.toml",
+      "invariant": "tauri features are empty; macos-private-api is not enabled."
+    },
+    {
+      "symbol": "admin/src-tauri/src/lib.rs",
+      "invariant": "Invoke surface is scan_link_local, apply_network_name, sign_guild_op."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A Papyrus-style overlay canvas can show allowlisted /sbin/ifconfig stdout; discovery remains scan_link_local; no shell string; grid is later.",
+    "if_false": "The contract treats association or if-addrs as the ifconfig view, allows a shell, replaces the main window, or claims a 3D grid in this landing."
+  },
+  "out_of_scope": [
+    {"item": "canvas window implementation", "tracked_as": "mjolnir-mesh-cz6v"},
+    {"item": "ifconfig pipe implementation", "tracked_as": "mjolnir-mesh-bn7z"},
+    {"item": "view swap", "tracked_as": "mjolnir-mesh-6sro"},
+    {"item": "crystal grid / diorama", "tracked_as": "mjolnir-mesh-oqun"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-admin-stdout-views/reviews/",
+      "openspec/changes/add-admin-stdout-views/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "astra-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

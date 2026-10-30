@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-admin-stdout-views-advise-r2-astra",
+  "node_id": "mjolnir-mesh-qap4",
+  "capability": "admin-stdout-views",
+  "change_id": "add-admin-stdout-views",
+  "goal": "Re-advise add-admin-stdout-views after astra-arch-review send-back. You are the same reader (astra-arch-review). Author family is Grok. Do not implement. Do not fold. Do not flip the banner.\n\nWrite openspec/changes/add-admin-stdout-views/reviews/2026-10-30-advise-r2.md (that exact name).\n\nr1 owed, now amended:\n1. Process-to-well: one-shot, finite timeout and capture cap (values named by add-host-ifconfig-view), combined stdout+stderr, exit status on non-zero, states loading/success-including-empty/failure/truncated, cancel+reap on new fill or destroy, no overlapping children, no stale output, unsupported host does not spawn, no poll required.\n2. Resize: Option/Alt at pointer-down starts resize (wins over Control). Live Option held = from center; released = top-left fixed. Shift live = aspect. Control without Option at pointer-down = move; does not convert later.\n3. One canvas in this landing; simultaneous canvases deferred to add-crystal-grid; fold gate is one canvas + ifconfig.\n\nBLIND PASS first from Why + cited Admin code/README/ARCHITECTURE.md + living specs. Then open design.md, tasks.md, spec delta, and r1 review, compare, steelman.\n\nWhy (from proposal.md, not the design): Lightning Admin already scans Unique Local and link-local through if-addrs and scan_link_local. That is a structured neighbor list, not the Mac operator's first look at the machine's own NICs. On macOS that look is ifconfig. The product move is a Papyrus-style owner-drawn canvas whose well is stdout from an allowlisted host command. This landing is one canvas. Grid later.\n\nCited (read before design.md):\n- admin/src-tauri/tauri.conf.json — one decorated main window\n- admin/src-tauri/Cargo.toml — tauri features = []\n- admin/src-tauri/src/lib.rs — scan_link_local, apply_network_name, sign_guild_op\n- admin/README.md — discovery, network name, guild\n- ARCHITECTURE.md — Admin is a radio-apply writer; discovery is a link-local scan\n- Proposed SHALLs AFTER the take: openspec/changes/add-admin-stdout-views/specs/admin-stdout-views/spec.md\n\nPersist:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\n> **READER:** astra-arch-review\n> **SPAWN:** <this spawn dir>\nIf send-back, add owed checkboxes on tasks.md. Do not write accept-with-nits.",
+  "non_goals": [
+    "Implement",
+    "Fold",
+    "Flip the banner",
+    "Arbitrary shell",
+    "Replace scan_link_local"
+  ],
+  "anchors": [
+    {
+      "symbol": "admin/src-tauri/tauri.conf.json",
+      "invariant": "Lightning Admin ships one decorated main window; no canvas-* overlays exist."
+    },
+    {
+      "symbol": "admin/src-tauri/src/lib.rs",
+      "invariant": "Invoke surface is scan_link_local, apply_network_name, sign_guild_op."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "One Papyrus-style overlay canvas can show allowlisted /sbin/ifconfig stdout with a finite one-shot child; discovery remains scan_link_local; resize anchors are unambiguous; grid is later.",
+    "if_false": "The contract still contradicts itself on Option-drag, requires two canvases in this landing, or leaves process lifetime unspecified."
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-admin-stdout-views/reviews/",
+      "openspec/changes/add-admin-stdout-views/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "astra-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}
