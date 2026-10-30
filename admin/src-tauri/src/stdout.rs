@@ -59,6 +59,10 @@ fn lookup(name: &str) -> Option<Source> {
             path: "/sbin/ifconfig",
             args: &[],
         }),
+        "netstat" => Some(Source {
+            path: "/usr/sbin/netstat",
+            args: &["-ib"],
+        }),
         _ => None,
     }
 }
@@ -153,7 +157,7 @@ impl SourceState {
             Ok(FillResult::message(
                 name,
                 FillStatus::Unsupported,
-                "ifconfig is supported only on macOS.",
+                format!("{name} is supported only on macOS."),
             ))
         }
     }
@@ -308,26 +312,42 @@ mod tests {
     #[tokio::test]
     async fn unknown_source_is_refused_without_spawn() {
         let state = state();
-        for name in ["unknown", "/sbin/ifconfig", "ifconfig; echo injected"] {
+        for name in [
+            "unknown",
+            "/sbin/ifconfig",
+            "ifconfig; echo injected",
+            "/usr/sbin/netstat",
+            "netstat -ib",
+            "netstat; echo injected",
+        ] {
             let result = state.fill(name).await.unwrap();
             assert_eq!(result.status, FillStatus::Refused);
             assert_eq!(result.source, name);
             assert!(state.running.lock().unwrap().child.is_none());
         }
+    }
+
+    #[test]
+    fn allowlisted_argv_is_fixed() {
         let source = lookup("ifconfig").unwrap();
         assert_eq!(source.path, "/sbin/ifconfig");
         assert!(source.args.is_empty());
+        let source = lookup("netstat").unwrap();
+        assert_eq!(source.path, "/usr/sbin/netstat");
+        assert_eq!(source.args, &["-ib"]);
     }
 
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
-    async fn ifconfig_is_unsupported_without_spawn() {
+    async fn sources_are_unsupported_without_spawn() {
         let state = state();
-        assert_eq!(
-            state.fill("ifconfig").await.unwrap().status,
-            FillStatus::Unsupported
-        );
-        assert!(state.running.lock().unwrap().child.is_none());
+        for name in ["ifconfig", "netstat"] {
+            let result = state.fill(name).await.unwrap();
+            assert_eq!(result.status, FillStatus::Unsupported);
+            assert_eq!(result.source, name);
+            assert!(result.text.contains(name));
+            assert!(state.running.lock().unwrap().child.is_none());
+        }
     }
 
     // Reuse this test binary as a tiny fixture, with no shell or external tools.
@@ -486,7 +506,7 @@ mod tests {
             let owner = state.clone();
             let fill = tokio::spawn(async move {
                 owner
-                    .capture(generation, "fixture", fixture("sleep"), TIMEOUT)
+                    .capture(generation, "ifconfig", fixture("sleep"), TIMEOUT)
                     .await
             });
             let pid = tokio::time::timeout(Duration::from_secs(2), async {
@@ -502,7 +522,12 @@ mod tests {
             if destroy {
                 state.deactivate();
             } else {
-                state.begin().unwrap();
+                let replacement = state.fill("netstat").await.unwrap();
+                assert_eq!(replacement.source, "netstat");
+                #[cfg(target_os = "macos")]
+                assert_eq!(replacement.status, FillStatus::Success);
+                #[cfg(not(target_os = "macos"))]
+                assert_eq!(replacement.status, FillStatus::Unsupported);
             }
             assert_eq!(fill.await.unwrap().unwrap_err(), CANCELLED);
             assert!(state.running.lock().unwrap().child.is_none());
@@ -524,13 +549,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn real_ifconfig_when_installed() {
-        if !std::path::Path::new("/sbin/ifconfig").is_file() {
-            return;
+    async fn real_sources_when_installed() {
+        for name in ["ifconfig", "netstat"] {
+            if !std::path::Path::new(lookup(name).unwrap().path).is_file() {
+                continue;
+            }
+            let result = state().fill(name).await.unwrap();
+            assert_eq!(result.source, name);
+            assert_eq!(result.status, FillStatus::Success);
+            assert_eq!(result.exit_code, Some(0));
+            assert!(!result.text.is_empty());
         }
-        let result = state().fill("ifconfig").await.unwrap();
-        assert_eq!(result.status, FillStatus::Success);
-        assert_eq!(result.exit_code, Some(0));
-        assert!(!result.text.is_empty());
     }
 }

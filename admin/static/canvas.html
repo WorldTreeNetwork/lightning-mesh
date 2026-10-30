@@ -34,7 +34,15 @@
     border: 0; background: transparent; color: var(--cyan); opacity: 0.6; cursor: pointer; z-index: 5; }
   .close:hover, .close:focus-visible { opacity: 1; outline: none; }
   .close svg { width: 100%; height: 100%; stroke: currentColor; stroke-width: 1.4; fill: none; }
-  .well { padding: 24px 18px 16px; overflow: auto;
+  .sources { position: absolute; top: 8px; left: 20px; right: 46px; z-index: 5;
+    display: flex; gap: 8px; overflow-x: auto; scrollbar-color: var(--cyan) transparent; }
+  .source { flex: none; padding: 2px 4px; border: 1px solid transparent;
+    background: oklch(0.25 0.04 210); color: var(--cyan); cursor: pointer;
+    font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .source[aria-pressed="true"] { border-bottom-color: var(--cyan); background: oklch(0.30 0.04 210); }
+  .source:hover { background: oklch(0.34 0.04 210); }
+  .source:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; }
+  .well { padding: 40px 18px 16px; overflow: auto;
     color: oklch(0.94 0.02 210); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     scrollbar-color: var(--cyan) transparent; }
   .well:focus-visible { outline: 1px solid var(--cyan); outline-offset: -8px; }
@@ -50,6 +58,10 @@
     <pre class="transcript" id="transcript"></pre>
   </div>
   <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+  <div class="sources" role="group" aria-label="Host source">
+    <button type="button" class="source" data-source="ifconfig" aria-pressed="true">ifconfig</button>
+    <button type="button" class="source" data-source="netstat" aria-pressed="false">netstat</button>
+  </div>
   <button type="button" class="close" aria-label="Close" title="Close">
     <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3 L11 11 M11 3 L3 11" /></svg>
   </button>
@@ -63,6 +75,8 @@
   var fillStatus = document.getElementById("fill-status");
   var transcript = document.getElementById("transcript");
   var fillGeneration = 0;
+  var selectedSource = null;
+  var sourceControls = document.querySelectorAll(".source");
 
   function invoke(command, args) {
     var inv = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
@@ -71,30 +85,44 @@
     return inv(command, args);
   }
 
-  function fillDefault() {
+  function fillSource(name) {
+    if ((name !== "ifconfig" && name !== "netstat") || name === selectedSource) return;
+    selectedSource = name;
     var generation = ++fillGeneration;
-    invoke("fill_canvas_source", { name: "ifconfig" }).then(function (result) {
+    sourceControls.forEach(function (control) {
+      control.setAttribute("aria-pressed", String(control.dataset.source === name));
+    });
+    transcript.textContent = "";
+    fillStatus.textContent = "Loading " + name + "…";
+    well.setAttribute("aria-label", "Host " + name + " transcript");
+    well.setAttribute("aria-busy", "true");
+    well.scrollTop = 0;
+    well.scrollLeft = 0;
+    invoke("fill_canvas_source", { name: name }).then(function (result) {
       if (generation !== fillGeneration) return;
       var exit = result.exit_code === null ? "" : " (exit " + result.exit_code + ")";
       var labels = {
-        success: result.text.length ? "ifconfig completed" : "ifconfig completed — no output",
-        failure: "ifconfig failed" + exit,
-        truncated: "ifconfig truncated at 65,536 bytes" + exit,
-        unsupported: "ifconfig unsupported on this host",
+        success: result.text.length ? name + " completed" : name + " completed — no output",
+        failure: name + " failed" + exit,
+        truncated: name + " truncated at 65,536 bytes" + exit,
+        unsupported: name + " unsupported on this host",
         refused: "Source refused"
       };
-      fillStatus.textContent = labels[result.status] || "ifconfig failed";
+      fillStatus.textContent = labels[result.status] || name + " failed";
       if (result.truncated && result.status !== "truncated") fillStatus.textContent += " — output truncated";
       transcript.textContent = result.text;
       well.setAttribute("aria-busy", "false");
     }).catch(function (error) {
       if (generation !== fillGeneration || error === "canvas fill superseded") return;
-      fillStatus.textContent = "ifconfig failed";
+      fillStatus.textContent = name + " failed";
       transcript.textContent = String(error);
       well.setAttribute("aria-busy", "false");
     });
   }
-  fillDefault();
+  sourceControls.forEach(function (control) {
+    control.addEventListener("click", function () { fillSource(control.dataset.source); });
+  });
+  fillSource("ifconfig");
 
   function layout() {
     var w = window.innerWidth, h = window.innerHeight;
@@ -180,7 +208,7 @@
 
   // Gesture is chosen once, from the modifiers at pointer-down.
   pane.addEventListener("pointerdown", function (e) {
-    if (e.target.closest && e.target.closest(".close")) return;
+    if (e.target.closest && e.target.closest("button")) return;
     if (e.altKey) begin(e, "resize");          // Option wins Control
     else if (e.ctrlKey) begin(e, "move");      // Control alone moves; never converts
     // unmodified (or Shift alone): nothing
