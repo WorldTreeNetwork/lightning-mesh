@@ -1,10 +1,10 @@
 # Tasks
 
 - [x] Spike `canvas-chrome-port` finding `go` or explicit skip before act (`docs/spikes/canvas-chrome-port/finding.md` VERDICT: go, 2026-10-30)
-- [ ] `macos-private-api` + `canvas-*` capability; `open_canvas` / `close_canvas` / `list_canvases`
-- [ ] Owner-drawn chrome (ticks, octagon, frost, close, Escape)
-- [ ] Modifier move/resize as `add-admin-stdout-views` (pointer-down start, live Option anchor, Shift aspect)
-- [ ] Main window remains; one canvas
+- [x] `macos-private-api` + `canvas-*` capability; `open_canvas` / `close_canvas` / `list_canvases`
+- [x] Owner-drawn chrome (ticks, octagon, frost, close, Escape)
+- [x] Modifier move/resize as `add-admin-stdout-views` (pointer-down start, live Option anchor, Shift aspect)
+- [x] Main window remains; one canvas
 - [ ] Focused verify: `cd admin && bun run tauri dev` — canvas visible, no traffic lights
 
 Do not implement the ifconfig pipe in this change.

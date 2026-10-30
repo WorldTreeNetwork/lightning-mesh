@@ -10,6 +10,8 @@
     "frontendDist": "../build"
   },
   "app": {
+    "macOSPrivateApi": true,
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Lightning Admin",

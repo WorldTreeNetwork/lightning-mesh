@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Canvas</title>
+<style>
+  :root {
+    --cyan: oklch(0.82 0.13 210);
+    --cyan-glow: oklch(0.82 0.13 210 / 0.45);
+    --cut-x: 18px; --cut-y: 18px; --bevel: 7px;
+    --inner-cut-x: 13px; --inner-cut-y: 13px;
+  }
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden;
+    user-select: none; -webkit-user-select: none; }
+  .pane { position: absolute; inset: 0; cursor: default; touch-action: none; isolation: isolate;
+    clip-path: polygon(var(--cut-x) 0, calc(100% - var(--cut-x)) 0, 100% var(--cut-y),
+      100% calc(100% - var(--cut-y)), calc(100% - var(--cut-x)) 100%, var(--cut-x) 100%,
+      0 calc(100% - var(--cut-y)), 0 var(--cut-y)); }
+  .pane.can-move, .pane.is-moving { cursor: move; }
+  .pane.can-resize, .pane.is-resizing { cursor: nwse-resize; }
+  .well { position: absolute; inset: var(--bevel);
+    clip-path: polygon(var(--inner-cut-x) 0, calc(100% - var(--inner-cut-x)) 0, 100% var(--inner-cut-y),
+      100% calc(100% - var(--inner-cut-y)), calc(100% - var(--inner-cut-x)) 100%, var(--inner-cut-x) 100%,
+      0 calc(100% - var(--inner-cut-y)), 0 var(--inner-cut-y));
+    background: linear-gradient(165deg, oklch(0.28 0.04 210 / 0.55), oklch(0.16 0.04 230 / 0.7)); }
+  .c { position: absolute; width: 11px; height: 11px; border: 0 solid var(--cyan);
+    filter: drop-shadow(0 0 3px var(--cyan-glow)); pointer-events: none; }
+  .c.tl { top: 4px; left: 4px; border-top-width: 1.15px; border-left-width: 1.15px; }
+  .c.tr { top: 4px; right: 4px; border-top-width: 1.15px; border-right-width: 1.15px; }
+  .c.bl { bottom: 4px; left: 4px; border-bottom-width: 1.15px; border-left-width: 1.15px; }
+  .c.br { bottom: 4px; right: 4px; border-bottom-width: 1.15px; border-right-width: 1.15px; }
+  .close { position: absolute; top: 9px; right: 20px; width: 14px; height: 14px; padding: 0;
+    border: 0; background: transparent; color: var(--cyan); opacity: 0.6; cursor: pointer; z-index: 5; }
+  .close:hover, .close:focus-visible { opacity: 1; outline: none; }
+  .close svg { width: 100%; height: 100%; stroke: currentColor; stroke-width: 1.4; fill: none; }
+</style>
+</head>
+<body>
+<div class="pane" role="dialog" aria-label="Canvas">
+  <div class="well" id="well"></div>
+  <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+  <button type="button" class="close" aria-label="Close" title="Close">
+    <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3 L11 11 M11 3 L3 11" /></svg>
+  </button>
+</div>
+<script>
+(function () {
+  var MIN = 80, MAX = 4096;
+  var pane = document.querySelector(".pane");
+  var k = Object.assign({ cut: 18, bevel: 7, facet: 45 }, window.__LIGHTNING_CANVAS_CHROME || {});
+
+  function layout() {
+    var w = window.innerWidth, h = window.innerHeight;
+    var tan = Math.tan((k.facet * Math.PI) / 180);
+    if (!isFinite(tan) || tan <= 0) tan = 1;
+    var maxC = Math.min(w, h) / 2 - 4;
+    var cx = Math.min(k.cut, maxC), cy = Math.min(k.cut * tan, maxC);
+    var bevel = Math.min(k.bevel, Math.min(w, h) / 6);
+    var shrink = bevel * (Math.SQRT2 - 1);
+    var s = document.documentElement.style;
+    s.setProperty("--cut-x", cx + "px"); s.setProperty("--cut-y", cy + "px");
+    s.setProperty("--bevel", bevel + "px");
+    s.setProperty("--inner-cut-x", Math.max(0, cx - shrink) + "px");
+    s.setProperty("--inner-cut-y", Math.max(0, cy - shrink) + "px");
+  }
+  window.addEventListener("resize", layout);
+  layout();
+
+  function clamp(n) { return Math.max(MIN, Math.min(MAX, n)); }
+
+  function win() {
+    var t = window.__TAURI__;
+    if (!t || !t.window || !t.window.getCurrentWindow) return null;
+    return { w: t.window.getCurrentWindow(), P: t.dpi && t.dpi.LogicalPosition, S: t.dpi && t.dpi.LogicalSize };
+  }
+
+  function resizeRect(st, dx, dy, center, aspect) {
+    var dw = dx, dh = dy;
+    if (aspect && st.h > 0) {
+      var a = st.w / st.h;
+      if (Math.abs(dx) * st.h > Math.abs(dy) * st.w) { dh = dx / a; } else { dw = dy * a; }
+    }
+    if (center) {
+      var w = clamp(st.w + 2 * dw), h = clamp(st.h + 2 * dh);
+      return { x: st.x + st.w / 2 - w / 2, y: st.y + st.h / 2 - h / 2, w: w, h: h };
+    }
+    return { x: st.x, y: st.y, w: clamp(st.w + dw), h: clamp(st.h + dh) };
+  }
+
+  var drag = null, pending = null, raf = 0;
+  function flush() {
+    raf = 0;
+    var j = pending; pending = null;
+    var api = win();
+    if (!j || !api) return;
+    if (j.resize && api.S) api.w.setSize(new api.S(j.r.w, j.r.h));
+    if (api.P && (j.move || j.center)) api.w.setPosition(new api.P(j.r.x, j.r.y));
+  }
+  function queue(j) { pending = j; if (!raf) raf = requestAnimationFrame(flush); }
+
+  function onMove(e) {
+    if (!drag || !drag.start) return;
+    var dx = e.screenX - drag.sx, dy = e.screenY - drag.sy;
+    if (drag.mode === "move") {
+      queue({ r: { x: drag.start.x + dx, y: drag.start.y + dy, w: drag.start.w, h: drag.start.h }, move: true });
+    } else {
+      // Live Option = about center; released = top-left fixed. Live Shift = aspect.
+      queue({ r: resizeRect(drag.start, dx, dy, e.altKey, e.shiftKey), resize: true, center: e.altKey });
+    }
+  }
+  function endDrag() {
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", endDrag, true);
+    window.removeEventListener("pointercancel", endDrag, true);
+    pane.classList.remove("is-moving", "is-resizing");
+    drag = null;
+  }
+  function begin(e, mode) {
+    var api = win();
+    if (!api) return;
+    e.preventDefault();
+    pane.classList.toggle("is-moving", mode === "move");
+    pane.classList.toggle("is-resizing", mode === "resize");
+    var d = (drag = { mode: mode, sx: e.screenX, sy: e.screenY, start: null });
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", endDrag, true);
+    window.addEventListener("pointercancel", endDrag, true);
+    Promise.all([api.w.scaleFactor(), api.w.outerPosition(), api.w.innerSize()]).then(function (p) {
+      var sc = p[0] || 1;
+      if (drag === d) d.start = { x: p[1].x / sc, y: p[1].y / sc, w: p[2].width / sc, h: p[2].height / sc };
+    });
+  }
+
+  // Gesture is chosen once, from the modifiers at pointer-down.
+  pane.addEventListener("pointerdown", function (e) {
+    if (e.target.closest && e.target.closest(".close")) return;
+    if (e.altKey) begin(e, "resize");          // Option wins Control
+    else if (e.ctrlKey) begin(e, "move");      // Control alone moves; never converts
+    // unmodified (or Shift alone): nothing
+  });
+  window.addEventListener("contextmenu", function (e) { if (drag || e.ctrlKey) e.preventDefault(); }, true);
+
+  function hint(e) {
+    if (drag) return;
+    pane.classList.toggle("can-resize", !!e.altKey);
+    pane.classList.toggle("can-move", !!e.ctrlKey && !e.altKey);
+  }
+  window.addEventListener("keydown", hint);
+  window.addEventListener("keyup", hint);
+  window.addEventListener("blur", function () { pane.classList.remove("can-move", "can-resize"); });
+
+  function closeSelf() {
+    var id = window.__LIGHTNING_CANVAS_ID;
+    var inv = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+      (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+    if (typeof inv === "function" && id) inv("close_canvas", { id: id });
+    else window.close();
+  }
+  var close = document.querySelector(".close");
+  close.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+  close.addEventListener("click", function (e) { e.stopPropagation(); closeSelf(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeSelf(); });
+})();
+</script>
+</body>
+</html>

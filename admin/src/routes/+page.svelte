@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { DropdownMenu } from 'bits-ui';
+	import { openCanvas } from '$lib/canvas/open';
 	import { copyText } from '$lib/clipboard';
 	import AddrCell from '$lib/discovery/AddrCell.svelte';
 	import { classifyIface, ifaceTitle, KIND_ORDER, kindLabel, type IfaceKind } from '$lib/discovery/groups';
@@ -209,6 +210,7 @@
 			<button type="button" class="scan primary" disabled={discovery.loading} onclick={() => discovery.scan()}>
 				{discovery.loading ? 'Scanning…' : 'Scan'}
 			</button>
+			<button type="button" class="scan ghost" onclick={() => void openCanvas()}>Canvas</button>
 			<DropdownMenu.Root>
 				<DropdownMenu.Trigger>
 					{#snippet child({ props })}
