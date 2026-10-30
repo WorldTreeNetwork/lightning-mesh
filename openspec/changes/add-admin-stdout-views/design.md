@@ -66,9 +66,10 @@ current behavior until those land.
 
 - `canvas-chrome-port` — Papyrus owner-drawn canvas (`macos-private-api`,
   transparent, HudWindow frost, CSS octagon ticks) copies into Lightning
-  Admin's current Tauri 2 crate — confidence: medium — verification: not
-  empirically-tested — synthesis: none yet (`docs/spikes/canvas-chrome-port/`
-  owed before `add-admin-canvas` act).
+  Admin's current Tauri 2 crate — confidence: high — verification: empirically-tested
+  — spike-required: false — spike-artifact: docs/spikes/canvas-chrome-port/finding.md.
+  Validated by spike canvas-chrome-port on 2026-10-30. Keep Admin's tauri 2.11.5
+  family lock; add `macos-private-api` only (unpinned 2.12.x runtime does not compile).
 
 ## Security
 

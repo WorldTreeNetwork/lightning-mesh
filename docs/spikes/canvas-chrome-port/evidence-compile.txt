@@ -1,0 +1,11 @@
+=== go: cargo check (tauri 2.11.5 + macos-private-api, Admin family pins) ===
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.08s (first); 0.24s (repro-command.sh)
+
+=== negative: same probe, tauri features = [] ===
+src/lib.rs:26:6: error[E0599]: no method named `transparent` found for struct `WebviewWindowBuilder<'a, R, M>` in the current scope
+error: could not compile `canvas-chrome-port-spike-neg` (lib) due to 1 previous error
+negative path failed as expected (exit 101)
+
+=== unpinned trap (tauri 2.11.5 without family pins) ===
+Resolved tauri-runtime 2.12.2 / wry 0.57.1; tauri lib failed with Monitor/UnexpectedMenuKind type errors.
+Production path: keep admin/src-tauri/Cargo.lock, add macos-private-api only.

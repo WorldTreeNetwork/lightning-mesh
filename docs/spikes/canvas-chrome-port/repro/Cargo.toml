@@ -1,0 +1,21 @@
+[package]
+name = "canvas-chrome-port-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Isolated compile probe: Papyrus D-043 overlay builder vs tauri 2.11.5"
+
+# Nested under lightning-mesh but not a workspace member of crates/*.
+[workspace]
+
+[dependencies]
+# Pins match Lightning Admin `admin/src-tauri/Cargo.lock` (not latest 2.12.x).
+# A bare `tauri = "=2.11.5"` resolves newer `tauri-runtime`/`wry` and fails to
+# compile. Production enablement keeps Admin's lock and only adds the feature.
+tauri = { version = "=2.11.5", features = ["macos-private-api"] }
+tauri-runtime = "=2.11.3"
+tauri-runtime-wry = "=2.11.4"
+tauri-utils = "=2.9.3"
+tauri-macros = "=2.6.3"
+wry = "=0.55.1"
+tao = "=0.35.3"
