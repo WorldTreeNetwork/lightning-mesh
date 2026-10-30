@@ -6,7 +6,7 @@
 	import { classifyIface, ifaceTitle, KIND_ORDER, kindLabel, type IfaceKind } from '$lib/discovery/groups';
 	import { groupResources, resourceLabel, type Resource } from '$lib/discovery/resources';
 	import { discovery } from '$lib/discovery/store.svelte';
-	import { GUILD_LABEL, guild } from '$lib/guild/store.svelte';
+	import GuildPanel from '$lib/guild/mock/GuildPanel.svelte';
 	import { NETWORK_NAME_LABEL, networkName } from '$lib/network-name/store.svelte';
 	import {
 		applyAppearance,
@@ -303,64 +303,7 @@
 		{/if}
 	</div>
 
-	<div class="nn-bar guild-bar">
-		<label for="guild-seed">{GUILD_LABEL}</label>
-		<input
-			id="guild-seed"
-			type="password"
-			autocomplete="off"
-			spellcheck="false"
-			placeholder="actor seed (64 hex)"
-			bind:value={guild.actorSeed}
-			disabled={guild.signing}
-		/>
-		<input
-			id="guild-id"
-			type="text"
-			autocomplete="off"
-			spellcheck="false"
-			placeholder="guild id (empty to join a new one)"
-			bind:value={guild.guildId}
-			disabled={guild.signing}
-		/>
-		<input
-			id="node-id"
-			type="text"
-			autocomplete="off"
-			spellcheck="false"
-			placeholder="node id"
-			bind:value={guild.nodeId}
-			disabled={guild.signing}
-		/>
-		<button type="button" class="scan" disabled={!guild.can('join')} onclick={() => guild.sign('join')}>
-			Join
-		</button>
-		<button type="button" class="scan" disabled={!guild.can('change')} onclick={() => guild.sign('change')}>
-			Change
-		</button>
-		<button
-			type="button"
-			class="scan"
-			disabled={!guild.can('assign-node')}
-			onclick={() => guild.sign('assign-node')}
-		>
-			Assign node
-		</button>
-		<button type="button" class="scan" disabled={!guild.can('nest')} onclick={() => guild.sign('nest')}>
-			Nest
-		</button>
-		{#if guild.signing}
-			<span class="nn-status">Signing…</span>
-		{:else if guild.error}
-			<span class="nn-status bad">{guild.error}</span>
-		{:else if guild.receipt}
-			<span class="nn-status">
-				{guild.receipt.kind} · {guild.receipt.keyspaceId.slice(0, 12)}…
-			</span>
-		{:else}
-			<span class="nn-status">Membership only. Does not change the network name.</span>
-		{/if}
-	</div>
+	<GuildPanel />
 
 	<div class="body">
 		<aside class="rail">
