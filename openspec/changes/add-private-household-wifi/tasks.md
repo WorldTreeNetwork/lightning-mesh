@@ -7,6 +7,9 @@ guest-SSID rounds through r7 are superseded. Their reviews stay on
 disk and are not authority.
 
 - [ ] Fresh advise after preparation
+- [x] R8-1 (advise 2026-10-30): option (b). `10.42.0.0/16` is `no_blanket_route`, not `closed`. Published-name exceptions stay a later apply slice. Committed-policy test asserts the prefix is not closed.
+- [x] R8-2 (advise 2026-10-30): client flows are member or unidentified. A published service is a destination.
+- [x] R8-3 (advise 2026-10-30): member-ahead SHALL NOT starve unidentified flows. The scheduler stays not owed.
 - [x] Superseded the guest-SSID contract (2026-10-22). No second SSID, no guest prefix, no guest isolation gate, no rate cap. Classes are published service, member, and unidentified.
 - [x] Class plan builder. One SSID, radio unchanged until a later owner-committed plan. Member flows scheduled ahead of unidentified flows. No rate cap. Published `.mesh` names reachable. Management plane closed. No `OpenWrtAdapter`. `crates/mjolnir-apply/src/client_class.rs`.
 - [x] Tests for radio non-mutation, association is not membership, a member scheduled ahead without a cap, an unidentified client reaching a published name and not the management plane, and refusal to call `OpenWrtAdapter`.

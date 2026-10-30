@@ -19,18 +19,26 @@ is not this change.
 
 ### Requirement: Three classes share that SSID
 
-The plan SHALL classify each client flow as a published service, a
-member, or unidentified. A published `.mesh` name SHALL be reachable
-from every client on the SSID. Clients SHALL NOT gain a route to every
-house address. The management plane SHALL stay closed to client
-traffic, including overlay `10.254.0.0/16`, WAN SSH, and the recovery
-address. A member SHALL be a client whose IdentiKey guild or group
-membership the node has verified. When the link is busy, member flows
-SHALL be scheduled ahead of unidentified flows. The plan SHALL NOT
-impose a rate cap. An unidentified client SHALL keep internet and
-published names at best effort. Creating an identity SHALL NOT be
-required for that access. SSID association SHALL NOT count as
-membership, and a directory role label SHALL NOT be the priority mark.
+The plan SHALL classify each client flow as a member or unidentified.
+A published service is a destination, a box that has published a
+`.mesh` name, and SHALL NOT be a client class. A published `.mesh`
+name SHALL be reachable from every client on the SSID. Clients SHALL
+NOT gain a route to every address in `10.42.0.0/16`. That prefix
+SHALL NOT appear in the committed policy's closed list. The plan
+SHALL record it as `no_blanket_route`. Published-name exceptions
+inside that prefix belong to a later apply slice. The committed
+policy SHALL NOT close reach to a published name. The management
+plane SHALL stay closed to client traffic, including overlay
+`10.254.0.0/16`, WAN SSH, and the recovery address. A member SHALL
+be a client whose IdentiKey guild or group membership the node has
+verified. When the link is busy, member flows SHALL be scheduled
+ahead of unidentified flows. That order SHALL NOT starve an
+unidentified flow. The plan names the limit and does not choose the
+scheduler. The plan SHALL NOT impose a rate cap. An unidentified
+client SHALL keep internet and published names at best effort.
+Creating an identity SHALL NOT be required for that access. SSID
+association SHALL NOT count as membership, and a directory role
+label SHALL NOT be the priority mark.
 
 #### Scenario: Member and unidentified client share a busy link
 
@@ -46,6 +54,13 @@ membership, and a directory role label SHALL NOT be the priority mark.
 - THEN the plan allows it
 - AND the client is not given a route to every house address
 - AND the management plane stays closed
+
+#### Scenario: Committed policy does not close a published name
+
+- GIVEN a published `.mesh` name whose host is inside `10.42.0.0/16`
+- WHEN the plan is committed
+- THEN `10.42.0.0/16` is not on the policy's closed list
+- AND the policy records `no_blanket_route` for that prefix
 
 #### Scenario: Association is not membership
 

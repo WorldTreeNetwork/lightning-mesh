@@ -10,9 +10,13 @@ not authority for this contract.
 The plan puts every client flow in one class.
 
 - **Published service.** A box on a node's LAN publishes a `.mesh`
-  name. Every client on the SSID may open that name. The plan does
-  not hand the client a route to every address in `10.42.0.0/16` or
-  `10.254.0.0/16`. The management plane stays closed: overlay
+  name. It is a destination, not a client class. Every client on the
+  SSID may open that name. The plan does not hand the client a route
+  to every address in `10.42.0.0/16` or `10.254.0.0/16`. The committed
+  policy records `10.42.0.0/16` as `no_blanket_route`, not as
+  `closed`, because that prefix also holds published hosts and the
+  client's gateway. Exceptions for individual published names are a
+  later apply slice. The management plane stays closed: overlay
   `10.254.0.0/16`, WAN SSH, and the recovery address.
 - **Member.** The client holds a verified IdentiKey membership in a
   guild or group. When the link is busy, member flows are scheduled
@@ -24,9 +28,12 @@ The plan puts every client flow in one class.
   published names at best effort. Creating an identity is not
   required.
 
-Priority is a schedule order, not a reservation. On one radio a busy
-unidentified client still uses airtime. A floor under member
-throughput would be a rate cap, and this change refuses that cap.
+Priority is a schedule order, not a reservation. Member-ahead
+SHALL NOT starve unidentified flows, and it SHALL NOT reserve a
+floor of member throughput. Either floor would be a rate cap. This
+change refuses that cap. The scheduler that enforces the
+unidentified floor is later (Cake versus WMM stays not owed). On
+one radio a busy unidentified client still uses airtime.
 
 ## What a plan is
 

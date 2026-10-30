@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 /// Overlay, WAN SSH, and the recovery address. Closed to client traffic.
+/// `10.42.0.0/16` is `no_blanket_route`, not closed: that prefix holds
+/// published hosts and the client's gateway.
 pub const OVERLAY_PREFIX: &str = "10.254.0.0/16";
 pub const HOUSE_ROUTE_PREFIX: &str = "10.42.0.0/16";
 pub const RECOVERY_ADDRESS: &str = "192.168.1.1";
@@ -280,7 +282,7 @@ fn render_policy(ssid: &str) -> String {
          \toption schedule 'member-ahead'\n\
          \toption rate_cap 'none'\n\
          \tlist closed '{OVERLAY_PREFIX}'\n\
-         \tlist closed '{HOUSE_ROUTE_PREFIX}'\n\
+         \toption no_blanket_route '{HOUSE_ROUTE_PREFIX}'\n\
          \tlist closed '{RECOVERY_ADDRESS}'\n\
          \toption wan_ssh 'closed'\n"
     )
@@ -418,6 +420,9 @@ mod tests {
         assert!(policy.contains("option schedule 'member-ahead'"));
         assert!(policy.contains("option rate_cap 'none'"));
         assert!(!policy.contains("wifi-iface"));
+        assert!(!policy.contains(&format!("list closed '{HOUSE_ROUTE_PREFIX}'")));
+        assert!(policy.contains(&format!("option no_blanket_route '{HOUSE_ROUTE_PREFIX}'")));
+        assert!(policy.contains(&format!("list closed '{OVERLAY_PREFIX}'")));
     }
 
     struct FakeClassAdapter;

@@ -18,7 +18,10 @@ by a `.mesh` name.
 - Three classes on that SSID: a published service, a member, and an
   unidentified client.
 - When the link is busy, member flows are scheduled ahead of
-  unidentified flows. No rate cap.
+  unidentified flows. That order does not starve unidentified
+  flows and does not set a rate cap.
+- `10.42.0.0/16` is recorded as `no_blanket_route`, not closed.
+  Published-name exceptions inside it wait on a later apply slice.
 - A published `.mesh` name stays reachable from every client.
   Clients do not gain a route to every house address. The management
   plane stays closed.
