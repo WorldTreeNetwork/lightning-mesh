@@ -36,7 +36,8 @@ remains the management plane.
 
 Lightning Admin also hosts owner-drawn `canvas-*` overlays whose wells
 show allowlisted host stdout. The first source is macOS `/sbin/ifconfig`
-with no extra args. `scan_link_local` remains the neighbor list; the
+with no extra args, a 5 second timeout, and a 65536 byte capture cap.
+`scan_link_local` remains the neighbor list; the
 well is a raw transcript, not a second parser. One canvas now; source
 swap (`add-view-swap`) and a crystal-grid of many overlays
 (`add-crystal-grid`) are later. Living spec:
