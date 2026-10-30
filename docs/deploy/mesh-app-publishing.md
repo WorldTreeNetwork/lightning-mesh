@@ -19,6 +19,22 @@ Services panel.
 User-facing, step-by-step version of this page:
 [`docs-web/content/join/publish/01-publish-a-service.md`](../../docs-web/content/join/publish/01-publish-a-service.md).
 
+## HTTPS names
+
+Walk-up stays `http://hello.mesh`. Trusted names are key-qualified:
+`a-<label>.<mesh-label>.mesh.worldtree.network` for apps and
+`n-<label>.<mesh-label>.mesh.worldtree.network` for a router front desk.
+A house may use its own zone. The TLS private key stays on the host;
+there is no shared or wildcard key. `.mesh` names remain the friendly
+discovery names, and a browser warning on a `.mesh` HTTPS address is still
+expected.
+
+When a certificate record is published, Services can show remaining HTTPS
+days and the states `ok`, `due`, `failing`, and `expired`. An expired name
+is not offered as a valid link. This does not establish production Let's
+Encrypt or fleet HTTPS deployment. The aarch64 RAM, flash, and handshake
+measurement has not been done.
+
 ## Lane 1 — operator publish (works today)
 
 ### How it works

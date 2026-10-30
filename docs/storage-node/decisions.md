@@ -85,7 +85,7 @@ Lightning Admin is the first hard-custody signer.
 - The build order puts HTTPS after signed records and owner claim.
 
 Change: [`add-https-aliases`](../../openspec/changes/add-https-aliases/proposal.md)
-(PENDING), bead `mjolnir-mesh-b6j.1`. It supersedes the direct
+(ACTIVE BUILD), bead `mjolnir-mesh-b6j.1`. It supersedes the direct
 lease-to-certificate idea in `mjolnir-mesh-3fg`.
 
 ## D1 outcome

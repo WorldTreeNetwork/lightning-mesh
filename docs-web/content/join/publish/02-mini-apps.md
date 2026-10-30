@@ -21,8 +21,11 @@ visitor is without ever seeing the private key.
 
 > **Status: built** in current hello.mesh (`AppsPanel`, `GET /api/apps`,
 > identity bridge). Older nodes have no Apps section — the marker is still
-> valid on the wire. Trusted HTTPS names (no certificate warning) are
-> **not** part of this page.
+> valid on the wire. Trusted HTTPS names are key-qualified:
+> `a-<label>.<mesh-label>.mesh.worldtree.network` for apps and
+> `n-<label>.<mesh-label>.mesh.worldtree.network` for a router front desk;
+> a house may use its own zone. Fleet trusted HTTPS deployment is not
+> established; the visitor walk-up path stays `http://hello.mesh`.
 
 ## What visitors see
 

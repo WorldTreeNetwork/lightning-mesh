@@ -16,7 +16,7 @@ this change owes once activated.
 - [ ] RAM, flash and handshake measured on aarch64 fleet hardware
 - [x] hello.mesh Services renders `https_names` (ok, due, failing, expired; no valid link when expired)
 - [x] meshd fills `https_names` from installed certificate records (`var/run/mjolnir/https-names.json`)
-- [ ] Docs: `docs-web/content/join` (services and HTTPS), `docs/deploy/mesh-app-publishing.md`, storage-node D4 marked decided
+- [x] Docs: `docs-web/content/join` (services and HTTPS), `docs/deploy/mesh-app-publishing.md`, storage-node D4 marked decided
 - [x] Advise send-back: reconcile `proposal.md` ownership of HTTPS resolution records and specify the versioned, canonical owner-signed AliasTable record plus conflict/removal behavior and verification vectors
 - [x] Advise send-back: distinguish label owner/node authorization keys from host-local TLS CSR keys, and make 80-bit label collisions fail closed end-to-end with negative vectors
 - [x] Advise send-back: pin the byte-exact issuance-authorization encoding, normalized identifiers, signature envelope/domain separation, and golden/malformed/wrong-CSR vectors

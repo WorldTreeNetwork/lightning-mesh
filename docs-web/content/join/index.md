@@ -66,7 +66,7 @@ promise that every box in a mixed fleet has been updated.
 | IdentiKey with a 24-word recovery phrase | Deleting your identity from a mesh |
 | Sign-in from another tab (`/assert`) **and** from an Apps card | Reviewing or revoking remembered app approvals (clear site data) |
 | `.mesh` names, operator publish, key-owned name API | Claiming a pretty name from the hello.mesh UI |
-| **Apps shelf** on hello.mesh (`app=v1` + manifest) | Trusted HTTPS names without a certificate warning (in progress) |
+| **Apps shelf** on hello.mesh (`app=v1` + manifest) | Key-qualified trusted HTTPS names; fleet deployment is not established. Walk-up stays `http://hello.mesh` |
 | Adding routers, automatic internet sharing | A membership gate; **automatic** peering (you still paste node ids) |
 
 ## Reading this guide as an agent

@@ -56,13 +56,26 @@ a time.
 
 **If you see a certificate warning:** apps on `https://…mesh` addresses use
 certificates the mesh made itself, because `.mesh` isn't a public internet
-name. Your browser can't vouch for them, so it warns.
+name. These remain friendly discovery names; a browser warning on a `.mesh`
+HTTPS address is still expected.
+
 - **Do:** check the address is the one you meant, then continue past the
   warning (for example "Show details → visit this website" on Safari, or
   "Advanced → Proceed" on Chrome).
 - Only do this for `.mesh` addresses you reached from hello.mesh.
-- Camera, microphone, and "install this app" often stay blocked until
-  trusted HTTPS names ship. That is a browser rule, not a broken mesh.
+
+Trusted HTTPS names are key-qualified:
+`a-<label>.<mesh-label>.mesh.worldtree.network` for apps and
+`n-<label>.<mesh-label>.mesh.worldtree.network` for a router front desk;
+a house may use its own zone. The `.mesh` warning guidance above applies
+to `.mesh` addresses. Fleet trusted HTTPS deployment is not established;
+walk-up stays `http://hello.mesh`. Camera, microphone, and "install this
+app" often stay blocked on that address. That is a browser rule, not a
+broken mesh.
+
+When a certificate record is published, Services can show remaining HTTPS
+days and `ok`, `due`, `failing`, or `expired`. An expired name is not offered
+as a valid link.
 
 **If a name doesn't open:** services can go offline. An entry published by
 an app disappears from the list within about 90 seconds after it stops
