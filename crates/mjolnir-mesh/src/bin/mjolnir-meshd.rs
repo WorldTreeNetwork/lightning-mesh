@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use ed25519_dalek::SigningKey;
 use ipnet::{IpNet, Ipv4Net};
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::Connection;
@@ -35,6 +36,8 @@ use mjolnir_mesh::babel::{
     write_atomic_if_changed,
 };
 use mjolnir_mesh::bootstrap::rank_bootstrap_candidates;
+use mjolnir_mesh::capability_beacon::CapabilityDescriptor;
+use mjolnir_mesh::capability_transport::{CAPABILITY_ALPN, handshake_response_frame};
 use mjolnir_mesh::https_status::{HttpsName, load_https_names};
 use mjolnir_mesh::tun::{
     DatagramConn, EncapError, Fib, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel, UnicastRouter,
@@ -1105,7 +1108,12 @@ async fn run_mesh(
     // same endpoint alongside the TUN data plane.
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-    // Accept inbound tunnels (peers with a higher node id dial in) and gossip.
+    // The capability descriptor and existing node signing key are not installed
+    // yet. Keep discovery fail-closed; never generate a second node identity.
+    let capability = CapabilityHandler::default();
+
+    // Accept inbound tunnels (peers with a higher node id dial in), gossip,
+    // and capability handshakes (which confer no membership).
     // In overlay mode the TUN_ALPN handler serves connections into the connection
     // manager; otherwise it brings up a per-peer tunnel. Both spawn the same
     // Router type (handlers are boxed via ProtocolHandler).
@@ -1119,6 +1127,7 @@ async fn run_mesh(
                 },
             )
             .accept(iroh_gossip::ALPN, gossip.clone())
+            .accept(CAPABILITY_ALPN, capability.clone())
             .spawn()
     } else {
         Router::builder(endpoint.clone())
@@ -1130,6 +1139,7 @@ async fn run_mesh(
                 },
             )
             .accept(iroh_gossip::ALPN, gossip.clone())
+            .accept(CAPABILITY_ALPN, capability)
             .spawn()
     };
 
@@ -8007,6 +8017,45 @@ fn spawn_path_logger(conn: Connection, peer: EndpointId) {
 /// TUN fd (so the kernel removes the interface).
 fn drop_tunnel(tunnel: Tunnel) {
     drop(tunnel);
+}
+
+/// Discovery-only proof of possession. Installation must supply a descriptor
+/// and the existing endpoint's signing key together. Default is uninstalled;
+/// accepting this ALPN never authorizes a tunnel, gossip write, or membership.
+#[derive(Clone, Debug, Default)]
+struct CapabilityHandler {
+    installed: Option<(CapabilityDescriptor, SigningKey)>,
+}
+
+impl ProtocolHandler for CapabilityHandler {
+    async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+        let Some((descriptor, node_key)) = &self.installed else {
+            conn.close(0u32.into(), b"capability descriptor not installed");
+            return Ok(());
+        };
+
+        let exchange = async {
+            let (mut send, mut recv) = conn.accept_bi().await?;
+            let mut nonce = [0; 32];
+            recv.read_exact(&mut nonce).await?;
+            let frame = handshake_response_frame(descriptor, &nonce, node_key)?;
+            send.write_all(&frame).await?;
+            send.finish()?;
+            // Wait for acknowledgement before closing the connection so the
+            // response cannot be discarded by an immediate QUIC close.
+            send.stopped().await?;
+            Ok::<_, anyhow::Error>(())
+        };
+        match tokio::time::timeout(Duration::from_secs(10), exchange).await {
+            Ok(Ok(())) => conn.close(0u32.into(), b"capability handshake complete"),
+            Ok(Err(error)) => {
+                debug!(%error, "capability handshake failed");
+                conn.close(0u32.into(), b"invalid capability handshake");
+            }
+            Err(_) => conn.close(0u32.into(), b"capability handshake timed out"),
+        }
+        Ok(())
+    }
 }
 
 /// iroh protocol handler that brings up a per-peer TUN tunnel on each accepted

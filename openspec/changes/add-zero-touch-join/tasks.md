@@ -8,7 +8,7 @@ These boxes mirror what this change owes once activated.
 - [x] `m4a`: `install-node.sh` / `update-fleet.sh` render full peer sets from `fleet-nodes.conf` onto the target; never from `iw station dump`
 - [x] `e5u` library: signed capability beacon (protocol generation, node id, channel plan, bootstrap) verifies only as a locator; nonce-bound handshake primitives reject replay and grant no membership (`cargo test -p mjolnir-mesh capability_beacon`: 8 passed)
 - [x] `e5u` byte-stream transport: pin `mjolnir/capability-beacon/1`; scanner sends a fresh 32-byte nonce; node sends one bounded, length-prefixed `sign_handshake` envelope; `verify_handshake` rejects replay and returns only a locator (`cargo test -p mjolnir-mesh capability_transport`)
-- [ ] `e5u` live endpoint: meshd has not registered `mjolnir/capability-beacon/1` on the running iroh endpoint; wire the byte-stream handshake into that ALPN
+- [x] `e5u` live endpoint: meshd registers `mjolnir/capability-beacon/1` on both overlay and non-overlay iroh routers; the byte-stream handler defaults to uninstalled and closes without signing; an installed handshake grants no membership (`cargo test -p mjolnir-mesh capability_transport`: 9 passed)
 - [ ] `fyby.2`: unknown id after association has no babel adjacency, no production CRDT writes, no subnet claim merge, no overlay SSH
 - [ ] `661`: babel neighbor/session authenticated with freshness; forged default, replayed update, and forged withdrawal fail closed (property-red)
 - [ ] `fyby.3`: unauthorized identities cannot merge subnet claims or production CRDT lane writes

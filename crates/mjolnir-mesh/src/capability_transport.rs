@@ -58,12 +58,25 @@ pub fn respond_to_challenge<R: Read, W: Write>(
 ) -> Result<(), CapabilityTransportError> {
     let mut nonce = [0; 32];
     reader.read_exact(&mut nonce)?;
-    let envelope = sign_handshake(descriptor, &nonce, node_key)?;
-    validate_envelope_length(envelope.len())?;
-    writer.write_all(&(envelope.len() as u32).to_be_bytes())?;
-    writer.write_all(envelope.as_bytes())?;
+    writer.write_all(&handshake_response_frame(descriptor, &nonce, node_key)?)?;
     writer.flush()?;
     Ok(())
+}
+
+/// Build the same bounded response frame as [`respond_to_challenge`] for
+/// transports that own their asynchronous stream I/O. This proves possession
+/// of the node key only; it does not grant membership.
+pub fn handshake_response_frame(
+    descriptor: &CapabilityDescriptor,
+    nonce: &[u8; 32],
+    node_key: &SigningKey,
+) -> Result<Vec<u8>, CapabilityTransportError> {
+    let envelope = sign_handshake(descriptor, nonce, node_key)?;
+    validate_envelope_length(envelope.len())?;
+    let mut frame = Vec::with_capacity(4 + envelope.len());
+    frame.extend_from_slice(&(envelope.len() as u32).to_be_bytes());
+    frame.extend_from_slice(envelope.as_bytes());
+    Ok(frame)
 }
 
 /// Read one bounded frame and delegate signature, locator, nonce, and replay
@@ -168,8 +181,18 @@ mod tests {
     }
 
     #[test]
+    fn response_frame_matches_stream_response() {
+        let nonce = [0xa5; 32];
+        let frame = handshake_response_frame(&descriptor(), &nonce, &node()).unwrap();
+        assert_eq!(frame, response(nonce));
+        let envelope = sign_handshake(&descriptor(), &nonce, &node()).unwrap();
+        assert_eq!(&frame[..4], &(envelope.len() as u32).to_be_bytes());
+        assert_eq!(&frame[4..], envelope.as_bytes());
+    }
+
+    #[test]
     fn replay_and_response_to_an_old_nonce_fail() {
-        let frame = response([1; 32]);
+        let frame = handshake_response_frame(&descriptor(), &[1; 32], &node()).unwrap();
         let mut challenge = write_challenge(&mut Vec::new(), locator(), [1; 32]).unwrap();
         read_response(&mut frame.as_slice(), &mut challenge).unwrap();
         assert!(matches!(
