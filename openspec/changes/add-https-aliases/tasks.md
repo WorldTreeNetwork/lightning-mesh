@@ -11,7 +11,7 @@ this change owes once activated.
 - [x] meshd: forward and rebind-exempt only `<mesh-label>.<zone>`; `AliasTable` answering from verified owner-signed records; negative tests (forged record, parent zone)
 - [x] Issuance authorization format (`mjolnir-https-issuance:v1`), signer side and verifier side, with replay, expiry and wrong-key vectors
 - [x] DNS adapter (replaceable; runs for `mesh.worldtree.network` and for bring-your-own zones)
-- [ ] ACME client on app hosts and routers (DNS-01, `classic` profile, ARI, gateway courier)
+- [x] ACME client on app hosts and routers (DNS-01, `classic` profile, ARI, gateway courier)
 - [ ] mjolnir-hello TLS on router `n-` origin; cert key in `/etc/mjolnir/` kept across sysupgrade; RAM, flash and handshake measured on aarch64 fleet hardware
 - [ ] Directory projection of cert expiry and renewal state; hello.mesh Services display
 - [ ] Docs: `docs-web/content/join` (services and HTTPS), `docs/deploy/mesh-app-publishing.md`, storage-node D4 marked decided
