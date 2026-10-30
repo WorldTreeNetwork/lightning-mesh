@@ -11,6 +11,7 @@
 
   const NODE_ID = /^[0-9a-fA-F]{64}$/;
 
+  let task = $state<'rename' | 'assign' | null>(null);
   let localName = $state('');
   let nodeName = $state('');
   let nodeId = $state('');
@@ -36,22 +37,26 @@
 </script>
 
 <div class="editors">
-  <section>
-    <h3>Local name</h3>
+  <div class="tasks">
+    <button type="button" class:on={task === 'rename'} aria-pressed={task === 'rename'} onclick={() => (task = task === 'rename' ? null : 'rename')}>
+      Rename
+    </button>
+    <button type="button" class:on={task === 'assign'} aria-pressed={task === 'assign'} onclick={() => (task = task === 'assign' ? null : 'assign')}>
+      Assign node
+    </button>
+  </div>
+
+  {#if task === 'rename'}
     <form onsubmit={(e) => { e.preventDefault(); saveName(); }}>
       <label>
         <span>Display name</span>
         <input type="text" autocomplete="off" spellcheck="false" bind:value={localName} />
       </label>
-      <p class="helper">Saved on this computer only. The guild log has no rename.</p>
       <div class="actions">
         <button type="submit" disabled={!canSaveName}>Save name</button>
       </div>
     </form>
-  </section>
-
-  <section>
-    <h3>Assign a node</h3>
+  {:else if task === 'assign'}
     <form onsubmit={(e) => { e.preventDefault(); assign(); }}>
       <label>
         <span>Node name</span>
@@ -69,16 +74,11 @@
           bind:value={nodeId}
         />
       </label>
-      <p class="helper">
-        Records this router's existing node id on the guild, then opens an access-node guild.
-        Mock only: nothing is signed.
-      </p>
       <div class="actions">
         <button type="submit" disabled={!canAssign}>Assign</button>
       </div>
     </form>
-  </section>
-
+  {/if}
 </div>
 
 <style>
@@ -86,21 +86,22 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    padding: 12px 14px;
     font-family: var(--font);
     color: var(--text);
-  }
-
-  section {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 12px 14px;
   }
 
-  h3 {
-    margin: 0 0 10px;
-    font-size: 13px;
-    font-weight: 600;
+  .tasks {
+    display: flex;
+    gap: 8px;
+  }
+
+  button.on {
+    border-color: var(--accent);
+    background: var(--accent-soft);
   }
 
   form {
@@ -138,12 +139,6 @@
 
   input.mono {
     font-family: var(--mono);
-  }
-
-  .helper {
-    margin: 0;
-    font-size: 12px;
-    color: var(--muted);
   }
 
   .actions {

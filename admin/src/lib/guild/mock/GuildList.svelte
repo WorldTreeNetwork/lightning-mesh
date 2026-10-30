@@ -8,7 +8,6 @@
 	}: { guilds: GuildRecord[]; selectedId: string; onSelect: (id: string) => void } = $props();
 
 	const houses = $derived(guilds.filter((g) => g.outer === null));
-	const nested = $derived(guilds.filter((g) => g.outer !== null));
 </script>
 
 <section class="list">
@@ -29,32 +28,10 @@
 				<span>you {guild.you}</span>
 				<span>{guild.nodes.length} {guild.nodes.length === 1 ? 'node' : 'nodes'}</span>
 			</span>
-			<code class="addr">{guild.id}</code>
 		</button>
 	{:else}
 		<div class="empty">none</div>
 	{/each}
-	{#if nested.length}
-		<div class="label">Nested</div>
-		{#each nested as guild (guild.id)}
-			<button
-				type="button"
-				class="row"
-				class:on={guild.id === selectedId}
-				aria-pressed={guild.id === selectedId}
-				onclick={() => onSelect(guild.id)}
-			>
-				<span class="top">
-					<span class="name">{guild.name}</span>
-					<span class="kind">{guild.profile}</span>
-				</span>
-				<span class="meta">
-					<span>you {guild.you}</span>
-				</span>
-				<code class="addr">{guild.id}</code>
-			</button>
-		{/each}
-	{/if}
 </section>
 
 <style>
@@ -108,14 +85,6 @@
 	.meta {
 		color: var(--muted);
 		font-size: 12px;
-	}
-
-	.addr {
-		font-family: var(--mono);
-		font-size: 12px;
-		overflow-wrap: anywhere;
-		user-select: text;
-		cursor: text;
 	}
 
 	.empty {
