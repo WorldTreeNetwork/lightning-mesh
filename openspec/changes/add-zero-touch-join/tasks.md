@@ -6,7 +6,8 @@ These boxes mirror what this change owes once activated.
 - [x] Human activation (banner to ACTIVE BUILD) — Duke said "activate all" 2026-09-16
 - [x] Advise by an independent non-Grok reader (Fable 5.1); accept before act — r1–r3 send-back, r4 **accept** (`reviews/2026-09-16-advise-r4.md`, READER fable-5.1-arch-review)
 - [x] `m4a`: `install-node.sh` / `update-fleet.sh` render full peer sets from `fleet-nodes.conf` onto the target; never from `iw station dump`
-- [ ] `e5u`: signed capability beacon (protocol generation, node id, channel plan, bootstrap); nonce-bound iroh handshake; replay of a captured beacon does not authorize
+- [x] `e5u` library: signed capability beacon (protocol generation, node id, channel plan, bootstrap) verifies only as a locator; nonce-bound handshake primitives reject replay and grant no membership (`cargo test -p mjolnir-mesh capability_beacon`: 8 passed)
+- [ ] `e5u` transport: live iroh ALPN carrying the nonce-bound capability handshake; scanner supplies a fresh nonce; no membership grant from the handshake alone
 - [ ] `fyby.2`: unknown id after association has no babel adjacency, no production CRDT writes, no subnet claim merge, no overlay SSH
 - [ ] `661`: babel neighbor/session authenticated with freshness; forged default, replayed update, and forged withdrawal fail closed (property-red)
 - [ ] `fyby.3`: unauthorized identities cannot merge subnet claims or production CRDT lane writes
