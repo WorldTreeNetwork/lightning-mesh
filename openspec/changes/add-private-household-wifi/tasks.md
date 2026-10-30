@@ -6,7 +6,7 @@ Decision 2026-10-22: one SSID, three classes, priority only. The
 guest-SSID rounds through r7 are superseded. Their reviews stay on
 disk and are not authority.
 
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation (r9 accept, 2026-10-30; contract `openspec/changes/add-private-household-wifi/specs/private-household-wifi/spec.md`)
 - [x] R8-1 (advise 2026-10-30): option (b). `10.42.0.0/16` is `no_blanket_route`, not `closed`. Published-name exceptions stay a later apply slice. Committed-policy test asserts the prefix is not closed.
 - [x] R8-2 (advise 2026-10-30): client flows are member or unidentified. A published service is a destination.
 - [x] R8-3 (advise 2026-10-30): member-ahead SHALL NOT starve unidentified flows. The scheduler stays not owed.
