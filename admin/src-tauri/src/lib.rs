@@ -9,7 +9,7 @@ pub mod net;
 
 use commands::claim::{claim_owner_key, claim_prove, claim_request};
 use commands::discovery::scan_link_local;
-use commands::guild::sign_guild_op;
+use commands::guild::{sign_guild_op, guild_snapshot, guild_rename, guild_assign};
 use commands::network_name::apply_network_name;
 
 fn init_logging() {
@@ -34,6 +34,9 @@ pub fn run() {
             scan_link_local,
             apply_network_name,
             sign_guild_op,
+            guild_snapshot,
+            guild_rename,
+            guild_assign,
             claim_owner_key,
             claim_request,
             claim_prove

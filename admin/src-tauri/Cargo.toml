@@ -5,6 +5,7 @@ description = "Operator desktop for Lightning Mesh"
 authors = ["World Tree Network Foundation"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
+default-run = "lightning-admin"
 
 # Nested under lightning-mesh but not a workspace member of crates/*.
 [workspace]

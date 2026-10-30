@@ -50,6 +50,14 @@ pub fn inspect(config: &Path) -> Result<Value, String> {
         let id = hex32(&hash);
         let op = &signed.op;
         apply_op(&mut spaces, &id, op).map_err(|e| format!("op {} ({}): {e}", n + 1, op.kind))?;
+        let body = op_map(op)?;
+        let about = match op.kind.as_str() {
+            "keyspace.join" => text_or_bytes(&body, "keyspace")
+                .filter(|keyspace| !keyspace.is_empty())
+                .unwrap_or_else(|| id.clone()),
+            "keyspace.nest" => text_or_bytes(&body, "outer").unwrap_or_default(),
+            _ => text_or_bytes(&body, "keyspace").unwrap_or_default(),
+        };
         op_rows.push(json!({
             "n": n + 1,
             "kind": op.kind,
@@ -57,6 +65,7 @@ pub fn inspect(config: &Path) -> Result<Value, String> {
             "hex": id,
             "actor": encode_base58(&op.actor),
             "hlc": [op.hlc.l, op.hlc.c],
+            "about": about,
         }));
     }
 
@@ -445,6 +454,14 @@ mod tests {
             "a7a8841b13de5fbf20daec51318bad40dffc4425853edda6e9defc59af374037"
         );
         assert!(creek["nodes"][0]["accessNodeKeyspaceId"].as_str().unwrap().len() == 64);
+        let creek_hex = creek["keyspaceId"].as_str().unwrap();
+        let ops = view["ops"].as_array().unwrap();
+        assert!(ops.iter().any(|op| {
+            op["kind"] == "keyspace.assign-node" && op["about"] == creek_hex
+        }));
+        assert!(ops.iter().any(|op| op["kind"] == "keyspace.nest" && op["about"] == creek_hex));
+        let join = ops.iter().find(|op| op["n"] == 1).unwrap();
+        assert_eq!(join["about"], join["hex"]);
         let resolved = resolve_guild(&dir, "straw").unwrap();
         assert_eq!(resolved, creek["keyspaceId"].as_str().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
