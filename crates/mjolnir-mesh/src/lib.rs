@@ -27,6 +27,7 @@ pub mod app_marker;
 pub mod babel;
 pub mod bootstrap;
 pub mod capability_beacon;
+pub mod capability_transport;
 pub mod claim_cooldown;
 pub mod crdt;
 #[cfg(all(test, feature = "daemon"))]
