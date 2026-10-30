@@ -2,8 +2,6 @@ export type GuildRole = 'admin' | 'member' | 'absent' | 'no-seed';
 
 export interface GuildActor {
   id: string;
-  held: string;
-  basis: string;
 }
 
 export interface GuildMember {

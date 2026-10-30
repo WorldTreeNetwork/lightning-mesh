@@ -7,14 +7,6 @@ const ACCESS_NODE_ID = 'GmsF7ufeeu15D5tgVLNS6ExAhEprLgq15LpGhQvga5C9';
 
 export const mockActor: GuildActor = {
   id: ACTOR_ID,
-  held: 'local log, signatures verified',
-  basis:
-    'This id is the base58 public half of an Ed25519 actor key that Lightning Admin ' +
-    'created in ~/.config/lightning-admin/actor-seed. It signs your guild ops. It is ' +
-    'not an SSH key: SSH to a router uses a separate key installed when the node was ' +
-    'flashed. The ops use the identikey-log codec (identikey-keyspace-v1, kinds ' +
-    'keyspace.*). There is no identikey identity document and no XID for this actor. ' +
-    'Wraps are empty, so there is no guild key yet.',
 };
 
 export const mockGuilds: GuildRecord[] = [

@@ -79,13 +79,6 @@
     </form>
   </section>
 
-  <section class="note">
-    <p>
-      Change replaces the roster. Nest opens the access-node guild. Those stay on the log. This
-      mock does not sign them. Identikey here is the log codec, not an identity document. This key
-      is not the SSH key.
-    </p>
-  </section>
 </div>
 
 <style>
@@ -178,14 +171,4 @@
     cursor: default;
   }
 
-  .note {
-    background: var(--surface-2);
-  }
-
-  .note p {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--muted);
-  }
 </style>

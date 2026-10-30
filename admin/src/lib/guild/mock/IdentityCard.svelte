@@ -10,8 +10,6 @@
 		<span class="you">you</span>
 	</div>
 	<code class="addr">{actor.id}</code>
-	<div class="basis">{actor.basis}</div>
-	<div class="held">held: {actor.held}</div>
 </section>
 
 <style>
@@ -49,14 +47,5 @@
 		font-size: 12px;
 		overflow-wrap: anywhere;
 		user-select: all;
-	}
-
-	.basis {
-		font-size: 13px;
-	}
-
-	.held {
-		color: var(--muted);
-		font-size: 12px;
 	}
 </style>
