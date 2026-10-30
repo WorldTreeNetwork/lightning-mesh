@@ -35,6 +35,7 @@ use mjolnir_mesh::babel::{
     write_atomic_if_changed,
 };
 use mjolnir_mesh::bootstrap::rank_bootstrap_candidates;
+use mjolnir_mesh::https_status::{HttpsName, load_https_names};
 use mjolnir_mesh::tun::{
     DatagramConn, EncapError, Fib, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel, UnicastRouter,
     classify, spawn_overlay_tun, spawn_tunnel,
@@ -3589,6 +3590,7 @@ fn build_directory_snapshot_v2(
     coordinate_book: &CoordinateBook,
     self_id: &str,
     backhaul_ip: Ipv4Addr,
+    https_names: Vec<HttpsName>,
 ) -> DirectorySnapshot {
     let node = DirectoryNode {
         node_id: self_id.to_string(),
@@ -3650,7 +3652,7 @@ fn build_directory_snapshot_v2(
         neighbors,
         identities,
         services,
-        https_names: Vec::new(),
+        https_names,
         lost_names,
         // The live-gateway set (5lw Lever 2) is carried by the FILE projection
         // (`directory.json`, what the front desk reads). The control-API path
@@ -3751,6 +3753,13 @@ fn write_directory_projection(
         &coordinate_snapshot,
         self_id,
         backhaul_ip,
+        load_https_names(
+            Path::new("/"),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        ),
     );
     stamp_node_link_locals(&mut snapshot.node);
     snapshot.gateways = directory_gateways(&gateways);
@@ -6120,6 +6129,13 @@ fn control_api_handle_directory(
         &coordinate_snapshot,
         self_id,
         backhaul_ip,
+        load_https_names(
+            Path::new("/"),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        ),
     );
     stamp_node_link_locals(&mut snapshot.node);
     match serde_json::to_vec(&snapshot) {
@@ -10524,6 +10540,7 @@ config meshd 'meshd'
             &CoordinateBook::new(),
             "self",
             "10.254.1.1".parse().unwrap(),
+            Vec::new(),
         );
         assert_eq!(snapshot.services.len(), 1);
         let s = &snapshot.services[0];
