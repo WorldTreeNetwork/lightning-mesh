@@ -9,7 +9,7 @@ this change owes once activated.
 - [x] Resolve advise open questions: 80-bit RFC 4648 base32; resolution records in this change (not ai0.9); tiny_http+rustls/ring measured on aarch64; WTN best-effort adapter for the project zone (`design.md` Pins)
 - [x] Label function shared by meshd, mjolnir-hello and hello-mesh-web, with test vectors
 - [x] meshd: forward and rebind-exempt only `<mesh-label>.<zone>`; `AliasTable` answering from verified owner-signed records; negative tests (forged record, parent zone)
-- [ ] Issuance authorization format (`mjolnir-https-issuance:v1`), signer side and verifier side, with replay, expiry and wrong-key vectors
+- [x] Issuance authorization format (`mjolnir-https-issuance:v1`), signer side and verifier side, with replay, expiry and wrong-key vectors
 - [ ] DNS adapter (replaceable; runs for `mesh.worldtree.network` and for bring-your-own zones)
 - [ ] ACME client on app hosts and routers (DNS-01, `classic` profile, ARI, gateway courier)
 - [ ] mjolnir-hello TLS on router `n-` origin; cert key in `/etc/mjolnir/` kept across sysupgrade; RAM, flash and handshake measured on aarch64 fleet hardware
