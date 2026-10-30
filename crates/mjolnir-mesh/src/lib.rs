@@ -34,6 +34,7 @@ mod dns_conformance_tests;
 pub mod dns_responder;
 pub mod heal;
 pub mod https_alias;
+pub mod https_dns;
 pub mod https_issuance;
 mod https_label;
 pub mod led;
