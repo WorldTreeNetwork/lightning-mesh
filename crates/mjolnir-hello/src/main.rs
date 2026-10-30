@@ -21,6 +21,7 @@ mod config;
 mod guildspace;
 mod portal;
 mod routes;
+mod tls;
 
 use clap::Parser;
 use std::sync::Arc;
@@ -46,61 +47,103 @@ fn main() {
     });
     info!(bind = %config.bind, "mjolnir-hello listening");
 
-    for mut request in server.incoming_requests() {
-        let method = request.method().as_str().to_string();
-        let url = request.url().to_string();
-        // Which client is asking — the key the captive-portal pass-through is
-        // recorded against (bead a0u). Clients are on this node's own /24, so
-        // the peer address is the client; there is no proxy in front of us.
-        let client_ip = request.remote_addr().map(|addr| addr.ip());
-
-        let mut body = Vec::new();
-        if let Err(err) = request.as_reader().read_to_end(&mut body) {
-            tracing::warn!(%err, "failed to read request body");
+    // Share portal releases, challenges and caches across both origins.
+    let tls_listener = match tls::start(&config) {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::warn!(%err, "TLS listener disabled");
+            None
         }
-
-        let resp = route(
-            &method,
-            &url,
-            config.static_root.as_deref(),
-            &body,
-            &challenges,
-            &config.spool_dir,
-            &directory_cache,
-            &config.directory_file,
-            &radio_cache,
-            &config.radio_file,
-            &releases,
-            client_ip,
-        );
-
-        let content_type = Header::from_bytes(&b"Content-Type"[..], resp.content_type.as_bytes())
-            .expect("valid content-type header");
-
-        let mut response = Response::from_data(resp.body)
-            .with_status_code(resp.status)
-            .with_header(content_type);
-
-        // Cross-origin read access for the browser topology aggregator (ng9).
-        if resp.cors {
-            let cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
-                .expect("valid CORS header");
-            response.add_header(cors);
+    };
+    let serve = |server: Server, origin: Option<tls::Origin>| {
+        for request in server.incoming_requests() {
+            let request = match &origin {
+                Some(origin) => match origin.check_request(request) {
+                    Some(request) => request,
+                    None => continue,
+                },
+                None => request,
+            };
+            handle_request(
+                request,
+                &config,
+                &challenges,
+                &directory_cache,
+                &radio_cache,
+                &releases,
+            );
         }
-
-        // ncy.4: hello.mesh application HTML must not be framed by a foreign
-        // origin. Captive probes and `/api/*` leave this unset.
-        if resp.frame_ancestors_self {
-            let csp = Header::from_bytes(
-                &b"Content-Security-Policy"[..],
-                &b"frame-ancestors 'self'"[..],
-            )
-            .expect("valid CSP header");
-            response.add_header(csp);
+    };
+    std::thread::scope(|scope| {
+        if let Some((server, origin)) = tls_listener {
+            let serve = &serve;
+            scope.spawn(move || serve(server, Some(origin)));
         }
+        serve(server, None);
+    });
+}
 
-        if let Err(err) = request.respond(response) {
-            tracing::warn!(%err, "failed to respond to request");
-        }
+fn handle_request(
+    mut request: tiny_http::Request,
+    config: &Config,
+    challenges: &routes::ChallengeStore,
+    directory_cache: &DirectoryCache,
+    radio_cache: &RadioCache,
+    releases: &portal::PortalReleases,
+) {
+    let method = request.method().as_str().to_string();
+    let url = request.url().to_string();
+    // Which client is asking — the key the captive-portal pass-through is
+    // recorded against (bead a0u). Clients are on this node's own /24, so
+    // the peer address is the client; there is no proxy in front of us.
+    let client_ip = request.remote_addr().map(|addr| addr.ip());
+
+    let mut body = Vec::new();
+    if let Err(err) = request.as_reader().read_to_end(&mut body) {
+        tracing::warn!(%err, "failed to read request body");
+    }
+
+    let resp = route(
+        &method,
+        &url,
+        config.static_root.as_deref(),
+        &body,
+        challenges,
+        &config.spool_dir,
+        directory_cache,
+        &config.directory_file,
+        radio_cache,
+        &config.radio_file,
+        releases,
+        client_ip,
+    );
+
+    let content_type = Header::from_bytes(&b"Content-Type"[..], resp.content_type.as_bytes())
+        .expect("valid content-type header");
+
+    let mut response = Response::from_data(resp.body)
+        .with_status_code(resp.status)
+        .with_header(content_type);
+
+    // Cross-origin read access for the browser topology aggregator (ng9).
+    if resp.cors {
+        let cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
+            .expect("valid CORS header");
+        response.add_header(cors);
+    }
+
+    // ncy.4: hello.mesh application HTML must not be framed by a foreign
+    // origin. Captive probes and `/api/*` leave this unset.
+    if resp.frame_ancestors_self {
+        let csp = Header::from_bytes(
+            &b"Content-Security-Policy"[..],
+            &b"frame-ancestors 'self'"[..],
+        )
+        .expect("valid CSP header");
+        response.add_header(csp);
+    }
+
+    if let Err(err) = request.respond(response) {
+        tracing::warn!(%err, "failed to respond to request");
     }
 }

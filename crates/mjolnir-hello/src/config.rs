@@ -22,6 +22,23 @@ pub struct Config {
     #[arg(long, default_value = "127.0.0.1:8080")]
     pub bind: String,
 
+    /// Enable TLS with this PEM certificate chain; omit the value to use
+    /// /etc/mjolnir/hello.crt. TLS requires both certificate and key flags.
+    #[arg(long, num_args = 0..=1, default_missing_value = "/etc/mjolnir/hello.crt")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// PEM private key; omit the value to use /etc/mjolnir/hello.key.
+    #[arg(long, num_args = 0..=1, default_missing_value = "/etc/mjolnir/hello.key")]
+    pub tls_key: Option<PathBuf>,
+
+    /// TLS listening address (defaults to the --bind host on port 443).
+    #[arg(long)]
+    pub tls_bind: Option<String>,
+
+    /// The single n-<label> DNS name accepted by the TLS listener.
+    #[arg(long)]
+    pub tls_name: Option<String>,
+
     /// Path to the read-only directory projection that `mjolnir-meshd` writes
     /// (address book + subnet claims, and services once mjolnir-mesh-e21
     /// lands). Consumed by the S3 `/api/directory` and `/api/node` endpoints.

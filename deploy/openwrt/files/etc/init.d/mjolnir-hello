@@ -22,6 +22,7 @@ PROG=/usr/bin/mjolnir-hello
 
 start_service() {
 	local enabled lan_iface port directory_file spool_dir lan_ip bind
+	local tls_cert tls_key tls_name keep_path
 
 	config_load mjolnir
 	config_get_bool enabled hello enabled 0
@@ -31,6 +32,15 @@ start_service() {
 	config_get port           hello port           '80'
 	config_get directory_file hello directory_file '/var/run/mjolnir/directory.json'
 	config_get spool_dir      hello spool_dir       '/var/run/mjolnir/pending'
+	config_get tls_cert       hello tls_cert        '/etc/mjolnir/hello.crt'
+	config_get tls_key        hello tls_key         '/etc/mjolnir/hello.key'
+	config_get tls_name       hello tls_name        ''
+
+	# Keep host-local TLS material across sysupgrade; do not duplicate entries.
+	for keep_path in "$tls_cert" "$tls_key"; do
+		grep -qxF "$keep_path" /etc/sysupgrade.conf 2>/dev/null ||
+			printf '%s\n' "$keep_path" >> /etc/sysupgrade.conf
+	done
 
 	# Resolve the node's LAN gateway IP from the LAN logical interface (netifd),
 	# independent of .mesh resolution (a separate track, mjolnir-mesh-e21).
@@ -50,6 +60,9 @@ start_service() {
 	procd_append_param command --bind "$bind"
 	procd_append_param command --directory-file "$directory_file"
 	procd_append_param command --spool-dir "$spool_dir"
+	if [ -f "$tls_cert" ] && [ -f "$tls_key" ] && [ -n "$tls_name" ]; then
+		procd_append_param command --tls-cert "$tls_cert" --tls-key "$tls_key" --tls-name "$tls_name"
+	fi
 	procd_set_param respawn 3600 5 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1

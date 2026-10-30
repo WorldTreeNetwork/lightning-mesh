@@ -12,7 +12,8 @@ this change owes once activated.
 - [x] Issuance authorization format (`mjolnir-https-issuance:v1`), signer side and verifier side, with replay, expiry and wrong-key vectors
 - [x] DNS adapter (replaceable; runs for `mesh.worldtree.network` and for bring-your-own zones)
 - [x] ACME client on app hosts and routers (DNS-01, `classic` profile, ARI, gateway courier)
-- [ ] mjolnir-hello TLS on router `n-` origin; cert key in `/etc/mjolnir/` kept across sysupgrade; RAM, flash and handshake measured on aarch64 fleet hardware
+- [x] mjolnir-hello TLS on router `n-` origin; cert and key in `/etc/mjolnir/` kept across sysupgrade
+- [ ] RAM, flash and handshake measured on aarch64 fleet hardware
 - [ ] Directory projection of cert expiry and renewal state; hello.mesh Services display
 - [ ] Docs: `docs-web/content/join` (services and HTTPS), `docs/deploy/mesh-app-publishing.md`, storage-node D4 marked decided
 - [x] Advise send-back: reconcile `proposal.md` ownership of HTTPS resolution records and specify the versioned, canonical owner-signed AliasTable record plus conflict/removal behavior and verification vectors
