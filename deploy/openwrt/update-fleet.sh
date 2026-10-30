@@ -32,10 +32,11 @@ CONF="$(fleet_conf "$DIR")"
 
 INSTALL_ARGS=()
 ONLY=()
+STAGE_ONLY=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--wireless|--health-timeout|--pkg-cache) INSTALL_ARGS+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
-		--stage-only)                            INSTALL_ARGS+=("$1"); shift ;;
+		--stage-only)                            INSTALL_ARGS+=("$1"); STAGE_ONLY=1; shift ;;
 		-*)                                      echo "unknown option: $1" >&2; exit 2 ;;
 		*)                                       ONLY+=("$1"); shift ;;
 	esac
@@ -94,6 +95,11 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 				exit 1
 				;;
 		esac
+	fi
+
+	if [ "$STAGE_ONLY" = 0 ]; then
+		echo ">> $name: rendering full inventory peer set"
+		fleet_render_peers "$CONF" "$node_id" "root@$addr"
 	fi
 
 	# Post-check beyond the node's own health gate: it still routes the mesh.

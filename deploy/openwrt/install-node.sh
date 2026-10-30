@@ -23,6 +23,9 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=fleet-file.sh
+source "$DIR/fleet-file.sh"
+CONF="$(fleet_conf "$DIR")"
 BIN="${MJOLNIR_MESHD_BIN:-$DIR/mjolnir-meshd-aarch64}"
 TXN_BIN="${MJOLNIR_TXN_BIN:-$DIR/mjolnir-txn-aarch64}"
 # mjolnir-hello (S7, mjolnir-mesh-eei): OPTIONAL front desk binary. Unlike BIN
@@ -240,13 +243,21 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" "tail -25 $STAGE/apply.log" 2>/
 
 case "$RES" in
 	OK*)
+		if node_id=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "$HOST" \
+			'mjolnir-meshd id --secret-file /etc/mjolnir/secret' | sed -n 's/^node id: //p') \
+			&& fleet_valid_node_id "$node_id"; then
+			echo ">> rendering inventory peers on $HOST"
+			fleet_render_peers "$CONF" "$node_id" "$HOST"
+		else
+			echo ">> peer render skipped on $HOST: node id command failed or returned no valid id"
+		fi
 		cat <<EOF
 >> done on $HOST. Next (fresh node only):
-   1. ssh $HOST 'mjolnir-meshd id --secret-file /etc/mjolnir/secret'   # this node's id
-   2. add the OTHER nodes' ids to /etc/config/mjolnir   (list peer '<id>')
-   3. keep backhaul_iface 'br-mesh' (the fleet default; pass --wireless <env-file>
+   1. record this node's id in $CONF, then run update-fleet.sh so existing
+      members receive the new id in their peer lists
+   2. keep backhaul_iface 'br-mesh' (the fleet default; pass --wireless <env-file>
       or run /root/setup-wireless.sh to build it). 'br-lan' is wired-bench only
-   4. ssh $HOST 'service mjolnir-meshd start && logread -e mjolnir_meshd'
+   3. ssh $HOST 'service mjolnir-meshd start && logread -e mjolnir_meshd'
 EOF
 		;;
 	*)
