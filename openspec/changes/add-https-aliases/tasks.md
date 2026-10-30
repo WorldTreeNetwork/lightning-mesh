@@ -14,7 +14,7 @@ this change owes once activated.
 - [x] ACME client on app hosts and routers (DNS-01, `classic` profile, ARI, gateway courier)
 - [x] mjolnir-hello TLS on router `n-` origin; cert and key in `/etc/mjolnir/` kept across sysupgrade
 - [ ] RAM, flash and handshake measured on aarch64 fleet hardware
-- [ ] Directory projection of cert expiry and renewal state; hello.mesh Services display
+- [x] Directory projection of cert expiry and renewal state; hello.mesh Services display
 - [ ] Docs: `docs-web/content/join` (services and HTTPS), `docs/deploy/mesh-app-publishing.md`, storage-node D4 marked decided
 - [x] Advise send-back: reconcile `proposal.md` ownership of HTTPS resolution records and specify the versioned, canonical owner-signed AliasTable record plus conflict/removal behavior and verification vectors
 - [x] Advise send-back: distinguish label owner/node authorization keys from host-local TLS CSR keys, and make 80-bit label collisions fail closed end-to-end with negative vectors

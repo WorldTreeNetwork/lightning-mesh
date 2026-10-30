@@ -60,6 +60,15 @@ export interface DirectoryService {
 	host_mac?: string;
 }
 
+export type HttpsState = 'ok' | 'due' | 'failing' | 'expired';
+
+export interface DirectoryHttpsName {
+	fqdn: string;
+	/** Certificate expiry as Unix seconds, not milliseconds. */
+	not_after: number;
+	state: HttpsState;
+}
+
 export interface Directory {
 	version: number;
 	/** `null` when the daemon hasn't written a projection yet (fresh boot,
@@ -69,6 +78,8 @@ export interface Directory {
 	neighbors: DirectoryNeighbor[];
 	identities: DirectoryIdentity[];
 	services: DirectoryService[];
+	/** Installed certificates; older daemons omit this additive array. */
+	https_names?: DirectoryHttpsName[];
 }
 
 export async function fetchDirectory(fetchImpl: typeof fetch = fetch): Promise<Directory> {

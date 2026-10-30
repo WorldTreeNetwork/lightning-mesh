@@ -3242,6 +3242,10 @@ struct DirectorySnapshot {
     neighbors: Vec<DirectoryNeighbor>,
     identities: Vec<DirectoryIdentity>,
     services: Vec<DirectoryService>,
+    /// Installed HTTPS certificates and renewal states. Empty until this node
+    /// has certificate records; older directory files omit this additive field.
+    #[serde(default)]
+    https_names: Vec<mjolnir_mesh::https_status::HttpsName>,
     /// Service names this node lost to a conflicting claim (bead e21.2.5,
     /// FR32) — additive field, populated only by the control API's
     /// `/v0/directory` handler ([`build_directory_snapshot_v2`]). The
@@ -3562,6 +3566,7 @@ fn build_directory_snapshot(
         neighbors,
         identities,
         services,
+        https_names: Vec::new(),
         lost_names: Vec::new(),
         gateways,
     }
@@ -3645,6 +3650,7 @@ fn build_directory_snapshot_v2(
         neighbors,
         identities,
         services,
+        https_names: Vec::new(),
         lost_names,
         // The live-gateway set (5lw Lever 2) is carried by the FILE projection
         // (`directory.json`, what the front desk reads). The control-API path

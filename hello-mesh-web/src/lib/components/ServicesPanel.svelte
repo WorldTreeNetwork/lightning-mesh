@@ -6,17 +6,36 @@
 	its address. Presentational: fed by the parent's /api/directory poll.
 -->
 <script lang="ts">
-	import type { DirectoryService } from '$lib/directory/api';
+	import type { DirectoryHttpsName, DirectoryService } from '$lib/directory/api';
+	import { httpsNameDisplay } from '$lib/https/status';
+	import { onMount } from 'svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { ChevronRight, Compass, ExternalLink } from '@lucide/svelte';
 
-	let { services, loaded = true }: { services: DirectoryService[]; loaded?: boolean } = $props();
+	let {
+		services,
+		httpsNames = [],
+		loaded = true
+	}: {
+		services: DirectoryService[];
+		httpsNames?: DirectoryHttpsName[];
+		loaded?: boolean;
+	} = $props();
+
+	let now = $state(Math.floor(Date.now() / 1000));
+	onMount(() => {
+		const timer = setInterval(() => (now = Math.floor(Date.now() / 1000)), 1000);
+		return () => clearInterval(timer);
+	});
+	const httpsEntries = $derived(
+		httpsNames.map((name) => ({ ...name, ...httpsNameDisplay(name, now) }))
+	);
 
 	// Open by default: Services is how walk-up users find apps on this mesh, so it
 	// leads the page and shows its contents without a tap (mjolnir-mesh-kgq).
 	let open = $state(true);
-	const count = $derived(services.length);
+	const count = $derived(services.length + httpsNames.length);
 
 	function txtEntries(svc: DirectoryService): [string, string][] {
 		return svc.txt ? Object.entries(svc.txt) : [];
@@ -71,6 +90,39 @@
 				<p class="text-sm text-muted-foreground">Nothing has been shared on the mesh yet.</p>
 			{:else}
 				<ul class="flex flex-col gap-3">
+					{#each httpsEntries as name (name.fqdn)}
+						<li class="rounded-md border border-border bg-background/40 p-3">
+							<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+								{#if name.url}
+									<!-- External HTTPS origin, not an app route. -->
+									<!-- eslint-disable svelte/no-navigation-without-resolve -->
+									<a
+										href={name.url}
+										class="flex items-center gap-1.5 text-sm font-medium break-all text-primary hover:underline"
+									>
+										{name.fqdn}
+										<ExternalLink class="size-3.5 shrink-0" aria-hidden="true" />
+									</a>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+								{:else}
+									<span class="text-sm font-medium break-all text-foreground">{name.fqdn}</span>
+								{/if}
+								<Badge
+									variant={name.state === 'expired' || name.state === 'failing'
+										? 'destructive'
+										: 'outline'}
+								>
+									{name.state}
+								</Badge>
+							</div>
+							<p class="mt-2 text-sm text-muted-foreground">{name.message}</p>
+							{#if name.state === 'failing'}
+								<p class="mt-1 text-sm text-muted-foreground">
+									Last renewal failed. Connect a mesh gateway to the internet to retry.
+								</p>
+							{/if}
+						</li>
+					{/each}
 					{#each services as svc (svc.name)}
 						{@const txt = txtEntries(svc)}
 						{@const url = webUrl(svc)}

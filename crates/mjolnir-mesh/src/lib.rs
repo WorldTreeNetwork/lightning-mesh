@@ -38,6 +38,7 @@ pub mod https_alias;
 pub mod https_dns;
 pub mod https_issuance;
 mod https_label;
+pub mod https_status;
 pub mod led;
 pub mod owner_claim;
 pub mod radio;

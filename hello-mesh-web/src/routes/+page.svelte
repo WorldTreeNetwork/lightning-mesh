@@ -29,6 +29,7 @@
 	});
 
 	const services = $derived(directoryStore.directory?.services ?? []);
+	const httpsNames = $derived(directoryStore.directory?.https_names ?? []);
 	const ordinary = $derived(services.filter((svc) => !isMiniApp(svc)));
 </script>
 
@@ -43,7 +44,7 @@
 
 	<AppsPanel {services} loaded={directoryStore.loaded} />
 
-	<ServicesPanel services={ordinary} loaded={directoryStore.loaded} />
+	<ServicesPanel services={ordinary} {httpsNames} loaded={directoryStore.loaded} />
 
 	<RoutersPanel />
 </main>
