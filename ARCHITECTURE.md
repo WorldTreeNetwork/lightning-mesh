@@ -136,6 +136,12 @@ owned and no recovery credential has verified. A ceremony press does
 not. hello.mesh relays and never sees the secret. Living spec:
 `openspec/specs/household-owner-claim/spec.md`.
 
+Private household Wi-Fi (`add-private-household-wifi`, bead
+`mjolnir-mesh-ai0.7`): the house client SSID is one network. Client
+flows are member or unidentified. `10.42.0.0/16` is `no_blanket_route`.
+The class plan builder is `crates/mjolnir-apply/src/client_class.rs`.
+Living spec: `openspec/specs/private-household-wifi/spec.md`.
+
 ## Pointers
 
 - Overlay addressing and radio backhaul: `docs/network-coordination/`
@@ -174,3 +180,6 @@ not. hello.mesh relays and never sees the secret. Living spec:
   is not metal roam proof):
   `openspec/specs/mesh-sim-lab/spec.md`,
   contract `deploy/sim/README.md`
+- One client SSID (member and unidentified classes; `10.42.0.0/16` is
+  `no_blanket_route`; builder `crates/mjolnir-apply/src/client_class.rs`):
+  `openspec/specs/private-household-wifi/spec.md`
