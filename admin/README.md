@@ -48,7 +48,8 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 Join, Change, Assign node, and Nest sign identikey-log ops. The buttons
 say guild. The kinds are `keyspace.join`, `keyspace.change`,
-`keyspace.assign-node`, and `keyspace.nest`. There is no rename button.
+`keyspace.assign-node`, and `keyspace.nest`. Rename writes the local
+display name and does not append an op. Words: [`docs/glossary.md`](../docs/glossary.md).
 An empty guild id on Join is outer genesis (profile `house`); the
 keyspace id is that op's content hash. Nest creates an inner
 `access-node` guild whose id is the nest op's content hash. Assign node

@@ -130,6 +130,7 @@ notes live in `docs/` and stay repository-only.
 - [Mjolnir + Lightning Mesh integration](docs/vision/mjolnir-integration.md)
 
 ### Architecture
+- [Guild glossary](docs/glossary.md) (guild, keyspace, house, access guild, and the log)
 - [Network architecture (CRDT, routing, subnet allocation)](docs/network-coordination/network-architecture.md)
 - [Radio backhaul & multi-hop discovery decisions](docs/network-coordination/radio-backhaul-and-discovery.md)
 - [P2P resilience](docs/network-coordination/p2p-resilience.md)

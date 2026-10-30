@@ -14,7 +14,7 @@ Order: `admin/scripts/guild/ceremony.rhai`.
 Bodies: `admin/src-tauri/src/guild.rs` (`sign_guild_at`).
 View: `admin/src-tauri/src/guild_view.rs` replays the log. Do not write a second signer or a second decoder.
 
-Product word is guild. Wire kinds are `keyspace.*`. A display name is not a protocol field. There is no rename.
+Product word is guild. Wire kinds are `keyspace.*`. A display name is not a protocol field. There is no rename op. Vocabulary: `docs/glossary.md`.
 
 The human guild id is base58 of the 32-byte keyspace content hash. That id is not an XID. An XID is the hash of an inception signing key for an identikey document, and this ceremony does not create one.
 
