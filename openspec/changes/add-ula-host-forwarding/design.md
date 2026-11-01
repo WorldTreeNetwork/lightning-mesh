@@ -22,4 +22,5 @@ The house address remains a `/128` on `br-mesh` only. The legacy `/64` stays. IP
 
 ## Unverified hypotheses
 
-None. Spike verdict is go: `docs/spikes/house-ula-forward/finding.md`.
+- `house-ula-forward` is go for kernel and Babel on a veth: `docs/spikes/house-ula-forward/finding.md`. That finding does not cover `mjolnir0`.
+- `overlay-ula-demux`: an `fd` `/128` selects an already-open Iroh datagram connection, and the selection is withdrawn with the route. Confidence medium. Verification not empirically tested. `fd` is not an Iroh candidate and `10.254` stays the dial pin. Act on this change waits on a go finding.

@@ -1,8 +1,8 @@
 # House ULA campaign — morning questions
 
-Stop: every remaining in-scope node is blocked on question 1.
+Stop: question 1 was decided on 2026-11-01. Measure the overlay demux before landing forwarding. No other question is open.
 
-`bny6.3` `add-admin-app-tun` is accepted, implemented, and folded. `bny6.4` `add-admitted-prefix-route` is accepted, implemented, and folded. The foreign `/48` is a device route on the open app TUN only while the caller presents both admit ops, and omitting either op removes it. A failed delete or a failed observation keeps that prefix owned until a later sync confirms it is gone. That is not a new question. `bny6.6`, `bny6.7`, `bny6.5`, and `bny6.8` stay open until question 1 is answered.
+`bny6.3` `add-admin-app-tun` is accepted, implemented, and folded. `bny6.4` `add-admitted-prefix-route` is accepted, implemented, and folded. The foreign `/48` is a device route on the open app TUN only while the caller presents both admit ops, and omitting either op removes it. A failed delete or a failed observation keeps that prefix owned until a later sync confirms it is gone. `bny6.9` `extract-mjolnir-app-tun` is open and does not wait on forwarding. `bny6.6`, `bny6.7`, `bny6.5`, and `bny6.8` wait on spike `overlay-ula-demux`.
 
 Recorded steer is not re-asked. Pairwise countersign, the per-house `/48`, dual-assign, and trailing the `10.254` dial pin are unchanged.
 
@@ -15,7 +15,9 @@ Recorded steer is not re-asked. Pairwise countersign, the per-house `/48`, dual-
 
 ### 1. How does a house `/128` cross sites?
 
-Decision: once Babel has a house host route, which forwarding path may `add-ula-host-forwarding` claim?
+Decided 2026-11-01 (user): measure the overlay demux before landing. Do not ship the Babel allows and do not teach `next_hop` until spike `overlay-ula-demux` says go.
+
+Decision that was open: once Babel has a house host route, which forwarding path may `add-ula-host-forwarding` claim?
 
 `OverlayRouter::next_hop` (`crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs`) returns a next hop for IPv6 only when the destination is `fe80`. Any `fd` destination is `None`, and `overlay_reader` then drops the unicast. `fib_mirror` reads only `ip -4 route`. A kernel route on `mjolnir0` does not select an Iroh connection. The house-ula-forward spike never entered that code.
 
