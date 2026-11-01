@@ -188,6 +188,8 @@ fn sign_op(
         actor_seed_hex: ctx.seed_hex.clone(),
         guild_id_hex: Some(guild_id),
         node_id_hex: Some(node_id),
+        peer_id_hex: None,
+        prefix_hex: None,
     };
     let receipt = sign_guild_at(
         &input,

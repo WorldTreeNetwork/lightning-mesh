@@ -293,6 +293,7 @@ fn apply_op(spaces: &mut BTreeMap<String, Space>, hash: &str, op: &identikey_log
                 space.epoch = epoch;
             }
         }
+        "keyspace.admit-prefix" => {}
         other => return Err(format!("unknown kind {other}")),
     }
     Ok(())
@@ -464,6 +465,55 @@ mod tests {
         assert_eq!(join["about"], join["hex"]);
         let resolved = resolve_guild(&dir, "straw").unwrap();
         assert_eq!(resolved, creek["keyspaceId"].as_str().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_admit_does_not_reshape_the_guild() {
+        use crate::guild::{sign_guild_at, GuildSignInput};
+
+        let dir = std::env::temp_dir().join(format!(
+            "lm-guild-admit-view-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        run_ceremony(
+            &dir,
+            &CeremonyRequest {
+                mode: CeremonyMode::Genesis,
+                workplace_name: "Strawberry Creek".into(),
+                workplace_id: String::new(),
+                node_name: "ap3000-outdoor-b".into(),
+                node_id: "a7a8841b13de5fbf20daec51318bad40dffc4425853edda6e9defc59af374037".into(),
+            },
+        )
+        .unwrap();
+        let before = inspect(&dir).unwrap();
+        let guilds_before = before["guilds"].clone();
+        let log = dir.join("guild-ops.log");
+        sign_guild_at(
+            &GuildSignInput {
+                verb: "admit-prefix".into(),
+                actor_seed_hex: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1".into(),
+                guild_id_hex: Some("11".repeat(32)),
+                node_id_hex: None,
+                peer_id_hex: Some("22".repeat(32)),
+                prefix_hex: None,
+            },
+            1_700_000_000_000,
+            9,
+            &log,
+        )
+        .unwrap();
+        let after = inspect(&dir).unwrap();
+        assert_eq!(after["verified"], true);
+        assert_eq!(after["guilds"], guilds_before);
+        let admit = after["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["kind"] == "keyspace.admit-prefix")
+            .unwrap();
+        assert_eq!(admit["about"], "11".repeat(32));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

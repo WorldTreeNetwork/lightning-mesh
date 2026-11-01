@@ -4,8 +4,9 @@
 //! Lightning Admin guild verbs.
 //!
 //! Product copy says guild. The signed identikey-log kinds are
-//! `keyspace.join`, `keyspace.change`, `keyspace.assign-node`, and
-//! `keyspace.nest` (identikey-keyspace-v1). There is no rename kind.
+//! `keyspace.join`, `keyspace.change`, `keyspace.assign-node`,
+//! `keyspace.nest`, and `keyspace.admit-prefix` (identikey-keyspace-v1).
+//! There is no rename kind.
 //!
 //! These ops are membership records. They do not wrap a guild PTK (that
 //! stays in identikey-keys) and they do not write the client SSID.
@@ -25,6 +26,7 @@ pub const KIND_JOIN: &str = "keyspace.join";
 pub const KIND_CHANGE: &str = "keyspace.change";
 pub const KIND_ASSIGN: &str = "keyspace.assign-node";
 pub const KIND_NEST: &str = "keyspace.nest";
+pub const KIND_ADMIT: &str = "keyspace.admit-prefix";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuildVerb {
@@ -32,6 +34,7 @@ pub enum GuildVerb {
     Change,
     AssignNode,
     Nest,
+    AdmitPrefix,
 }
 
 impl GuildVerb {
@@ -41,6 +44,7 @@ impl GuildVerb {
             "change" => Ok(Self::Change),
             "assign-node" => Ok(Self::AssignNode),
             "nest" => Ok(Self::Nest),
+            "admit-prefix" => Ok(Self::AdmitPrefix),
             "rename" | "guild.rename" => Err("a guild has no rename verb".into()),
             other if other.starts_with("guild.") => {
                 Err(format!("protocol kind is keyspace.*, not {other}"))
@@ -55,6 +59,7 @@ impl GuildVerb {
             Self::Change => KIND_CHANGE,
             Self::AssignNode => KIND_ASSIGN,
             Self::Nest => KIND_NEST,
+            Self::AdmitPrefix => KIND_ADMIT,
         }
     }
 }
@@ -76,6 +81,12 @@ pub struct GuildSignInput {
     pub actor_seed_hex: String,
     pub guild_id_hex: Option<String>,
     pub node_id_hex: Option<String>,
+    /// Other house guild id for `admit-prefix`. Absent for the other verbs.
+    #[serde(default)]
+    pub peer_id_hex: Option<String>,
+    /// Six-byte prefix override. Absent means `house_ula_prefix(peer)`.
+    #[serde(default)]
+    pub prefix_hex: Option<String>,
 }
 
 pub fn default_log_path() -> Result<PathBuf, String> {
@@ -117,6 +128,14 @@ pub fn sign_guild_at(
         None | Some("") => None,
         Some(hex) => Some(parse_hex32(hex, "node id")?),
     };
+    let peer_id = match input.peer_id_hex.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(hex) => Some(parse_hex32(hex, "peer guild id")?),
+    };
+    let prefix = match input.prefix_hex.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(hex) => Some(parse_hex_prefix(hex)?),
+    };
 
     let (body, target) = match verb {
         GuildVerb::Join => encode_join(actor, guild_id)?,
@@ -132,6 +151,11 @@ pub fn sign_guild_at(
         GuildVerb::Nest => {
             let outer = guild_id.ok_or("nest needs the outer guild id")?;
             (encode_nest(actor, outer)?, Some(outer))
+        }
+        GuildVerb::AdmitPrefix => {
+            let id = guild_id.ok_or("admit-prefix needs a guild id")?;
+            let peer = peer_id.ok_or("admit-prefix needs a peer guild id")?;
+            (encode_admit(id, peer, prefix)?, Some(id))
         }
     };
 
@@ -204,6 +228,23 @@ fn encode_assign(id: [u8; 32], node: [u8; 32]) -> Result<Vec<u8>, String> {
     Ok(CBOR::from(body).to_cbor_data())
 }
 
+fn encode_admit(id: [u8; 32], peer: [u8; 32], prefix: Option<[u8; 6]>) -> Result<Vec<u8>, String> {
+    let prefix = match prefix {
+        Some(bytes) => bytes,
+        None => {
+            let derived = mjolnir_mesh::tun::house_ula_prefix(&peer);
+            let mut out = [0u8; 6];
+            out.copy_from_slice(&derived.octets[..6]);
+            out
+        }
+    };
+    let mut body = Map::new();
+    body.insert("keyspace", CBOR::to_byte_string(id));
+    body.insert("peer", CBOR::to_byte_string(peer));
+    body.insert("prefix", CBOR::to_byte_string(prefix));
+    Ok(CBOR::from(body).to_cbor_data())
+}
+
 fn encode_nest(actor: [u8; 32], outer: [u8; 32]) -> Result<Vec<u8>, String> {
     let mut body = Map::new();
     body.insert("outer", CBOR::to_byte_string(outer));
@@ -237,6 +278,18 @@ fn append_log(path: &Path, signed: &[u8]) -> Result<(), String> {
     opts.mode(0o600);
     let mut file = opts.open(path).map_err(|e| e.to_string())?;
     writeln!(file, "{}", hex_bytes(signed)).map_err(|e| e.to_string())
+}
+
+fn parse_hex_prefix(raw: &str) -> Result<[u8; 6], String> {
+    let s = raw.trim();
+    if s.len() != 12 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("prefix must be 6 bytes as 12 hex characters".into());
+    }
+    let mut out = [0u8; 6];
+    for i in 0..6 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
 
 fn parse_hex32(raw: &str, label: &str) -> Result<[u8; 32], String> {
@@ -279,6 +332,8 @@ mod tests {
             actor_seed_hex: SEED.into(),
             guild_id_hex: guild.then(|| GUILD.into()),
             node_id_hex: node.then(|| NODE.into()),
+            peer_id_hex: None,
+            prefix_hex: None,
         }
     }
 
