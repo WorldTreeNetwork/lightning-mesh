@@ -167,7 +167,10 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
 - Link-local first-contact SSH (`br-lan` / `br-mesh` `fe80`; overlay
   `10.254` stays mesh-wide): `openspec/specs/link-local-mgmt/spec.md`
 - Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
-  candidate): `openspec/specs/identity-derived-ula/spec.md`
+  candidate). House `/48` is derived from the guild id; the router
+  `/128` is subnet 0 and the app `/128` is subnet 1. The compiled
+  `/64` stays assigned. Babel is unchanged. `10.254` remains the Iroh
+  pin: `openspec/specs/identity-derived-ula/spec.md`
 - Mini-apps (TXT `app=v1`, node-side manifest fetch, Apps shelf,
   sandboxed cross-origin card; key origin ≠ app origin; identity
   over the bridge via one-shot MessagePort):
