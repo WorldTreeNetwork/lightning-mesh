@@ -9,9 +9,11 @@
 - [x] Owed R3: new well starts one cell step to the right, wraps down, clamped on screen; Control-drag and Option-resize stay per well
 - [x] Owed R4: one well's timeout or refusal leaves the other transcript
 - [x] Owed R5: "One canvas in this landing" renamed to "Canvas count"
-- [ ] Implement several owner-drawn windows, with at least two wells visible
-- [ ] Each well has its own window id, source, and in-flight child
-- [ ] Focusing one well does not close the others
+- [x] Implement several owner-drawn windows, with at least two wells visible
+- [x] Each well has its own window id, source, and in-flight child
+- [x] Focusing one well does not close the others
 - [ ] Focused verify on macOS: two wells, `ifconfig` and `netstat -ib`
+
+Implementation gate: `CARGO_TARGET_DIR=/tmp/lm-admin-target cargo test --manifest-path admin/src-tauri/Cargo.toml --lib canvas` — 10 passed, 0 failed (2026-11-01). Covers independent ids, per-well fill/refusal/timeout/close, child reaping, fifth-open refusal, concurrent opens, and initial placement. Window visibility and gestures still need the visual check above.
 
 Do not add a source. Do not start a 3d spike. Do not persist positions.

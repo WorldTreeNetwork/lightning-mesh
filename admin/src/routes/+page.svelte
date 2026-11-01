@@ -134,6 +134,17 @@
 	}
 
 	let listCopied = $state(false);
+	let canvasError = $state('');
+
+	async function addCanvas() {
+		canvasError = '';
+		try {
+			await openCanvas();
+		} catch (error) {
+			canvasError = String(error);
+		}
+	}
+
 	let themeName = $state<ThemeName>('plain');
 	let variantChoice = $state<VariantChoice>('system');
 
@@ -210,7 +221,10 @@
 			<button type="button" class="scan primary" disabled={discovery.loading} onclick={() => discovery.scan()}>
 				{discovery.loading ? 'Scanning…' : 'Scan'}
 			</button>
-			<button type="button" class="scan ghost" onclick={() => void openCanvas()}>Canvas</button>
+			<button type="button" class="scan ghost" onclick={() => void addCanvas()}>Canvas</button>
+			{#if canvasError}
+				<span class="nn-status bad" role="alert">{canvasError}</span>
+			{/if}
 			<DropdownMenu.Root>
 				<DropdownMenu.Trigger>
 					{#snippet child({ props })}

@@ -226,10 +226,9 @@
 
   function closeSelf() {
     ++fillGeneration;
-    var id = window.__LIGHTNING_CANVAS_ID;
     var inv = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
       (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
-    if (typeof inv === "function" && id) inv("close_canvas", { id: id });
+    if (typeof inv === "function") inv("close_canvas");
     else window.close();
   }
   var close = document.querySelector(".close");

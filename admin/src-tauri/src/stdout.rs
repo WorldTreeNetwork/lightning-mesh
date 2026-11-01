@@ -96,8 +96,8 @@ impl Drop for Running {
     }
 }
 
-/// Owned by CanvasState: cancellation and spawn share one lock, so a new
-/// generation cannot overlap the old child, even while its capture is pending.
+/// One per well: cancellation and spawn share one lock, so a new generation
+/// cannot overlap that well's old child, even while its capture is pending.
 #[derive(Default)]
 pub(crate) struct SourceState {
     running: Mutex<Running>,
@@ -293,10 +293,12 @@ impl SourceState {
 /// A superseded fill rejects IPC rather than returning stale output for paint.
 #[tauri::command]
 pub async fn fill_canvas_source(
+    window: tauri::WebviewWindow,
     state: tauri::State<'_, CanvasState>,
     name: String,
 ) -> Result<FillResult, String> {
-    state.source.fill(&name).await
+    let source = state.source(window.label())?;
+    source.fill(&name).await
 }
 
 #[cfg(test)]
@@ -560,5 +562,139 @@ mod tests {
             assert_eq!(result.exit_code, Some(0));
             assert!(!result.text.is_empty());
         }
+    }
+
+    #[cfg(unix)]
+    fn canvas_pair() -> (CanvasState, String, String) {
+        let state = CanvasState::new();
+        let screen = crate::canvas::CanvasSpec {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let first = state.reserve(&screen, None).unwrap().id;
+        let second = state.reserve(&screen, None).unwrap().id;
+        (state, first, second)
+    }
+
+    #[cfg(unix)]
+    async fn canvas_sleeping_child(
+        source: std::sync::Arc<SourceState>,
+        timeout: Duration,
+    ) -> (
+        u64,
+        u32,
+        tokio::task::JoinHandle<Result<FillResult, String>>,
+    ) {
+        let generation = source.begin().unwrap();
+        let owner = source.clone();
+        let fill = tokio::spawn(async move {
+            owner
+                .capture(generation, "fixture", fixture("sleep"), timeout)
+                .await
+        });
+        let pid = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(pid) = source.running.lock().unwrap().child.as_ref().map(Child::id) {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        (generation, pid, fill)
+    }
+
+    #[cfg(unix)]
+    fn canvas_assert_reaped(pid: u32) {
+        assert_eq!(
+            unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
+    #[cfg(unix)]
+    fn canvas_assert_running(source: &SourceState, generation: u64, pid: u32) {
+        let running = source.current(generation).unwrap();
+        assert_eq!(running.child.as_ref().unwrap().id(), pid);
+        assert_eq!(
+            unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG) },
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn canvas_fill_and_refusal_only_cancel_the_invoking_well() {
+        let (canvases, first, second) = canvas_pair();
+        let first_source = canvases.source(&first).unwrap();
+        let second_source = canvases.source(&second).unwrap();
+        let (second_generation, second_pid, second_fill) =
+            canvas_sleeping_child(second_source.clone(), Duration::from_secs(30)).await;
+        for name in ["netstat", "unknown"] {
+            let (generation, pid, fill) =
+                canvas_sleeping_child(first_source.clone(), TIMEOUT).await;
+            let result = canvases.source(&first).unwrap().fill(name).await.unwrap();
+            assert_eq!(result.source, name);
+            if name == "unknown" {
+                assert_eq!(result.status, FillStatus::Refused);
+            }
+            assert_eq!(fill.await.unwrap().unwrap_err(), CANCELLED);
+            canvas_assert_reaped(pid);
+            assert!(first_source.current(generation).is_err());
+            canvas_assert_running(&second_source, second_generation, second_pid);
+        }
+        canvases.remove(&second);
+        assert_eq!(second_fill.await.unwrap().unwrap_err(), CANCELLED);
+        canvas_assert_reaped(second_pid);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn canvas_close_reaps_only_the_closed_wells_child() {
+        let (canvases, first, second) = canvas_pair();
+        let first_source = canvases.source(&first).unwrap();
+        let second_source = canvases.source(&second).unwrap();
+        let (first_generation, first_pid, first_fill) =
+            canvas_sleeping_child(first_source.clone(), TIMEOUT).await;
+        let (second_generation, second_pid, second_fill) =
+            canvas_sleeping_child(second_source.clone(), TIMEOUT).await;
+        canvases.remove(&first);
+        canvases.remove(&first); // close command plus Destroyed is harmless.
+        assert_eq!(first_fill.await.unwrap().unwrap_err(), CANCELLED);
+        canvas_assert_reaped(first_pid);
+        assert!(first_source.current(first_generation).is_err());
+        assert!(first_source.begin().is_err());
+        assert!(canvases.source(&first).is_err());
+        canvas_assert_running(&second_source, second_generation, second_pid);
+        canvases.remove(&second);
+        assert_eq!(second_fill.await.unwrap().unwrap_err(), CANCELLED);
+        canvas_assert_reaped(second_pid);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn canvas_timeout_leaves_the_other_wells_child_running() {
+        let (canvases, first, second) = canvas_pair();
+        let first_source = canvases.source(&first).unwrap();
+        let second_source = canvases.source(&second).unwrap();
+        let (_, first_pid, first_fill) =
+            canvas_sleeping_child(first_source, Duration::from_millis(100)).await;
+        let (second_generation, second_pid, second_fill) =
+            canvas_sleeping_child(second_source.clone(), TIMEOUT).await;
+        let result = first_fill.await.unwrap().unwrap();
+        assert_eq!(result.status, FillStatus::Failure);
+        assert!(result.text.contains("timed out"));
+        canvas_assert_reaped(first_pid);
+        canvas_assert_running(&second_source, second_generation, second_pid);
+        canvases.remove(&second);
+        assert_eq!(second_fill.await.unwrap().unwrap_err(), CANCELLED);
+        canvas_assert_reaped(second_pid);
     }
 }
