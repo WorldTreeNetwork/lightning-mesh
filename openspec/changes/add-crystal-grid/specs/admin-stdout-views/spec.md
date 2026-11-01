@@ -10,9 +10,10 @@ Deltas for more than one stdout well. Living requirement pasted from
 Lightning Admin SHALL show at least two stdout-view wells at once.
 Each well SHALL keep its own allowlisted source and its own in-flight
 child. Focusing a well SHALL NOT close another well. A source swap
-SHALL affect only the well whose control was activated. The wells
-SHALL be arranged as a grid of the same stdout views. A 3d or diorama
-engine SHALL NOT be required for this outcome.
+SHALL affect only the well whose control was activated. Each well SHALL be its own owner-drawn window, with the same chrome
+as the current canvas. The windows SHALL be placed in a grid for the
+Admin session only. Positions SHALL NOT be written to a layout file.
+A 3d or diorama engine SHALL NOT be used.
 
 #### Scenario: Two wells at once
 

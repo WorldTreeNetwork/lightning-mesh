@@ -1,6 +1,6 @@
 # add-crystal-grid
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 **Rigor:** architecture
 
@@ -14,8 +14,9 @@ Preparation (2026-11-01): living spec
 `openspec/specs/admin-stdout-views/spec.md` still caps the product at
 one canvas until this change. Code still uses one window id,
 `canvas-well`, in `admin/src-tauri/src/canvas.rs`. Outcome: still valid.
-Authority: Duke said `change` on the pinned DAG. This node is a
-human-gate. Banner stays PENDING. Engine choice waits on steer.
+Steer 2026-11-01 logged several owner-drawn windows, session-only
+placement, and skipped the 3d spike. Authority: Duke said
+`activate and run` on 2026-11-01. Banner is ACTIVE BUILD.
 
 ## What
 
@@ -23,15 +24,17 @@ human-gate. Banner stays PENDING. Engine choice waits on steer.
 - Each well is an owner-drawn canvas with its own allowlisted source.
   Focusing one does not close the others. A source swap stays inside
   that well.
-- The layout is a grid of those wells. It is not a new data plane and
-  not a new command allowlist.
-- A 3d or diorama engine is not chosen here.
+- Each well is its own owner-drawn window, the same chrome as
+  `canvas-well`, placed in a grid. Positions last for the Admin
+  session only.
+- The layout is not a new data plane and not a new command allowlist.
+- No 3d or diorama engine.
 
 ## Impact
 
 - Capabilities: MODIFIED `admin-stdout-views` (lift the one-canvas cap).
   ADDED a grid requirement on that spec.
-- ADRs: none until steer picks an engine.
+- ADRs: none. Steer picked several overlays, recorded in `steer.md`.
 
 ## User journey & surfaces
 
@@ -53,5 +56,5 @@ family as today's `canvas-well`.
 - A new allowlisted command, a shell string, or remote SSH stdout.
 - Parsing transcripts into NIC cards.
 - Guild signing, the client SSID, or `scan_link_local`.
-- Choosing or shipping a 3d / diorama engine before steer.
+- A 3d or diorama engine, and any saved layout file.
 - Replacing the single-canvas swap behavior inside one well.
