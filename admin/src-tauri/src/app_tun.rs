@@ -110,7 +110,10 @@ impl AppTunOpen {
             match route_present(&session.name, &prefix) {
                 Ok(true) => kept.push(prefix),
                 Ok(false) => failed = true,
-                Err(()) => failed = true,
+                Err(()) => {
+                    kept.push(prefix);
+                    failed = true;
+                }
             }
         }
         session.owned_prefixes = kept;
@@ -161,6 +164,9 @@ fn prefix48(prefix: &[u8; 6]) -> Ipv6Addr {
 }
 
 fn route_present(dev: &str, prefix: &[u8; 6]) -> Result<bool, ()> {
+    if cfg!(test) && std::env::var("MJ_APP_ROUTE_OBSERVE_FAIL").ok().as_deref() == Some("1") {
+        return Err(());
+    }
     let text = Command::new("ip").args(["-6", "route", "show", "dev", dev]).output().map_err(|_| ())?;
     if !text.status.success() {
         return Err(());
@@ -335,6 +341,12 @@ fn ip(args: &[&str]) -> Result<(), ()> {
         && std::env::var("MJ_APP_ROUTE_FAIL").ok().as_deref() == Some("1")
     {
         return Err(());
+    }
+    if cfg!(test)
+        && args.get(2) == Some(&"del")
+        && std::env::var("MJ_APP_ROUTE_DEL_SKIP").ok().as_deref() == Some("1")
+    {
+        return Ok(());
     }
     let ok = Command::new("ip")
         .args(args)
@@ -524,6 +536,27 @@ mod tests {
         let shown = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
         let text = String::from_utf8_lossy(&shown.stdout);
         assert!(!text.contains("fd8f:78a9:2caa::/48"), "{text}");
+
+        std::env::set_var("MJ_APP_ROUTE_OBSERVE_FAIL", "1");
+        assert!(opened.sync_admitted_routes(&[pair]).is_err());
+        let hidden = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&hidden.stdout).contains("fd8f:78a9:2caa::/48"));
+        std::env::remove_var("MJ_APP_ROUTE_OBSERVE_FAIL");
+        opened.sync_admitted_routes(&[]).unwrap();
+        let shown = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
+        assert!(!String::from_utf8_lossy(&shown.stdout).contains("fd8f:78a9:2caa::/48"));
+
+        opened.sync_admitted_routes(&[pair]).unwrap();
+        std::env::set_var("MJ_APP_ROUTE_OBSERVE_FAIL", "1");
+        std::env::set_var("MJ_APP_ROUTE_DEL_SKIP", "1");
+        assert!(opened.sync_admitted_routes(&[]).is_err());
+        let stuck = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&stuck.stdout).contains("fd8f:78a9:2caa::/48"));
+        std::env::remove_var("MJ_APP_ROUTE_OBSERVE_FAIL");
+        std::env::remove_var("MJ_APP_ROUTE_DEL_SKIP");
+        opened.sync_admitted_routes(&[]).unwrap();
+        let shown = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
+        assert!(!String::from_utf8_lossy(&shown.stdout).contains("fd8f:78a9:2caa::/48"));
         drop(opened);
     }
 
