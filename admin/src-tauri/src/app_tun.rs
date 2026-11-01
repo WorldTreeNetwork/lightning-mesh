@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use mjolnir_mesh::tun::{
-    app_ula, house_addr_usable, parse_house_guild_id, spawn_encap_pair, DatagramConn,
+    app_ula, house_addr_usable, house_ula_prefix, parse_house_guild_id, spawn_encap_pair,
+    DatagramConn,
 };
 
 use crate::permit::AdmittedPair;
@@ -52,49 +53,85 @@ impl AppTunOpen {
             && self.up
     }
 
-    /// Install device routes for foreign `/48`s this house has admitted, and
-    /// delete any this session installed that the current pair set no longer
-    /// contains. Omitting either direction removes the route. There is no
-    /// withdrawal op. A down session installs nothing.
-    pub fn sync_admitted_routes(&mut self, local_guild: [u8; 32], pairs: &[AdmittedPair]) {
+    /// Install device routes for foreign `/48`s of the house that opened this
+    /// TUN, and delete any this session installed that the current pair set no
+    /// longer contains. The house id is the one passed to `open_app_tun`.
+    /// Omitting either direction removes the route. A failed delete stays owned
+    /// so the next sync retries it. A down session installs nothing.
+    pub fn sync_admitted_routes(&mut self, pairs: &[AdmittedPair]) -> Result<(), ()> {
         let Some(session) = self.inner.as_mut() else {
-            return;
+            return Ok(());
         };
         if !session.up.load(Ordering::SeqCst) {
-            return;
+            return Ok(());
         }
-        let next = foreign_prefixes(local_guild, pairs);
-        let previous = session.owned_prefixes.clone();
-        for prefix in &previous {
-            if !next.contains(prefix) {
-                let _ = ip(&[
-                    "-6",
-                    "route",
-                    "del",
-                    &format!("{}/48", prefix48(prefix)),
-                    "dev",
-                    &session.name,
-                ]);
+        let next = prefixes_for_house(session.guild, pairs);
+        let mut failed = false;
+        let mut kept = Vec::new();
+        for prefix in session.owned_prefixes.clone() {
+            if next.contains(&prefix) {
+                kept.push(prefix);
+                continue;
+            }
+            let deleted = ip(&[
+                "-6",
+                "route",
+                "del",
+                &format!("{}/48", prefix48(&prefix)),
+                "dev",
+                &session.name,
+            ]);
+            match route_present(&session.name, &prefix) {
+                Ok(true) | Err(()) => {
+                    kept.push(prefix);
+                    failed = true;
+                    let _ = deleted;
+                }
+                Ok(false) => {}
             }
         }
-        let mut kept = Vec::new();
         for prefix in next {
-            if previous.contains(&prefix) || ip(&[
+            if kept.contains(&prefix) {
+                continue;
+            }
+            if ip(&[
                 "-6",
                 "route",
                 "replace",
                 &format!("{}/48", prefix48(&prefix)),
                 "dev",
                 &session.name,
-            ]).is_ok()
+            ])
+            .is_err()
             {
-                if route_present(&session.name, &prefix) {
-                    kept.push(prefix);
-                }
+                failed = true;
+                continue;
+            }
+            match route_present(&session.name, &prefix) {
+                Ok(true) => kept.push(prefix),
+                Ok(false) => failed = true,
+                Err(()) => failed = true,
             }
         }
         session.owned_prefixes = kept;
+        if failed { Err(()) } else { Ok(()) }
     }
+}
+
+/// Foreign `/48`s for `local_guild`, never that house's own prefix.
+pub fn prefixes_for_house(local_guild: [u8; 32], pairs: &[AdmittedPair]) -> Vec<[u8; 6]> {
+    let own = house_prefix(&local_guild);
+    foreign_prefixes(local_guild, pairs)
+        .into_iter()
+        .filter(|prefix| prefix != &own)
+        .collect()
+}
+
+fn house_prefix(guild: &[u8; 32]) -> [u8; 6] {
+    let net = house_ula_prefix(guild);
+    let mut prefix = [0u8; 6];
+    prefix.copy_from_slice(&net.octets[..6]);
+    prefix
 }
 
 /// Foreign `/48`s of pairs that include `local_guild`.
@@ -123,12 +160,13 @@ fn prefix48(prefix: &[u8; 6]) -> Ipv6Addr {
     Ipv6Addr::from(octets)
 }
 
-fn route_present(dev: &str, prefix: &[u8; 6]) -> bool {
-    let Ok(text) = Command::new("ip").args(["-6", "route", "show", "dev", dev]).output() else {
-        return false;
-    };
+fn route_present(dev: &str, prefix: &[u8; 6]) -> Result<bool, ()> {
+    let text = Command::new("ip").args(["-6", "route", "show", "dev", dev]).output().map_err(|_| ())?;
+    if !text.status.success() {
+        return Err(());
+    }
     let body = String::from_utf8_lossy(&text.stdout);
-    body.lines().any(|line| line.starts_with(&format!("{}/48", prefix48(prefix))))
+    Ok(body.lines().any(|line| line.starts_with(&format!("{}/48", prefix48(prefix)))))
 }
 
 struct Session {
@@ -138,6 +176,7 @@ struct Session {
     up: Arc<AtomicBool>,
     watch: Option<tokio::task::JoinHandle<()>>,
     owned_prefixes: Vec<[u8; 6]>,
+    guild: [u8; 32],
 }
 
 impl Drop for Session {
@@ -195,12 +234,13 @@ where
     }
     #[cfg(target_os = "linux")]
     {
-        open_linux(local, peer_addr, conn, address).await
+        open_linux(guild_id, local, peer_addr, conn, address).await
     }
 }
 
 #[cfg(target_os = "linux")]
 async fn open_linux<C>(
+    guild: [u8; 32],
     local: Ipv6Addr,
     peer: Ipv6Addr,
     conn: C,
@@ -283,6 +323,7 @@ where
             up,
             watch: Some(watch),
             owned_prefixes: Vec::new(),
+            guild,
         }),
     }
 }
@@ -290,7 +331,7 @@ where
 fn ip(args: &[&str]) -> Result<(), ()> {
     if cfg!(test)
         && args.get(1) == Some(&"route")
-        && args.get(2) == Some(&"replace")
+        && matches!(args.get(2), Some(&"replace") | Some(&"del"))
         && std::env::var("MJ_APP_ROUTE_FAIL").ok().as_deref() == Some("1")
     {
         return Err(());
@@ -361,11 +402,18 @@ mod tests {
             guild_b: peer,
             prefix_b: foreign,
         };
-        assert_eq!(foreign_prefixes(local, &[pair]), vec![foreign]);
-        assert!(foreign_prefixes(local, &[]).is_empty());
-        assert!(foreign_prefixes([0x33; 32], &[pair]).is_empty());
-        assert!(!foreign_prefixes(local, &[pair]).contains(&stock));
-        assert!(!foreign_prefixes(local, &[pair]).contains(&own));
+        assert_eq!(prefixes_for_house(local, &[pair]), vec![foreign]);
+        assert!(prefixes_for_house(local, &[]).is_empty());
+        assert!(prefixes_for_house([0x33; 32], &[pair]).is_empty());
+        let unrelated = AdmittedPair {
+            guild_a: peer,
+            prefix_a: foreign,
+            guild_b: [0x33; 32],
+            prefix_b: stock,
+        };
+        assert!(prefixes_for_house(local, &[unrelated]).is_empty());
+        let claims_own = AdmittedPair { prefix_b: own, ..pair };
+        assert!(prefixes_for_house(local, &[claims_own]).is_empty());
     }
 
     #[test]
@@ -461,12 +509,18 @@ mod tests {
         let (conn, _other) = ends();
         let mut opened = open_app_tun(local, [0xab; 32], [0x22; 32], [0x22; 32], fixture_addr(0x11, 0xcd), conn).await;
         assert!(opened.is_up());
-        opened.sync_admitted_routes(local, &[pair]);
+        opened.sync_admitted_routes(&[pair]).unwrap();
         let shown = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
         let text = String::from_utf8_lossy(&shown.stdout);
         assert!(text.contains("fd8f:78a9:2caa::/48"), "{text}");
+        assert!(!text.contains("fd81:2b22:8aca::/48"));
         assert!(!text.contains("fd12:3456:789a::/48"));
-        opened.sync_admitted_routes(local, &[]);
+        std::env::set_var("MJ_APP_ROUTE_FAIL", "1");
+        assert!(opened.sync_admitted_routes(&[]).is_err());
+        let stuck = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
+        assert!(String::from_utf8_lossy(&stuck.stdout).contains("fd8f:78a9:2caa::/48"));
+        std::env::remove_var("MJ_APP_ROUTE_FAIL");
+        opened.sync_admitted_routes(&[]).unwrap();
         let shown = Command::new("ip").args(["-6", "route", "show"]).output().unwrap();
         let text = String::from_utf8_lossy(&shown.stdout);
         assert!(!text.contains("fd8f:78a9:2caa::/48"), "{text}");
