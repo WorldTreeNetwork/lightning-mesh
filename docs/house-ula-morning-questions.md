@@ -2,7 +2,7 @@
 
 Stop: every remaining in-scope node is blocked on question 1.
 
-`bny6.3` `add-admin-app-tun` is accepted, implemented, and folded. `bny6.4` `add-admitted-prefix-route` is implemented from the accepted permit: the foreign `/48` is a device route on the open app TUN only while the caller presents both admit ops, and omitting either op removes it. That is not a new question. `bny6.6`, `bny6.7`, `bny6.5`, and `bny6.8` stay open until question 1 is answered.
+`bny6.3` `add-admin-app-tun` is accepted, implemented, and folded. `bny6.4` `add-admitted-prefix-route` is accepted, implemented, and folded. The foreign `/48` is a device route on the open app TUN only while the caller presents both admit ops, and omitting either op removes it. A failed delete or a failed observation keeps that prefix owned until a later sync confirms it is gone. That is not a new question. `bny6.6`, `bny6.7`, `bny6.5`, and `bny6.8` stay open until question 1 is answered.
 
 Recorded steer is not re-asked. Pairwise countersign, the per-house `/48`, dual-assign, and trailing the `10.254` dial pin are unchanged.
 
