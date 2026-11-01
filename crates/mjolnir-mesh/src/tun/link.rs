@@ -39,7 +39,9 @@ pub fn ula_prefix() -> Ipv6NetPrefix {
     let p = blake3::hash(ULA_ID_INPUT);
     let b = p.as_bytes();
     Ipv6NetPrefix {
-        octets: [0xfd, b[0], b[1], b[2], b[3], b[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        octets: [
+            0xfd, b[0], b[1], b[2], b[3], b[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
     }
 }
 
@@ -79,6 +81,234 @@ pub fn ula_addr(node_id: &str) -> Ipv6Addr {
 /// True when `ip` is Unique Local (`fc00::/7`). Used to refuse iroh candidates.
 pub fn is_unique_local(ip: Ipv6Addr) -> bool {
     ip.is_unique_local()
+}
+
+/// Domain-separated input for a house `/48` (add-house-ula-prefix).
+/// Twenty ASCII bytes, no trailing NUL. Not [`ULA_ID_INPUT`] and not the
+/// CRDT gossip topic: changing either of those must not renumber the house.
+pub const HOUSE_ULA_DOMAIN: &[u8] = b"mjolnir/house/ula/v1";
+
+/// Exactly 64 hex digits (either case) of the raw 32-byte house guild id.
+pub const HOUSE_GUILD_PATH: &str = "/etc/mjolnir/house-guild-id";
+
+/// One line: the last house `/128` this daemon observed as usable.
+/// The only address the daemon may delete.
+pub const HOUSE_ULA_STATE_PATH: &str = "/var/lib/mjolnir/house-ula";
+
+/// Router hosts sit in subnet 0. App hosts sit in subnet 1.
+pub const HOUSE_ROUTER_SUBNET: u16 = 0;
+pub const HOUSE_APP_SUBNET: u16 = 1;
+
+/// `IFA_F_TENTATIVE`. A tentative address is not usable.
+pub const IFA_F_TENTATIVE: u32 = 0x40;
+/// `IFA_F_DADFAILED`. A DAD-failed address is not usable.
+pub const IFA_F_DADFAILED: u32 = 0x08;
+
+/// A house `/128` is usable when it is present at prefix length 128 and is
+/// neither tentative nor DAD-failed. Command status is not part of this.
+pub fn host_route_usable(prefix_len: u8, flags: u32) -> bool {
+    prefix_len == 128 && flags & IFA_F_TENTATIVE == 0 && flags & IFA_F_DADFAILED == 0
+}
+
+fn trim_ascii_ws(text: &str) -> &str {
+    text.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000b}' | '\u{000c}'))
+}
+
+/// Accept a guild file body: ASCII trim, then exactly 64 hex digits.
+/// Display-form base58 and anything else are absent.
+pub fn parse_house_guild_id(text: &str) -> Option<[u8; 32]> {
+    let text = trim_ascii_ws(text);
+    if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Parse the state file. One IPv6 address. Anything else means no owned address.
+pub fn parse_house_state(text: &str) -> Option<Ipv6Addr> {
+    let text = trim_ascii_ws(text);
+    if text.is_empty() || text.chars().any(char::is_whitespace) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+fn iid64(input: &[u8]) -> [u8; 8] {
+    let hashed = blake3::hash(input);
+    let mut iid = u64::from_be_bytes(hashed.as_bytes()[..8].try_into().expect("8 bytes"));
+    if iid == 0 {
+        iid = 1;
+    }
+    iid.to_be_bytes()
+}
+
+fn house_host(guild_id: &[u8; 32], subnet: u16, iid: [u8; 8]) -> Ipv6Addr {
+    let digest = blake3::hash(&[HOUSE_ULA_DOMAIN, guild_id].concat());
+    let prefix = digest.as_bytes();
+    let sub = subnet.to_be_bytes();
+    Ipv6Addr::from([
+        0xfd, prefix[0], prefix[1], prefix[2], prefix[3], prefix[4], sub[0], sub[1], iid[0],
+        iid[1], iid[2], iid[3], iid[4], iid[5], iid[6], iid[7],
+    ])
+}
+
+/// House `/48`: `fd` plus the first five bytes of `blake3(domain || guild_id)`.
+pub fn house_ula_prefix(guild_id: &[u8; 32]) -> Ipv6NetPrefix {
+    let digest = blake3::hash(&[HOUSE_ULA_DOMAIN, guild_id].concat());
+    let b = digest.as_bytes();
+    Ipv6NetPrefix {
+        octets: [
+            0xfd, b[0], b[1], b[2], b[3], b[4], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
+    }
+}
+
+/// Router `/128` in subnet 0. The interface id is `blake3` of the node id's
+/// UTF-8, the same input as [`ula_addr`], clamped off 0.
+pub fn router_ula(guild_id: &[u8; 32], node_id: &str) -> Ipv6Addr {
+    house_host(guild_id, HOUSE_ROUTER_SUBNET, iid64(node_id.as_bytes()))
+}
+
+/// App `/128` in subnet 1. The interface id is `blake3` of the raw 32-byte key.
+pub fn app_ula(guild_id: &[u8; 32], app_key: &[u8; 32]) -> Ipv6Addr {
+    house_host(guild_id, HOUSE_APP_SUBNET, iid64(app_key))
+}
+
+/// Desired router `/128` from a guild file body, or none when the file is absent
+/// or malformed.
+pub fn desired_router_ula(guild_text: Option<&str>, node_id: &str) -> Option<Ipv6Addr> {
+    let guild_id = parse_house_guild_id(guild_text?)?;
+    Some(router_ula(&guild_id, node_id))
+}
+
+/// One IPv6 row from `/proc/net/if_inet6`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfInet6Addr {
+    pub addr: Ipv6Addr,
+    pub prefix_len: u8,
+    pub flags: u32,
+    pub iface: String,
+}
+
+/// Parse `/proc/net/if_inet6`. Prefix length, scope, and flags are hex.
+pub fn parse_if_inet6(body: &str) -> Vec<IfInet6Addr> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(hex) = parts.next() else { continue };
+        let Some(_idx) = parts.next() else { continue };
+        let Some(plen) = parts.next() else { continue };
+        let Some(_scope) = parts.next() else { continue };
+        let Some(flags) = parts.next() else { continue };
+        let Some(iface) = parts.next() else { continue };
+        if hex.len() != 32 {
+            continue;
+        }
+        let Ok(prefix_len) = u8::from_str_radix(plen, 16) else {
+            continue;
+        };
+        let Ok(flags) = u32::from_str_radix(flags, 16) else {
+            continue;
+        };
+        let mut bytes = [0u8; 16];
+        let mut ok = true;
+        for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+            match std::str::from_utf8(chunk)
+                .ok()
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+            {
+                Some(b) => bytes[i] = b,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        out.push(IfInet6Addr {
+            addr: Ipv6Addr::from(bytes),
+            prefix_len,
+            flags,
+            iface: iface.to_string(),
+        });
+    }
+    out
+}
+
+/// Whether `want` is a usable `/128` on `iface` in a `/proc/net/if_inet6` body.
+pub fn house_addr_usable(body: &str, iface: &str, want: Ipv6Addr) -> bool {
+    parse_if_inet6(body).into_iter().any(|row| {
+        row.iface == iface && row.addr == want && host_route_usable(row.prefix_len, row.flags)
+    })
+}
+
+/// Publish the house address only when the desired `/128` is usable on `iface`.
+pub fn published_house_ula(
+    node_id: &str,
+    guild_text: Option<&str>,
+    body: &str,
+    iface: &str,
+) -> Option<Ipv6Addr> {
+    let desired = desired_router_ula(guild_text, node_id)?;
+    house_addr_usable(body, iface, desired).then_some(desired)
+}
+
+/// What to do with `/var/lib/mjolnir/house-ula` after the post-add observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HouseStateAction {
+    /// Desired address is usable. Record it.
+    Write(Ipv6Addr),
+    /// No desired address. Remove the state file.
+    Remove,
+    /// Add did not leave a usable address. Leave the file bytes alone.
+    Unchanged,
+}
+
+/// Delete and add decided from the pre-add observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HouseIntent {
+    pub owned: Option<Ipv6Addr>,
+    pub desired: Option<Ipv6Addr>,
+    pub delete: Option<Ipv6Addr>,
+    pub try_add: Option<Ipv6Addr>,
+}
+
+/// `usable_before` is whether the desired address (not the owned one) is usable.
+pub fn house_intent(
+    state_text: Option<&str>,
+    guild_text: Option<&str>,
+    node_id: &str,
+    usable_before: bool,
+) -> HouseIntent {
+    let owned = state_text.and_then(parse_house_state);
+    let desired = desired_router_ula(guild_text, node_id);
+    let delete = owned.filter(|addr| Some(*addr) != desired);
+    let try_add = desired.filter(|_| !usable_before);
+    HouseIntent {
+        owned,
+        desired,
+        delete,
+        try_add,
+    }
+}
+
+/// Publication and the state file follow the observation after delete and add.
+/// An add error is irrelevant when `usable_after` is true.
+pub fn house_after(
+    desired: Option<Ipv6Addr>,
+    usable_after: bool,
+) -> (Option<Ipv6Addr>, HouseStateAction) {
+    match desired {
+        Some(addr) if usable_after => (Some(addr), HouseStateAction::Write(addr)),
+        Some(_) => (None, HouseStateAction::Unchanged),
+        None => (None, HouseStateAction::Remove),
+    }
 }
 
 /// Return whether the wanted backhaul address needs to be restored.
@@ -382,5 +612,213 @@ mod tests {
             "only {} distinct /31s out of 100 pairs",
             seen.len()
         );
+    }
+
+    fn guild(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    fn guild_text(byte: u8) -> String {
+        format!("{:02x}", byte).repeat(32)
+    }
+
+    fn inet_line(addr: Ipv6Addr, plen: u8, flags: u32, iface: &str) -> String {
+        let hex: String = addr.octets().iter().map(|b| format!("{b:02x}")).collect();
+        format!("{hex} 01 {plen:02x} 00 {flags:02x} {iface}\n")
+    }
+
+    fn plan(
+        state: Option<&str>,
+        guild_body: Option<&str>,
+        node_id: &str,
+        before: &str,
+        after: &str,
+    ) -> (HouseIntent, Option<Ipv6Addr>, HouseStateAction) {
+        let desired = desired_router_ula(guild_body, node_id);
+        let usable_before = desired.is_some_and(|addr| house_addr_usable(before, "br-mesh", addr));
+        let intent = house_intent(state, guild_body, node_id, usable_before);
+        let usable_after = desired.is_some_and(|addr| house_addr_usable(after, "br-mesh", addr));
+        let (publish, action) = house_after(desired, usable_after);
+        (intent, publish, action)
+    }
+
+    #[test]
+    fn house_ula_fixture_vectors() {
+        assert_eq!(HOUSE_ULA_DOMAIN.len(), 20);
+        let node_id = "node-example";
+        let guild_a = guild(0x11);
+        let guild_b = guild(0x22);
+        let app_key = [0xab; 32];
+        let router_a: Ipv6Addr = "fd81:2b22:8aca::ddcd:86a6:64e9:f2df".parse().unwrap();
+        let app_a: Ipv6Addr = "fd81:2b22:8aca:1:bd5e:fa7a:5460:697".parse().unwrap();
+        let router_b: Ipv6Addr = "fd8f:78a9:2caa::ddcd:86a6:64e9:f2df".parse().unwrap();
+        let legacy: Ipv6Addr = "fd53:6213:4797::ddcd:86a6:64e9:f2df".parse().unwrap();
+
+        assert_eq!(
+            house_ula_prefix(&guild_a).addr(),
+            "fd81:2b22:8aca::".parse::<Ipv6Addr>().unwrap()
+        );
+        assert_eq!(
+            house_ula_prefix(&guild_b).addr(),
+            "fd8f:78a9:2caa::".parse::<Ipv6Addr>().unwrap()
+        );
+        assert_eq!(router_ula(&guild_a, node_id), router_a);
+        assert_eq!(router_ula(&guild_b, node_id), router_b);
+        assert_eq!(app_ula(&guild_a, &app_key), app_a);
+        assert_eq!(ula_addr(node_id), legacy);
+        assert_eq!(&router_a.octets()[6..8], &[0, 0]);
+        assert_eq!(&app_a.octets()[6..8], &[0, 1]);
+        assert_ne!(&router_a.octets()[..6], &router_b.octets()[..6]);
+        assert_ne!(&router_a.octets()[..8], &legacy.octets()[..8]);
+        // The compiled prefix and the gossip topic are not inputs.
+        assert_ne!(house_ula_prefix(&guild_a).octets, ula_prefix().octets);
+        assert_eq!(router_ula(&guild_a, node_id), router_ula(&guild_a, node_id));
+    }
+
+    #[test]
+    fn house_guild_parser_accepts_hex_and_rejects_display_form() {
+        let raw = guild_text(0x11);
+        assert_eq!(parse_house_guild_id(&raw), Some(guild(0x11)));
+        assert_eq!(parse_house_guild_id(&raw.to_uppercase()), Some(guild(0x11)));
+        assert_eq!(
+            parse_house_guild_id(&format!("  {raw}\n")),
+            Some(guild(0x11))
+        );
+        assert_eq!(parse_house_guild_id(""), None);
+        assert_eq!(parse_house_guild_id(&raw[..63]), None);
+        assert_eq!(parse_house_guild_id(&format!("{raw}zz")), None);
+        assert_eq!(parse_house_guild_id("2bE2k7mhouseguildidnothex"), None);
+        let router: Ipv6Addr = "fd81:2b22:8aca::ddcd:86a6:64e9:f2df".parse().unwrap();
+        assert_eq!(parse_house_state(&router.to_string()), Some(router));
+        assert_eq!(parse_house_state(&format!("  {router}\n")), Some(router));
+        assert_eq!(parse_house_state(""), None);
+        assert_eq!(parse_house_state("not-an-address"), None);
+        assert_eq!(parse_house_state(&format!("{router}/128")), None);
+        assert_eq!(parse_house_state(&format!("{router}\n{router}")), None);
+    }
+
+    #[test]
+    fn house_assignment_transitions() {
+        let node_id = "node-example";
+        let guild_a = guild_text(0x11);
+        let guild_b = guild_text(0x22);
+        let router_a = router_ula(&guild(0x11), node_id);
+        let router_b = router_ula(&guild(0x22), node_id);
+        let legacy = ula_addr(node_id);
+        let state_a = router_a.to_string();
+        let usable_a = inet_line(router_a, 128, 0x80, "br-mesh");
+        let usable_b = inet_line(router_b, 128, 0x80, "br-mesh");
+        let legacy_line = inet_line(legacy, 64, 0x80, "br-mesh");
+
+        // Fresh assign: empty kernel, then the /128 is usable.
+        let (intent, publish, action) = plan(None, Some(&guild_a), node_id, "", &usable_a);
+        assert_eq!(intent.delete, None);
+        assert_eq!(intent.try_add, Some(router_a));
+        assert_eq!(publish, Some(router_a));
+        assert_eq!(action, HouseStateAction::Write(router_a));
+
+        // Already usable. No add. Still recorded.
+        let (intent, publish, action) = plan(
+            Some(&state_a),
+            Some(&guild_a),
+            node_id,
+            &usable_a,
+            &usable_a,
+        );
+        assert_eq!(intent.try_add, None);
+        assert_eq!(intent.delete, None);
+        assert_eq!(publish, Some(router_a));
+        assert_eq!(action, HouseStateAction::Write(router_a));
+
+        // Add was attempted and reported an error, but the address is usable
+        // on the second look. That still counts as assigned.
+        let (intent, publish, action) = plan(None, Some(&guild_a), node_id, "", &usable_a);
+        assert_eq!(intent.try_add, Some(router_a));
+        assert_eq!(publish, Some(router_a));
+        assert_eq!(action, HouseStateAction::Write(router_a));
+
+        // Failed add leaves no usable address: do not publish, do not replace state.
+        let (intent, publish, action) = plan(Some(&state_a), Some(&guild_b), node_id, "", "");
+        assert_eq!(intent.delete, Some(router_a));
+        assert_eq!(intent.try_add, Some(router_b));
+        assert_eq!(publish, None);
+        assert_eq!(action, HouseStateAction::Unchanged);
+
+        // Tentative and DAD-failed are not published and are not recorded.
+        for flags in [
+            IFA_F_TENTATIVE,
+            IFA_F_DADFAILED,
+            IFA_F_TENTATIVE | IFA_F_DADFAILED,
+        ] {
+            let line = inet_line(router_a, 128, flags, "br-mesh");
+            let (intent, publish, action) = plan(None, Some(&guild_a), node_id, &line, &line);
+            assert_eq!(intent.try_add, Some(router_a));
+            assert_eq!(publish, None);
+            assert_eq!(action, HouseStateAction::Unchanged);
+        }
+
+        // A /64 with the same bits is not the house host route.
+        let covering = inet_line(router_a, 64, 0x80, "br-mesh");
+        let (_, publish, action) = plan(None, Some(&guild_a), node_id, &covering, &covering);
+        assert_eq!(publish, None);
+        assert_eq!(action, HouseStateAction::Unchanged);
+
+        // The same address on another interface is not this node's assignment.
+        let other = inet_line(router_a, 128, 0x80, "mjolnir0");
+        let (_, publish, _) = plan(None, Some(&guild_a), node_id, &other, &other);
+        assert_eq!(publish, None);
+        assert_eq!(
+            published_house_ula(node_id, Some(&guild_a), &other, "br-mesh"),
+            None
+        );
+
+        // Interface loss, then the reconcile restores the current host.
+        let (intent, publish, action) =
+            plan(Some(&state_a), Some(&guild_a), node_id, "", &usable_a);
+        assert_eq!(intent.try_add, Some(router_a));
+        assert_eq!(publish, Some(router_a));
+        assert_eq!(action, HouseStateAction::Write(router_a));
+
+        // Bad guild file adds nothing and omits publication.
+        let (intent, publish, action) = plan(
+            None,
+            Some("not-hex-and-not-64"),
+            node_id,
+            &usable_a,
+            &usable_a,
+        );
+        assert_eq!(intent.desired, None);
+        assert_eq!(intent.try_add, None);
+        assert_eq!(intent.delete, None);
+        assert_eq!(publish, None);
+        assert_eq!(action, HouseStateAction::Remove);
+
+        // Missing state deletes nothing, even if some other /128 is present.
+        let stranger: Ipv6Addr = "fd99::1".parse().unwrap();
+        let stranger_line = inet_line(stranger, 128, 0x80, "br-mesh");
+        let (intent, _, _) = plan(None, Some(&guild_a), node_id, &stranger_line, &usable_a);
+        assert_eq!(intent.delete, None);
+        assert_eq!(intent.try_add, Some(router_a));
+
+        // Guild change or removal deletes only the recorded address.
+        let both = format!("{legacy_line}{usable_a}");
+        let (intent, publish, action) = plan(Some(&state_a), None, node_id, &both, &legacy_line);
+        assert_eq!(intent.delete, Some(router_a));
+        assert_ne!(intent.delete, Some(legacy));
+        assert_eq!(publish, None);
+        assert_eq!(action, HouseStateAction::Remove);
+
+        let (intent, publish, action) =
+            plan(Some(&state_a), Some(&guild_b), node_id, &both, &usable_b);
+        assert_eq!(intent.delete, Some(router_a));
+        assert_ne!(intent.delete, Some(legacy));
+        assert_eq!(intent.try_add, Some(router_b));
+        assert_eq!(publish, Some(router_b));
+        assert_eq!(action, HouseStateAction::Write(router_b));
+
+        // Unparseable state also deletes nothing.
+        let (intent, _, _) = plan(Some("???"), Some(&guild_a), node_id, &usable_a, &usable_a);
+        assert_eq!(intent.owned, None);
+        assert_eq!(intent.delete, None);
     }
 }

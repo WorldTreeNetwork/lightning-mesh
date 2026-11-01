@@ -427,9 +427,10 @@ async fn main() -> Result<()> {
     };
     if !overlay_mode {
         if let Some(iface) = l2_backhaul.clone() {
-            let ula = mjolnir_mesh::tun::ula_addr(&secret.public().to_string());
+            let node_id = secret.public().to_string();
+            let ula = mjolnir_mesh::tun::ula_addr(&node_id);
             tokio::spawn(assign_ula_addr(iface.clone(), ula));
-            tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip, ula));
+            tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip, ula, node_id));
         }
         // LED loop does not wait on assign: overlay-sick is exactly "iface
         // up, address missing" (849.5 / esz).
@@ -3318,6 +3319,11 @@ struct DirectoryNode {
     /// Identity-derived ULA (`ula_addr(node_id)`). On-link on `br-mesh`.
     #[serde(skip_serializing_if = "Option::is_none")]
     ula: Option<String>,
+    /// House router `/128` when that address is usable on `br-mesh`.
+    /// Omitted when the guild file is absent or the kernel does not show
+    /// a non-tentative, non-DAD-failed `/128`. Not a reachability claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    house_ula: Option<String>,
 }
 
 /// Client AP bridge. Link-local here is SSH from a phone/laptop on the SSID.
@@ -3387,6 +3393,11 @@ fn stamp_node_link_locals(node: &mut DirectoryNode) {
     node.link_local_lan = read_iface_link_local(CLIENT_BRIDGE).map(|ip| ip.to_string());
     node.link_local_mesh = read_iface_link_local(MESH_BRIDGE).map(|ip| ip.to_string());
     node.ula = Some(mjolnir_mesh::tun::ula_addr(&node.node_id).to_string());
+    let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
+    let body = std::fs::read_to_string("/proc/net/if_inet6").unwrap_or_default();
+    node.house_ula =
+        mjolnir_mesh::tun::published_house_ula(&node.node_id, guild.as_deref(), &body, MESH_BRIDGE)
+            .map(|ip| ip.to_string());
 }
 
 /// One other mesh node, joining its [`AddrBook`] entry with any subnet claim
@@ -3533,6 +3544,7 @@ fn build_directory_snapshot(
         link_local_lan: None,
         link_local_mesh: None,
         ula: None,
+        house_ula: None,
     };
 
     let neighbors = addr_book
@@ -3611,6 +3623,7 @@ fn build_directory_snapshot_v2(
         link_local_lan: None,
         link_local_mesh: None,
         ula: None,
+        house_ula: None,
     };
 
     let neighbors = addr_book
@@ -6215,10 +6228,9 @@ async fn control_api_route<T: GossipTransport>(
             self_id,
             backhaul_ip,
         ),
-        "/v0/owner-claim" if method == "POST" => (
-            501,
-            control_api_error_body("owner_claim_not_hosted"),
-        ),
+        "/v0/owner-claim" if method == "POST" => {
+            (501, control_api_error_body("owner_claim_not_hosted"))
+        }
         "/v0/publish" | "/v0/unpublish" | "/v0/directory" | "/v0/owner-claim" => {
             (405, control_api_error_body("method_not_allowed"))
         }
@@ -7524,7 +7536,7 @@ async fn led_status_loop(_backhaul_iface: String, _overlay: Ipv4Addr) {}
 /// the L2 device during a wifi reload. The interface name is stable across that
 /// operation, but its ifindex is not, so every pass resolves the index afresh.
 #[cfg(target_os = "linux")]
-async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr, ula: Ipv6Addr) {
+async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr, ula: Ipv6Addr, node_id: String) {
     use futures_util::stream::TryStreamExt;
     use rtnetlink::new_connection;
     use rtnetlink::packet_route::address::AddressAttribute;
@@ -7626,28 +7638,171 @@ async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr, ula: Ipv6Addr) {
                 Err(_) => break,
             }
         }
-        if have_ula {
-            continue;
+        if !have_ula {
+            match handle
+                .address()
+                .add(index, IpAddr::V6(ula), mjolnir_mesh::tun::ULA_PREFIX_LEN)
+                .execute()
+                .await
+            {
+                Ok(()) => info!(
+                    %ula,
+                    %iface,
+                    prefix = mjolnir_mesh::tun::ULA_PREFIX_LEN,
+                    "re-added missing identity ULA after interface reload"
+                ),
+                Err(e) => warn!(%ula, %iface, "could not re-add missing identity ULA: {e}"),
+            }
         }
-        match handle
+
+        reconcile_house_ula(&handle, index, &iface, &node_id).await;
+    }
+}
+
+/// Apply one house-`/128` pass: delete only the recorded address, add the
+/// desired `/128` when it is not usable, then record whatever the kernel shows.
+#[cfg(target_os = "linux")]
+async fn reconcile_house_ula(handle: &rtnetlink::Handle, index: u32, iface: &str, node_id: &str) {
+    use std::net::IpAddr;
+
+    let state_text = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_ULA_STATE_PATH).ok();
+    let guild_text = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
+    let before = match dump_iface_ipv6(handle, index).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(%iface, "could not observe house ULA before reconcile: {e}");
+            return;
+        }
+    };
+    let desired = mjolnir_mesh::tun::desired_router_ula(guild_text.as_deref(), node_id);
+    let usable_before = desired.is_some_and(|addr| {
+        before.iter().any(|(ip, plen, flags, _)| {
+            *ip == addr && mjolnir_mesh::tun::host_route_usable(*plen, *flags)
+        })
+    });
+    let intent = mjolnir_mesh::tun::house_intent(
+        state_text.as_deref(),
+        guild_text.as_deref(),
+        node_id,
+        usable_before,
+    );
+    if let Some(delete) = intent.delete {
+        for (_, _, _, message) in before.iter().filter(|(ip, _, _, _)| *ip == delete) {
+            if let Err(e) = handle.address().del(message.clone()).execute().await {
+                warn!(%delete, %iface, "could not delete recorded house ULA: {e}");
+            }
+        }
+    }
+    if let Some(add) = intent.try_add {
+        if let Err(e) = handle
             .address()
-            .add(index, IpAddr::V6(ula), mjolnir_mesh::tun::ULA_PREFIX_LEN)
+            .add(index, IpAddr::V6(add), 128)
             .execute()
             .await
         {
-            Ok(()) => info!(
-                %ula,
-                %iface,
-                prefix = mjolnir_mesh::tun::ULA_PREFIX_LEN,
-                "re-added missing identity ULA after interface reload"
-            ),
-            Err(e) => warn!(%ula, %iface, "could not re-add missing identity ULA: {e}"),
+            warn!(%add, %iface, "house ULA add returned an error: {e}");
         }
+    }
+    let after = match dump_iface_ipv6(handle, index).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(%iface, "could not observe house ULA after reconcile: {e}");
+            return;
+        }
+    };
+    let usable_after = desired.is_some_and(|addr| {
+        after.iter().any(|(ip, plen, flags, _)| {
+            *ip == addr && mjolnir_mesh::tun::host_route_usable(*plen, *flags)
+        })
+    });
+    let (_publish, action) = mjolnir_mesh::tun::house_after(desired, usable_after);
+    match action {
+        mjolnir_mesh::tun::HouseStateAction::Write(addr) => write_house_ula_state(addr),
+        mjolnir_mesh::tun::HouseStateAction::Remove => remove_house_ula_state(),
+        mjolnir_mesh::tun::HouseStateAction::Unchanged => {}
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn dump_iface_ipv6(
+    handle: &rtnetlink::Handle,
+    index: u32,
+) -> Result<
+    Vec<(
+        Ipv6Addr,
+        u8,
+        u32,
+        rtnetlink::packet_route::address::AddressMessage,
+    )>,
+    rtnetlink::Error,
+> {
+    use futures_util::stream::TryStreamExt;
+    use rtnetlink::packet_route::address::AddressAttribute;
+    use std::net::IpAddr;
+
+    let mut rows = Vec::new();
+    let mut addresses = handle.address().get().execute();
+    loop {
+        match addresses.try_next().await {
+            Ok(Some(msg)) => {
+                if msg.header.index != index {
+                    continue;
+                }
+                let flags = u32::from(msg.header.flags.bits());
+                let plen = msg.header.prefix_len;
+                for attribute in &msg.attributes {
+                    if let AddressAttribute::Address(IpAddr::V6(ip))
+                    | AddressAttribute::Local(IpAddr::V6(ip)) = attribute
+                    {
+                        rows.push((*ip, plen, flags, msg.clone()));
+                        break;
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(rows)
+}
+
+#[cfg(target_os = "linux")]
+fn write_house_ula_state(addr: Ipv6Addr) {
+    let path = std::path::Path::new(mjolnir_mesh::tun::HOUSE_ULA_STATE_PATH);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(%addr, "could not create house ULA state directory: {e}");
+        return;
+    }
+    let tmp = path.with_file_name("house-ula.tmp");
+    if let Err(e) = std::fs::write(&tmp, format!("{addr}\n")) {
+        warn!(%addr, "could not write house ULA state: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        warn!(%addr, "could not replace house ULA state: {e}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn remove_house_ula_state() {
+    let path = std::path::Path::new(mjolnir_mesh::tun::HOUSE_ULA_STATE_PATH);
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => warn!("could not remove house ULA state: {e}"),
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn reconcile_backhaul_addr(_iface: String, _addr: Ipv4Addr, _ula: Ipv6Addr) {}
+async fn reconcile_backhaul_addr(
+    _iface: String,
+    _addr: Ipv4Addr,
+    _ula: Ipv6Addr,
+    _node_id: String,
+) {
+}
 
 #[cfg(target_os = "linux")]
 async fn assign_ula_addr(iface: String, ula: Ipv6Addr) {
@@ -11787,6 +11942,7 @@ fe80000000000000000000000000a1b2 04 40 20 80    mjolnir0
         assert!(json.get("link_local_lan").is_none());
         assert!(json.get("link_local_mesh").is_none());
         assert!(json.get("ula").is_none());
+        assert!(json.get("house_ula").is_none());
         assert_eq!(json["backhaul_addr"], "10.254.1.1");
     }
 
