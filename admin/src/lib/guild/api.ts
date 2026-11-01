@@ -38,6 +38,7 @@ export interface GuildSnapshot {
 			accessId: string | null;
 			accessNodeKeyspaceId: string | null;
 		}>;
+		appAddress: string | null;
 	}>;
 	ops: Array<{ n: number; kind: string; id: string; hex: string; about?: string }>;
 }

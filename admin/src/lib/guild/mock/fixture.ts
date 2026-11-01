@@ -21,6 +21,7 @@ export const mockGuilds: GuildRecord[] = [
     roster: [{ role: 'admin', actor: ACTOR_ID }],
     nodes: [],
     ops: [{ n: 1, kind: 'keyspace.join', id: ADMIN_GUILD_ID }],
+    appAddress: 'fd81:2b22:8aca:1:bd5e:fa7a:5460:697',
   },
   {
     name: 'Strawberry Creek',
@@ -43,6 +44,7 @@ export const mockGuilds: GuildRecord[] = [
       { n: 3, kind: 'keyspace.assign-node', id: '2Nwkvi57u4dpVPRcLnvRzxhyWWmAmUdHtt1191RR8gFc' },
       { n: 4, kind: 'keyspace.nest', id: ACCESS_NODE_ID },
     ],
+    appAddress: 'fd8f:78a9:2caa:1:bd5e:fa7a:5460:697',
   },
   {
     name: 'access-node',
@@ -55,5 +57,6 @@ export const mockGuilds: GuildRecord[] = [
     roster: [{ role: 'admin', actor: ACTOR_ID }],
     nodes: [],
     ops: [{ n: 4, kind: 'keyspace.nest', id: ACCESS_NODE_ID }],
+    appAddress: null,
   },
 ];

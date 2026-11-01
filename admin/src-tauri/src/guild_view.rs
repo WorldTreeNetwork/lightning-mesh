@@ -12,6 +12,7 @@ use dcbor::prelude::*;
 use identikey_log::{sign, Author};
 use serde_json::{json, Value};
 
+use crate::app_tun::display_app_address;
 use crate::net::encode_base58;
 
 #[derive(Clone, Debug)]
@@ -106,6 +107,7 @@ pub fn inspect(config: &Path) -> Result<Value, String> {
                 "actorHex": m.actor,
             })).collect::<Vec<_>>(),
             "nodes": nodes,
+            "appAddress": display_app_address(space.outer.as_deref(), &space.id, you.as_deref()),
         }));
     }
 

@@ -6,6 +6,7 @@ use tauri::Manager;
 mod canvas;
 mod commands;
 mod stdout;
+pub mod app_tun;
 pub mod guild;
 pub mod guild_ceremony;
 pub mod guild_view;

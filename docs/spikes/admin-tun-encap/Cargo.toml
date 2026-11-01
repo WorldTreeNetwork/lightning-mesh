@@ -1,0 +1,14 @@
+[workspace]
+
+[package]
+name = "admin-tun-encap-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+mjolnir-mesh = { path = "../../../crates/mjolnir-mesh" }
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tun = { version = "0.8", features = ["async"] }

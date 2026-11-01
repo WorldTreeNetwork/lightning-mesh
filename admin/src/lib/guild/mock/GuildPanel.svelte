@@ -38,7 +38,8 @@
 				nodes: g.nodes.map((node) => ({
 					name: node.name ?? 'node', nodeId: node.nodeId, accessId: node.accessId ?? 'pending'
 				})),
-				ops: snapshot.ops.filter((op) => op.about === g.keyspaceId || op.hex === g.keyspaceId)
+				ops: snapshot.ops.filter((op) => op.about === g.keyspaceId || op.hex === g.keyspaceId),
+				appAddress: g.appAddress
 			}));
 			if (!guilds.some((g) => g.id === selectedId)) {
 				selectedId = guilds.find((g) => g.workplace)?.id ?? guilds.find((g) => g.outer === null)?.id ?? '';

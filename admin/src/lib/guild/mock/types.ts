@@ -32,4 +32,5 @@ export interface GuildRecord {
   roster: GuildMember[];
   nodes: GuildNode[];
   ops: GuildOp[];
+  appAddress: string | null;
 }

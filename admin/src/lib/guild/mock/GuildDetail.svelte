@@ -25,6 +25,12 @@
 	{#if outerName}
 		<button type="button" class="back" onclick={onOpenOuter}>In {outerName}</button>
 	{/if}
+	{#if guild.appAddress}
+		<dl class="kv">
+			<dt>app</dt>
+			<dd><code class="addr">{guild.appAddress}</code></dd>
+		</dl>
+	{/if}
 
 	<div class="block">
 		<div class="label">Nodes</div>
