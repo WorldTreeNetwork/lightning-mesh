@@ -183,7 +183,10 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
   `openspec/specs/admitted-prefix-route/spec.md`. The compiled
   `/64` stays assigned. When that router `/128` is usable on `br-mesh`,
   both Babel renders export it (`eq 128` on the house `/48`, then deny
-  the rest of `fc00::/7`). On `mjolnir0`, an IPv6 `/128` whose next hop
+  the rest of `fc00::/7`). Admitted `fd00::/8` `/48`s from
+  `/var/lib/mjolnir/admitted-prefixes` are host-allowed before those
+  denies; a failed babeld restart stays pending. On `mjolnir0`, an
+  IPv6 `/128` whose next hop
   is overlay `fe80::H` selects the already-open `10.254` peer;
   withdrawal drops the selection. `fd` is not an Iroh bind. `10.254`
   remains the Iroh pin: `openspec/specs/identity-derived-ula/spec.md`
