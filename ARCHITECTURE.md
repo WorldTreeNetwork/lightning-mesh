@@ -10,13 +10,17 @@ The L3 overlay (iroh + babeld + CRDT) is the product. The radio is plumbing.
 Nodes are symmetric and non-authoritative. Each node owns a routed `/24`;
 client L2 is never bridged across nodes.
 
-Management is the overlay: reach nodes at derived `10.254.x` over SSH
-once you are on the mesh. First contact on the LAN/SSID is this node's
-link-local (`fe80` on `br-lan` / `br-mesh`), published on hello
-`/api/node` (`link_local_lan` / `link_local_mesh`). Nodes also have an
-identity-derived ULA (`blake3(b"mjolnir/mesh/ula/v0")` `/48` +
-`blake3(node_id)` IID) on `br-mesh` beside `10.254`; it is not an iroh
-QUIC candidate.
+Management is the overlay. The walked fleet column is still `10.254`;
+the daemon does not assign that address. First contact on the LAN/SSID
+is this node's link-local (`fe80` on `br-lan` / `br-mesh`), published
+on hello `/api/node` (`link_local_lan` / `link_local_mesh`). Nodes also
+have an identity-derived legacy ULA (`blake3(b"mjolnir/mesh/ula/v0")`
+`/48` + `blake3(node_id)` IID) on `br-mesh`. Iroh binds the usable house
+router `/128`. The open connection key is the peer house router `/128`
+(`router_ula` of the local guild and the authenticated endpoint id).
+Overlay link-local on `mjolnir0` is that blake3 interface id, not the
+last 16 bits of `10.254`. The earlier pin bound Iroh on `10.254` and
+derived overlay `fe80::H` from those bits; that pin is retired.
 No mDNS for mesh-wide discovery — gossip/CRDT is the address book.
 
 Disruptive node changes go through `mjolnir-apply` (snapshot → apply →
@@ -173,9 +177,9 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
   `openspec/specs/wan-lan-admin/spec.md`
 - Link-local first-contact SSH (`br-lan` / `br-mesh` `fe80`; overlay
   `10.254` stays mesh-wide): `openspec/specs/link-local-mgmt/spec.md`
-- Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
-  candidate). House `/48` is derived from the guild id; the router
-  `/128` is subnet 0 and the app `/128` is subnet 1. The app session
+- Identity-derived ULA on `br-mesh`. `10.254` is not assigned
+  (`remove-v4-backhaul-pin`). House `/48` is derived from the guild id;
+  the router `/128` is subnet 0 and the app `/128` is subnet 1. The app session
   is `crates/mjolnir-app-tun` (no mesh dependency, no Iroh, no
   `daemon` feature; cancel with `EncapHandles::abort`):
   `openspec/specs/mjolnir-app-tun/spec.md`,
@@ -185,14 +189,14 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
   both Babel renders export it (`eq 128` on the house `/48`, then deny
   the rest of `fc00::/7`). Admitted `fd00::/8` `/48`s from
   `/var/lib/mjolnir/admitted-prefixes` are host-allowed before those
-  denies; a failed babeld restart stays pending. On `mjolnir0`, an
-  IPv6 `/128` whose next hop
-  is overlay `fe80::H` selects the already-open `10.254` peer;
-  withdrawal drops the selection. `fd` is not an Iroh bind. `10.254`
-  remains the Iroh pin. Directory neighbors, the Admin address list,
+  denies; a failed babeld restart stays pending. Iroh binds that usable
+  house `/128` (`clear_ip_transports`; no `0.0.0.0` and no
+  `10.254.0.0/16` candidate). The open connection key is the peer house
+  router `/128`. Overlay link-local is the blake3 interface id, not the
+  last 16 bits of `10.254`. Directory neighbors, the Admin address list,
   and the fleet reference printer show `router_ula` as the operator
-  backhaul reference; `10.254` stays the transport pin and the walked
-  fleet column: `openspec/specs/identity-derived-ula/spec.md`
+  backhaul reference; `DirectoryNode.backhaul_addr` and the walked fleet
+  column stay `10.254`: `openspec/specs/identity-derived-ula/spec.md`
 - Mini-apps (TXT `app=v1`, node-side manifest fetch, Apps shelf,
   sandboxed cross-origin card; key origin ≠ app origin; identity
   over the bridge via one-shot MessagePort):
