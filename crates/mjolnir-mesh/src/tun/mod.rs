@@ -4,6 +4,7 @@ pub mod iface;
 pub mod link;
 pub mod mcast;
 pub mod overlay;
+pub mod ula_host;
 
 pub use encap::{DatagramConn, EncapError, EncapHandles, spawn_encap_pair};
 pub use fib::Fib;
@@ -24,3 +25,4 @@ pub use link::{
 };
 pub use mcast::{BABEL_MCAST, BABEL_PORT, OverlayDest, classify, is_babel_multicast};
 pub use overlay::{OverlayHandles, UnicastRouter, spawn_overlay, spawn_overlay_routed};
+pub use ula_host::{UlaHostRoutes, parse_ula_host_routes};

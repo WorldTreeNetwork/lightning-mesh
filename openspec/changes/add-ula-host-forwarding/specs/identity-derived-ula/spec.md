@@ -3,7 +3,7 @@
 ### Requirement: ULA sits beside 10.254, not in iroh candidates
 <!-- base: 5f001b0a9674e5f073bb0de84744b3adf04f865c openspec/specs/identity-derived-ula/spec.md -->
 
-The daemon SHALL assign the legacy derived ULA on `br-mesh` next to the derived `10.254` backhaul address, prefix length `/64`, so peer legacy ULAs are on-link. It SHALL read `/etc/mjolnir/house-guild-id` at startup and on the reconcile pass that restores the legacy ULA. The file is valid only when, after trimming ASCII whitespace, it is exactly 64 hex digits of either case. When the file is valid the daemon SHALL assign that router's house `/128` on `br-mesh` and SHALL NOT assign a covering prefix of the house `/48`. The only house address the daemon MAY delete is the one recorded in `/var/lib/mjolnir/house-ula` from the last time that address was usable. A missing state file SHALL mean the daemon deletes no IPv6 address. A restart after the guild file changes or disappears SHALL remove only that recorded address, including when the previous process has exited. An address is usable only when it is present at prefix length 128 and is neither tentative nor DAD-failed. An add that errors while that usable address is already present SHALL count as assigned. An add that errors and leaves no usable address SHALL NOT count as assigned, SHALL NOT publish `house_ula`, and SHALL NOT replace the state file. After `br-mesh` is recreated, the same reconcile pass SHALL restore the current house `/128` while the file is valid. It SHALL NOT assign either address on `mjolnir0` or `br-lan` in this capability. It SHALL NOT add either address to iroh's QUIC candidate / bind set. When a house router `/128` is known, Babel on `br-mesh` and on `mjolnir0` SHALL redistribute that `/128`, SHALL allow the house `/48` at prefix length 128 with `eq 128` and without `ge` or `le`, and SHALL deny every other `fc00::/7` prefix. The house allow SHALL appear before `in ip fc00::/7 deny` and `out ip fc00::/7 deny`. When no house router `/128` is known, Babel SHALL deny `fc00::/7` in and out and SHALL NOT add a house allow. The legacy `/64` SHALL NOT be exported. Stock OpenWrt `ula_prefix` SHALL stay filtered. Assigning the house `/128` SHALL NOT make any other address in that prefix on-link. Another house `/128` SHALL be reachable only as a Babel host route. IPv4 Babel next hops SHALL stay link-local. `10.254` SHALL remain the Iroh bind.
+The daemon SHALL assign the legacy derived ULA on `br-mesh` next to the derived `10.254` backhaul address, prefix length `/64`, so peer legacy ULAs are on-link. It SHALL read `/etc/mjolnir/house-guild-id` at startup and on the reconcile pass that restores the legacy ULA. The file is valid only when, after trimming ASCII whitespace, it is exactly 64 hex digits of either case. When the file is valid the daemon SHALL assign that router's house `/128` on `br-mesh` and SHALL NOT assign a covering prefix of the house `/48`. The only house address the daemon MAY delete is the one recorded in `/var/lib/mjolnir/house-ula` from the last time that address was usable. A missing state file SHALL mean the daemon deletes no IPv6 address. A restart after the guild file changes or disappears SHALL remove only that recorded address, including when the previous process has exited. An address is usable only when it is present at prefix length 128 and is neither tentative nor DAD-failed. An add that errors while that usable address is already present SHALL count as assigned. An add that errors and leaves no usable address SHALL NOT count as assigned, SHALL NOT publish `house_ula`, and SHALL NOT replace the state file. After `br-mesh` is recreated, the same reconcile pass SHALL restore the current house `/128` while the file is valid. It SHALL NOT assign either address on `mjolnir0` or `br-lan` in this capability. It SHALL NOT add either address to iroh's QUIC candidate / bind set. A house router `/128` is known only when it is usable on `br-mesh`: prefix length 128, not tentative, and not DAD-failed. Both Babel reconcilers SHALL pass that address into the renderer on startup and on each reconcile, and SHALL drop a previous house allow when the guild changes, the address becomes unusable, or a restart finds none. When a house router `/128` is known, Babel on `br-mesh` and on `mjolnir0` SHALL redistribute that `/128`, SHALL allow the house `/48` at prefix length 128 with `eq 128`, and SHALL deny every other `fc00::/7` prefix. The new house lines SHALL NOT use `ge` or `le`. The existing gateway line `redistribute ip 0.0.0.0/0 le 0 metric 128` SHALL stay when the gateway is on and SHALL stay absent when it is off. The house allow SHALL appear before `in ip fc00::/7 deny` and `out ip fc00::/7 deny`. When no house router `/128` is known, Babel SHALL deny `fc00::/7` in and out and SHALL NOT add a house allow. On `mjolnir0`, an IPv6 `/128` route whose next hop is `fe80::H` in the overlay link-local shape SHALL select the already-open Iroh connection for the `10.254` peer that derives `H`. Withdrawing that route SHALL remove the selection on the next poll. A destination with no such route SHALL be dropped. The IPv4 route mirror SHALL keep reading only `ip -4 route`. The legacy `/64` SHALL NOT be exported. Stock OpenWrt `ula_prefix` SHALL stay filtered. Assigning the house `/128` SHALL NOT make any other address in that prefix on-link. Another house `/128` SHALL be reachable only as a Babel host route. IPv4 Babel next hops SHALL stay link-local. `10.254` SHALL remain the Iroh bind.
 
 #### Scenario: Overlay IPv4 still the underlay
 
@@ -69,7 +69,7 @@ The daemon SHALL assign the legacy derived ULA on `br-mesh` next to the derived 
 
 - GIVEN a house router `/128` in `fd81:2b22:8aca::/48` and Babel config rendered for `br-mesh` and for `mjolnir0`
 - WHEN the config is inspected
-- THEN each render redistributes that `/128`, allows `fd81:2b22:8aca::/48 eq 128` before `in ip fc00::/7 deny` and `out ip fc00::/7 deny`, and contains neither `ge` nor `le`
+- THEN each render redistributes that `/128`, allows `fd81:2b22:8aca::/48 eq 128` before `in ip fc00::/7 deny` and `out ip fc00::/7 deny`, and the new house lines contain neither `ge` nor `le`
 - AND a stock OpenWrt `ula_prefix` is not redistributed
 
 #### Scenario: No house guild keeps the blanket deny
@@ -77,6 +77,42 @@ The daemon SHALL assign the legacy derived ULA on `br-mesh` next to the derived 
 - GIVEN no house router `/128`
 - WHEN Babel config is rendered for `br-mesh` and for `mjolnir0`
 - THEN each contains `in ip fc00::/7 deny` and `out ip fc00::/7 deny` and no house `/48` allow
+
+#### Scenario: Gateway on keeps its default route
+
+- GIVEN the node is a gateway and a house router `/128` is known
+- WHEN Babel config is rendered for `br-mesh` and for `mjolnir0`
+- THEN each still contains `redistribute ip 0.0.0.0/0 le 0 metric 128`
+
+#### Scenario: Gateway off does not gain that line
+
+- GIVEN the node is not a gateway and a house router `/128` is known
+- WHEN Babel config is rendered for `br-mesh` and for `mjolnir0`
+- THEN neither render contains `le 0`
+
+#### Scenario: A house host route selects the open peer
+
+- GIVEN `mjolnir0` has `fd81:2b22:8aca::2/128 via fe80::2` and `10.254.0.2` is an open connection
+- WHEN a packet to `fd81:2b22:8aca::2` is read from the overlay
+- THEN that connection is selected and `10.254.0.3` is not
+
+#### Scenario: Withdrawal drops the selection
+
+- GIVEN the route in the previous scenario was selected
+- WHEN the route is deleted and the mirror polls again
+- THEN a packet to `fd81:2b22:8aca::2` selects no connection
+
+#### Scenario: An unknown destination is dropped
+
+- GIVEN the open peer above and no route for `fd12:3456:789a::1` or `fd81:2b22:8aca::99`
+- WHEN packets to those addresses are read
+- THEN neither selects a connection
+
+#### Scenario: The return host uses the same rule
+
+- GIVEN `mjolnir0` also has this router's house `/128` via the peer's `fe80`
+- WHEN a packet to that local house `/128` is read
+- THEN the peer connection for that next hop is selected
 
 #### Scenario: House address is a host route, not a covering prefix
 

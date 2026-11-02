@@ -40,8 +40,8 @@ use mjolnir_mesh::capability_beacon::CapabilityDescriptor;
 use mjolnir_mesh::capability_transport::{CAPABILITY_ALPN, handshake_response_frame};
 use mjolnir_mesh::https_status::{HttpsName, load_https_names};
 use mjolnir_mesh::tun::{
-    DatagramConn, EncapError, Fib, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel, UnicastRouter,
-    classify, spawn_overlay_tun, spawn_tunnel,
+    DatagramConn, EncapError, Fib, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel, UlaHostRoutes,
+    UnicastRouter, classify, parse_ula_host_routes, spawn_overlay_tun, spawn_tunnel,
 };
 use mjolnir_mesh::{
     AddrBook, AppMarker, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport,
@@ -973,6 +973,7 @@ async fn run_mesh(
 
         let conns = ConnManager::new();
         let fib = Arc::new(Mutex::new(Fib::new()));
+        let ula_hosts = Arc::new(Mutex::new(UlaHostRoutes::new()));
         let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<Bytes>(1024);
 
         // Writer task: every peer's inbound datagrams funnel here -> mjolnir0.
@@ -987,9 +988,11 @@ async fn run_mesh(
         });
         // Mirror babeld's mjolnir0 routes into the FIB (demux next hops).
         tokio::spawn(fib_mirror(link.iface_name.clone(), fib.clone()));
+        tokio::spawn(ula_host_mirror(link.iface_name.clone(), ula_hosts.clone()));
         // Reader task: mjolnir0 -> route unicast / flood multicast to peers.
         let router = OverlayRouter {
             fib,
+            ula_hosts,
             conns: conns.clone(),
         };
         tokio::spawn(overlay_reader(
@@ -7972,6 +7975,7 @@ async fn babel_reconciler(
             &l2_refs,
             &node_links,
             gateway_now,
+            known_house_router(&self_id),
         );
 
         // Debounce (qz9): when the desired config changes, let the mesh state
@@ -8052,13 +8056,15 @@ fn render_babel_conf_with_node_links(
     l2_refs: &[&str],
     node_links: &[String],
     gateway: bool,
+    house_router: Option<Ipv6Addr>,
 ) -> String {
     let tunnel_refs: Vec<&str> = tunnels.iter().map(String::as_str).collect();
     let link_refs: Vec<&str> = node_links.iter().map(String::as_str).collect();
     let inputs = BabelConfigInputs::new(local_subnet, &tunnel_refs)
         .l2_interfaces(l2_refs)
         .node_links(&link_refs)
-        .gateway(gateway);
+        .gateway(gateway)
+        .house_router(house_router);
     render_babeld_conf(&inputs)
 }
 
@@ -8315,10 +8321,12 @@ impl ConnManager {
 /// Resolves a unicast overlay packet to the peer connection that should carry
 /// it (mjolnir-mesh-buw.4): v4 client/overlay traffic via the FIB (or on-link
 /// `10.254/16`), v6 babel link-local (`fe80::X`) via the `fe80 <-> 10.254`
-/// derivation, then the connection manager's addr index -> [`Connection`].
+/// derivation, and other v6 hosts via the current /128 route map, then the
+/// connection manager's addr index -> [`Connection`].
 #[derive(Clone)]
 struct OverlayRouter {
     fib: Arc<Mutex<Fib>>,
+    ula_hosts: Arc<Mutex<UlaHostRoutes>>,
     conns: ConnManager,
 }
 
@@ -8348,7 +8356,8 @@ impl OverlayRouter {
             }
             6 => {
                 let d: [u8; 16] = packet.get(24..40)?.try_into().ok()?;
-                let seg = std::net::Ipv6Addr::from(d).segments();
+                let dest = Ipv6Addr::from(d);
+                let seg = dest.segments();
                 // fe80::X (babel IHU to a neighbour) -> next-hop 10.254.X, the
                 // reverse of tun::iface::overlay_link_local.
                 if seg[0] == 0xfe80 {
@@ -8360,7 +8369,11 @@ impl OverlayRouter {
                         (host & 0xff) as u8,
                     ))
                 } else {
-                    None
+                    self.ula_hosts
+                        .lock()
+                        .expect("ula hosts poisoned")
+                        .get(&dest)
+                        .copied()
                 }
             }
             _ => None,
@@ -8441,6 +8454,24 @@ async fn fib_mirror(iface: String, fib: Arc<Mutex<Fib>>) {
             }
             *fib.lock().expect("fib poisoned") = next;
         }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Replace the IPv6 host selection on each poll, independently of the IPv4 FIB.
+async fn ula_host_mirror(iface: String, ula_hosts: Arc<Mutex<UlaHostRoutes>>) {
+    loop {
+        let out = tokio::process::Command::new("ip")
+            .args(["-6", "route", "show", "dev", &iface])
+            .output()
+            .await;
+        let next = match out {
+            Ok(out) if out.status.success() => {
+                parse_ula_host_routes(&String::from_utf8_lossy(&out.stdout))
+            }
+            _ => UlaHostRoutes::new(),
+        };
+        *ula_hosts.lock().expect("ula hosts poisoned") = next;
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -8538,9 +8569,18 @@ impl ProtocolHandler for OverlayHandler {
     }
 }
 
+/// Observe the currently configured, usable house /128, never persisted state
+/// or the directory snapshot. Both Babel loops call this on every pass.
+fn known_house_router(self_id: &str) -> Option<Ipv6Addr> {
+    let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
+    let body = std::fs::read_to_string("/proc/net/if_inet6").unwrap_or_default();
+    mjolnir_mesh::tun::published_house_ula(self_id, guild.as_deref(), &body, MESH_BRIDGE)
+}
+
 /// Overlay babeld reconciler (mjolnir-mesh-buw.5): renders the SINGLE static
 /// `mjolnir0` config from the claim store. mjolnir0 is always up, so babeld runs
-/// continuously and the config only changes when our claimed /24 changes — no
+/// continuously and the config changes with the subnet, gateway, or usable
+/// house address — no
 /// per-peer churn (qz9 dissolved by construction, no debounce needed).
 async fn babel_reconciler_overlay(
     claims: ClaimStore,
@@ -8584,6 +8624,7 @@ async fn babel_reconciler_overlay(
             local_subnet,
             OverlayRtt::default(),
             gateway_now,
+            known_house_router(&self_id),
         );
         if last_rendered.as_deref() != Some(conf.as_str()) {
             match write_atomic_if_changed(&config_path, &conf) {
@@ -9489,6 +9530,59 @@ fn parse_peer(arg: &str) -> Result<EndpointAddr> {
 mod tests {
     use super::*;
     use mjolnir_mesh::LostName;
+
+    fn house_forward_packet(dest: Ipv6Addr) -> [u8; 40] {
+        let mut packet = [0u8; 40];
+        packet[0] = 0x60;
+        packet[24..40].copy_from_slice(&dest.octets());
+        packet
+    }
+
+    #[test]
+    fn house_forward_overlay_selects_exact_host_and_withdraws() {
+        let dest: Ipv6Addr = "fd81:2b22:8aca::2".parse().unwrap();
+        let peer = Ipv4Addr::new(10, 254, 0, 2);
+        let routes = Arc::new(Mutex::new(parse_ula_host_routes(
+            "fd81:2b22:8aca::2/128 via fe80::2 dev mjolnir0",
+        )));
+        let router = OverlayRouter {
+            fib: Arc::new(Mutex::new(Fib::new())),
+            ula_hosts: routes.clone(),
+            conns: ConnManager::new(),
+        };
+        let packet = house_forward_packet(dest);
+        assert_eq!(router.next_hop(&packet), Some(peer));
+        assert_ne!(router.next_hop(&packet), Some(Ipv4Addr::new(10, 254, 0, 3)));
+        for unknown in ["fd12:3456:789a::1", "fd81:2b22:8aca::99"] {
+            assert_eq!(
+                router.next_hop(&house_forward_packet(unknown.parse().unwrap())),
+                None
+            );
+        }
+        // The connection index remains authoritative; no live Iroh is needed.
+        assert!(router.resolve(&packet).is_none());
+        *routes.lock().unwrap() = parse_ula_host_routes("");
+        assert_eq!(router.next_hop(&packet), None);
+        assert_eq!(
+            router.next_hop(&house_forward_packet("fe80::2".parse().unwrap())),
+            Some(peer)
+        );
+    }
+
+    #[test]
+    fn house_forward_return_host_uses_the_routes_via() {
+        let local = mjolnir_mesh::tun::router_ula(&[0x11; 32], "node-example");
+        let router = OverlayRouter {
+            fib: Arc::new(Mutex::new(Fib::new())),
+            ula_hosts: Arc::new(Mutex::new(parse_ula_host_routes(&format!(
+                "{local}/128 via fe80::3 dev mjolnir0"
+            )))),
+            conns: ConnManager::new(),
+        };
+        let packet = house_forward_packet(local);
+        assert_eq!(router.next_hop(&packet), Some(Ipv4Addr::new(10, 254, 0, 3)));
+        assert!(router.resolve(&packet).is_none());
+    }
 
     fn store_of(claims: &[SubnetClaim]) -> HashMap<String, SubnetClaim> {
         claims
@@ -10941,8 +11035,14 @@ config meshd 'meshd'
         assert_eq!(links, vec!["lan3".to_string(), "lan4".to_string()]);
         let subnet: Ipv4Net = "10.42.1.0/24".parse().unwrap();
         let tunnels = vec!["mj-peer-aabbccdd".to_string()];
-        let conf =
-            render_babel_conf_with_node_links(Some(subnet), &tunnels, &["br-mesh"], &links, false);
+        let conf = render_babel_conf_with_node_links(
+            Some(subnet),
+            &tunnels,
+            &["br-mesh"],
+            &links,
+            false,
+            None,
+        );
         assert!(conf.contains("interface lan3 type wired\n"), "{conf}");
         assert!(conf.contains("interface lan4 type wired\n"), "{conf}");
         assert!(conf.contains("interface br-mesh type wireless"), "{conf}");
@@ -10957,7 +11057,7 @@ config meshd 'meshd'
         // Even if a node-link name also lands on the L2 list, it renders once, wired.
         let links = vec!["lan3".to_string()];
         let conf =
-            render_babel_conf_with_node_links(None, &[], &["br-mesh", "lan3"], &links, false);
+            render_babel_conf_with_node_links(None, &[], &["br-mesh", "lan3"], &links, false, None);
         assert_eq!(conf.matches("interface lan3").count(), 1, "{conf}");
         assert!(!conf.contains("interface lan3 type wireless"), "{conf}");
         assert!(conf.contains("interface lan3 type wired\n"), "{conf}");
@@ -10968,8 +11068,10 @@ config meshd 'meshd'
         let subnet: Ipv4Net = "10.42.1.0/24".parse().unwrap();
         let links = vec!["lan3".to_string()];
         for gateway in [true, false] {
-            let with = render_babel_conf_with_node_links(Some(subnet), &[], &[], &links, gateway);
-            let without = render_babel_conf_with_node_links(Some(subnet), &[], &[], &[], gateway);
+            let with =
+                render_babel_conf_with_node_links(Some(subnet), &[], &[], &links, gateway, None);
+            let without =
+                render_babel_conf_with_node_links(Some(subnet), &[], &[], &[], gateway, None);
             let export = "redistribute ip 0.0.0.0/0 le 0 metric 128\n";
             assert_eq!(with.contains(export), gateway, "{with}");
             assert_eq!(with.contains(export), without.contains(export));
