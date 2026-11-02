@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-router-admitted-ula-advise-r2-astra",
+  "node_id": "mjolnir-mesh-bny6.5",
+  "capability": "identity-derived-ula",
+  "change_id": "add-router-admitted-ula",
+  "goal": "Fresh advise of add-router-admitted-ula after a send-back. Author family is Grok. You are astra-arch-review. High blast: protocol (Babel in/out filters). Do not edit reviews/2026-11-01-advise.md or reviews/2026-11-01-blind-take.md. Write a new file.\n\nWhy (from proposal.md, not design.md): Babel on br-mesh and on mjolnir0 already exports this house's router /128 and allows that house /48 at prefix length 128. An admitted foreign house is still inside the fc00::/7 deny, so its host routes never cross either Babel. A covering prefix would make the foreign /48 on-link. The foreign prefix has to be the same kind of host allow, and nothing else.\n\nThe proposal now also says: the publisher guarantees admitted foreign house /48s and replaces the file when the house changes. The reader counts only an fd00::/8 /48, skips ula_prefix() (fd53:6213:4797::/48 for this build) and the guild-file house /48 even when the /128 is unusable, and does not denylist other stock prefixes. A missing file clears the list. An unreadable file keeps the last good read. A failed Babel restart stays pending and is retried on the next pass.\n\nCited (read before design.md):\n- openspec/specs/identity-derived-ula/spec.md\n- openspec/specs/foreign-prefix-permit/spec.md\n- openspec/specs/admitted-prefix-route/spec.md\n- crates/mjolnir-mesh/src/babel/config.rs — house_host_filters and both renders\n- crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs — known_house_router, both Babel reconcilers around the restart paths\n- crates/mjolnir-mesh/src/tun/link.rs — ula_prefix()\n- crates/mjolnir-mesh/src/tun/ula_host.rs\n\nBLIND PASS first. From Why, the living spec, and cited code only, write a 10-line independent take. Do not open design.md or tasks.md until that take is written. Then open the current design, tasks, and spec delta. Compare. Steelman against your take.\n\nWrite openspec/changes/add-router-admitted-ula/reviews/2026-11-01-advise-r2.md. The SPAWN value is the directory that contains this prompt. On accept, check only these tasks.md boxes: \"Fresh advise after preparation\" and \"Obtain fresh other-family advise after reconciling R1–R3 and before act\". Record the contract reference you reviewed. Leave every implementation box open. On send-back, add new owed boxes and leave those two open. Do not write accept-with-nits. Do not implement. Do not fold. Do not flip the banner.",
+  "non_goals": [
+    "Implement the Babel allows",
+    "Edit the previous review",
+    "Fold",
+    "Flip the change banner"
+  ],
+  "anchors": [
+    {
+      "symbol": "ula_prefix",
+      "invariant": "The compiled legacy mesh prefix comes from ula_prefix(), not from a stock-prefix denylist."
+    },
+    {
+      "symbol": "known_house_router",
+      "invariant": "A house /128 is known only when it is usable on br-mesh. Own-house exclusion for a projection must not depend on that Option being Some."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "The contract excludes the configured house /48 without a usable address, names ula_prefix() rather than a stock denylist, and retries a failed Babel restart for a removal.",
+    "if_false": "Own-house exclusion still depends on known_house_router, fd12 is claimed as a reader denylist, or a failed restart can stick."
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-router-admitted-ula/reviews/",
+      "openspec/changes/add-router-admitted-ula/tasks.md"
+    ],
+    "do_not": ["fold", "implement", "edit reviews/2026-11-01-advise.md", "flip the banner"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "astra-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-router-admitted-ula-advise-astra",
+  "node_id": "mjolnir-mesh-bny6.5",
+  "capability": "identity-derived-ula",
+  "change_id": "add-router-admitted-ula",
+  "goal": "Advise add-router-admitted-ula (ACTIVE BUILD, architecture). Author family is Grok. You are the other-family reader (astra-arch-review). High blast: protocol (Babel in/out filters).\n\nWhy (from proposal.md, not design.md): Babel on br-mesh and on mjolnir0 already exports this house's router /128 and allows that house /48 at prefix length 128. An admitted foreign house is still inside the fc00::/7 deny, so its host routes never cross either Babel. A covering prefix would make the foreign /48 on-link. The foreign prefix has to be the same kind of host allow, and nothing else.\n\nWhat the proposal claims: both renders take a caller-supplied admitted /48 list and allow each one with eq 128 before the fc00::/7 denies. The list is the projection file /var/lib/mjolnir/admitted-prefixes. The renderer does not read the guild log and does not decide that a prefix is admitted. The compiled stock prefix and this house's own /48 do not count. A foreign prefix is not assigned on an interface and is not redistributed as a local address. 10.254 stays the Iroh bind. IPv4 Babel next hops stay link-local.\n\nCited (read before design.md):\n- openspec/specs/identity-derived-ula/spec.md — living requirement \"ULA sits beside 10.254, not in iroh candidates\"\n- openspec/specs/foreign-prefix-permit/spec.md — the permit does not write a Babel filter\n- openspec/specs/admitted-prefix-route/spec.md — Admin TUN route; Babel stays unchanged there\n- crates/mjolnir-mesh/src/babel/config.rs — house_host_filters, render_babeld_conf, render_overlay_babeld_conf\n- crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs — known_house_router and both Babel reconcilers\n- crates/mjolnir-mesh/src/tun/ula_host.rs — fe80::H selects the already-open 10.254 peer\n\nBLIND PASS first. From Why, the living spec, and cited code only, write a 10-line independent take (what you would pin, refuse, one tradeoff). Do not open design.md or tasks.md until that take is written. Then open those files and the spec delta, compare, and steelman against your take.\n\nWrite openspec/changes/add-router-admitted-ula/reviews/2026-11-01-advise.md with the banner lines. The SPAWN value is the directory that contains this prompt. If you send it back, add owed checkboxes on tasks.md. Do not write accept-with-nits. Do not implement. Do not fold. Do not flip the banner.",
+  "non_goals": [
+    "Implement the Babel allows",
+    "Fold",
+    "Flip the change banner",
+    "Bind Iroh on fd",
+    "Re-check guild signatures inside the router"
+  ],
+  "anchors": [
+    {
+      "symbol": "house_host_filters",
+      "invariant": "When a house router is known, both renders allow that /48 with eq 128 before in and out fc00::/7 deny, and the new lines do not use ge or le."
+    },
+    {
+      "symbol": "foreign-prefix-permit",
+      "invariant": "A counted admit pair does not write a route, a TUN address, a Babel filter, or a client-subnet claim."
+    },
+    {
+      "symbol": "known_house_router",
+      "invariant": "Both Babel reconcilers pass the usable br-mesh house /128 into the renderer and pass nothing when it is unknown."
+    }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "if_true": "A /128 in the house prefix and a /128 in the admitted foreign prefix are allowed as host routes on both renders, and a stock prefix and the rest of fc00::/7 are absent.",
+    "if_false": "The foreign prefix is installed on-link, the renderer admits from the guild log, or fd enters the Iroh bind set."
+  },
+  "out_of_scope": [
+    {"item": "Iroh dial pin removal", "tracked_as": "mjolnir-mesh-bny6.8"},
+    {"item": "Operator-facing /128 reference", "tracked_as": "mjolnir-mesh-bny6.7"},
+    {"item": "App TUN foreign route", "tracked_as": "admitted-prefix-route"}
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-router-admitted-ula/reviews/",
+      "openspec/changes/add-router-admitted-ula/tasks.md"
+    ],
+    "do_not": ["fold", "implement", "deploy", "flip the banner"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader",
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": {"mode": "stand-in", "stand_in_id": "astra-arch-review"}
+  },
+  "requester": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {"mode": "stand-in", "stand_in_id": "agt-grok"}
+  }
+}

@@ -47,6 +47,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn admitted_host_route_selects_ipv4_peer_and_withdraws() {
+        let dest: Ipv6Addr = "fd8f:78a9:2caa::2".parse().unwrap();
+        let peer = Ipv4Addr::new(10, 254, 0, 2);
+        let routes =
+            parse_ula_host_routes("fd8f:78a9:2caa::2/128 via fe80::2 dev mjolnir0 proto babel\n");
+        assert_eq!(routes.get(&dest), Some(&peer));
+        // Demux yields the existing IPv4 transport peer, never an fd bind.
+        assert_ne!(routes.get(&dest), Some(&Ipv4Addr::new(10, 254, 0, 3)));
+        assert_eq!(parse_ula_host_routes("").get(&dest), None);
+    }
+
+    #[test]
     fn house_forward_host_routes_select_only_the_named_peer_and_withdraw() {
         let host: Ipv6Addr = "fd81:2b22:8aca::2".parse().unwrap();
         let other: Ipv6Addr = "fd81:2b22:8aca::99".parse().unwrap();

@@ -32,8 +32,8 @@ use iroh_gossip::{Gossip, TopicId};
 use iroh_mdns_address_lookup::MdnsAddressLookup;
 use mjolnir_mesh::GossipMessage;
 use mjolnir_mesh::babel::{
-    BabelConfigInputs, OverlayRtt, render_babeld_conf, render_overlay_babeld_conf,
-    write_atomic_if_changed,
+    AdmittedPrefixes, BabelConfigInputs, OverlayRtt, PendingBabelRestart, render_babeld_conf,
+    render_overlay_babeld_conf, write_atomic_if_changed,
 };
 use mjolnir_mesh::bootstrap::rank_bootstrap_candidates;
 use mjolnir_mesh::capability_beacon::CapabilityDescriptor;
@@ -7937,6 +7937,8 @@ async fn babel_reconciler(
 
     let mut started = false;
     let mut last_rendered: Option<String> = None;
+    let mut admitted = AdmittedPrefixes::default();
+    let mut restart = PendingBabelRestart::default();
     loop {
         // Snapshot the live tunnel interfaces and our own claimed subnet.
         let mut ifaces: Vec<String> = {
@@ -7969,6 +7971,11 @@ async fn babel_reconciler(
         // profile apply that adds or drops `mjolnir.node_link` lands without a
         // meshd restart. A missing file means no node-links.
         let node_links = uci_node_links();
+        let Some(prefixes) = admitted.read_admitted_prefixes() else {
+            // Never replace an existing policy with an invented empty list.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        };
         let conf = render_babel_conf_with_node_links(
             local_subnet,
             &ifaces,
@@ -7976,6 +7983,7 @@ async fn babel_reconciler(
             &node_links,
             gateway_now,
             known_house_router(&self_id),
+            &prefixes,
         );
 
         // Debounce (qz9): when the desired config changes, let the mesh state
@@ -8003,36 +8011,18 @@ async fn babel_reconciler(
                         babeld_service("stop").await;
                         started = false;
                     }
-                } else if !started {
-                    // Enable (survive reboot) then start it once; the first start
-                    // reads whatever config is on disk right now.
-                    babeld_service("enable").await;
-                    if babeld_service("restart").await {
-                        started = true;
-                        let count = ifaces.len() + l2_refs.len() + node_links.len();
-                        info!(config = %config_path.display(), ifaces = count, "babeld started (procd: mjolnir-babeld)");
+                } else if restart.needs_restart(started, changed) {
+                    if !started {
+                        babeld_service("enable").await;
                     }
-                } else if changed {
-                    // babeld is already running and the rendered config just changed
-                    // on disk — drive the restart ourselves (mjolnir-mesh-a9e).
-                    //
-                    // The init sets `procd_set_param file "$CONF"`, but that inotify
-                    // watch is bound to the file's inode and we write via tmp-file +
-                    // rename (write_atomic_if_changed), so the replacement swaps the
-                    // inode and procd never sees it. Any node whose /24 claim
-                    // converges AFTER babeld's first start would otherwise keep stale
-                    // config forever and never originate `redistribute ip
-                    // 10.42.x.0/24` — the field bug where cross-/24 client routing
-                    // (and the hello.mesh topology panel) silently dies.
-                    //
-                    // Gated on `changed`, which only holds for a genuine content
-                    // change that already survived the BABEL_SETTLE debounce above —
-                    // so this fires ~once per convergence, never in a loop, and can't
-                    // reproduce the qz9 restart-thrash that made meshd stop driving
-                    // per-change restarts in the first place. babeld_service has its
-                    // own 10s timeout + kill_on_drop backstop.
-                    if babeld_service("restart").await {
-                        info!(config = %config_path.display(), "babeld config changed — restarted to re-read (procd file-watch misses our atomic rename)");
+                    // procd's inode watch misses atomic rename. A failed action
+                    // stays pending even when the next write is unchanged. This
+                    // decision is after BABEL_SETTLE and retries are pass-paced.
+                    let success = babeld_service("restart").await;
+                    restart.record_result(success);
+                    if success {
+                        started = true;
+                        info!(config = %config_path.display(), "babeld config applied (procd: mjolnir-babeld)");
                     }
                 }
             }
@@ -8057,6 +8047,7 @@ fn render_babel_conf_with_node_links(
     node_links: &[String],
     gateway: bool,
     house_router: Option<Ipv6Addr>,
+    admitted: &[Ipv6Addr],
 ) -> String {
     let tunnel_refs: Vec<&str> = tunnels.iter().map(String::as_str).collect();
     let link_refs: Vec<&str> = node_links.iter().map(String::as_str).collect();
@@ -8064,7 +8055,8 @@ fn render_babel_conf_with_node_links(
         .l2_interfaces(l2_refs)
         .node_links(&link_refs)
         .gateway(gateway)
-        .house_router(house_router);
+        .house_router(house_router)
+        .admitted(admitted);
     render_babeld_conf(&inputs)
 }
 
@@ -8580,7 +8572,7 @@ fn known_house_router(self_id: &str) -> Option<Ipv6Addr> {
 /// Overlay babeld reconciler (mjolnir-mesh-buw.5): renders the SINGLE static
 /// `mjolnir0` config from the claim store. mjolnir0 is always up, so babeld runs
 /// continuously and the config changes with the subnet, gateway, or usable
-/// house address — no
+/// house address or admitted projection — no
 /// per-peer churn (qz9 dissolved by construction, no debounce needed).
 async fn babel_reconciler_overlay(
     claims: ClaimStore,
@@ -8598,7 +8590,8 @@ async fn babel_reconciler_overlay(
         );
     }
     let mut started = false;
-    let mut last_rendered: Option<String> = None;
+    let mut admitted = AdmittedPrefixes::default();
+    let mut restart = PendingBabelRestart::default();
     loop {
         let local_subnet: Option<Ipv4Net> = {
             let c = claims.lock().expect("claim store poisoned");
@@ -8619,40 +8612,37 @@ async fn babel_reconciler_overlay(
         // 42j: also require the reachability probe to pass (auto), unless
         // bypassed (always). `local_egress().healthy` already folds the bypass in.
         let gateway_now = gateway && local_egress().await.is_some_and(|e| e.healthy);
+        let Some(prefixes) = admitted.read_admitted_prefixes() else {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        };
         let conf = render_overlay_babeld_conf(
             OVERLAY_IFACE,
             local_subnet,
             OverlayRtt::default(),
             gateway_now,
             known_house_router(&self_id),
+            &prefixes,
         );
-        if last_rendered.as_deref() != Some(conf.as_str()) {
-            match write_atomic_if_changed(&config_path, &conf) {
-                Ok(changed) => {
+        match write_atomic_if_changed(&config_path, &conf) {
+            Ok(changed) => {
+                if restart.needs_restart(started, changed) {
                     if !started {
                         babeld_service("enable").await;
-                        if babeld_service("restart").await {
-                            started = true;
-                            info!(config = %config_path.display(), iface = OVERLAY_IFACE, "babeld started (overlay: single mjolnir0)");
-                        }
-                    } else if changed {
-                        // Already running and the on-disk config changed: restart so
-                        // babeld re-reads it. procd's `file` watch can't see our
-                        // atomic rename (new inode), same as the L2 reconciler
-                        // (mjolnir-mesh-a9e). Fires only on a genuine content change
-                        // (outer `last_rendered != conf` guard + write returned true),
-                        // so it can't thrash.
-                        if babeld_service("restart").await {
-                            info!(config = %config_path.display(), iface = OVERLAY_IFACE, "overlay babeld config changed — restarted to re-read");
-                        }
                     }
-                    last_rendered = Some(conf);
+                    // Keep retries reachable with unchanged text and disk state.
+                    let success = babeld_service("restart").await;
+                    restart.record_result(success);
+                    if success {
+                        started = true;
+                        info!(config = %config_path.display(), iface = OVERLAY_IFACE, "overlay babeld config applied");
+                    }
                 }
-                Err(e) => warn!(
-                    "failed to write overlay babeld config {}: {e}",
-                    config_path.display()
-                ),
             }
+            Err(e) => warn!(
+                "failed to write overlay babeld config {}: {e}",
+                config_path.display()
+            ),
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
@@ -11042,6 +11032,7 @@ config meshd 'meshd'
             &links,
             false,
             None,
+            &[],
         );
         assert!(conf.contains("interface lan3 type wired\n"), "{conf}");
         assert!(conf.contains("interface lan4 type wired\n"), "{conf}");
@@ -11056,8 +11047,15 @@ config meshd 'meshd'
     fn babel_node_link_stays_off_wireless_rtt_list() {
         // Even if a node-link name also lands on the L2 list, it renders once, wired.
         let links = vec!["lan3".to_string()];
-        let conf =
-            render_babel_conf_with_node_links(None, &[], &["br-mesh", "lan3"], &links, false, None);
+        let conf = render_babel_conf_with_node_links(
+            None,
+            &[],
+            &["br-mesh", "lan3"],
+            &links,
+            false,
+            None,
+            &[],
+        );
         assert_eq!(conf.matches("interface lan3").count(), 1, "{conf}");
         assert!(!conf.contains("interface lan3 type wireless"), "{conf}");
         assert!(conf.contains("interface lan3 type wired\n"), "{conf}");
@@ -11068,10 +11066,17 @@ config meshd 'meshd'
         let subnet: Ipv4Net = "10.42.1.0/24".parse().unwrap();
         let links = vec!["lan3".to_string()];
         for gateway in [true, false] {
-            let with =
-                render_babel_conf_with_node_links(Some(subnet), &[], &[], &links, gateway, None);
+            let with = render_babel_conf_with_node_links(
+                Some(subnet),
+                &[],
+                &[],
+                &links,
+                gateway,
+                None,
+                &[],
+            );
             let without =
-                render_babel_conf_with_node_links(Some(subnet), &[], &[], &[], gateway, None);
+                render_babel_conf_with_node_links(Some(subnet), &[], &[], &[], gateway, None, &[]);
             let export = "redistribute ip 0.0.0.0/0 le 0 metric 128\n";
             assert_eq!(with.contains(export), gateway, "{with}");
             assert_eq!(with.contains(export), without.contains(export));
