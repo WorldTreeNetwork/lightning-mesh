@@ -1,6 +1,6 @@
 # House ULA campaign — morning questions
 
-Stop: question 1 was decided on 2026-11-01. Measure the overlay demux before landing forwarding. No other question is open.
+Stop: question 1 was decided on 2026-11-01. Spike `overlay-ula-demux` is go. Forwarding may now be landed from that finding. No other question is open.
 
 `bny6.3` `add-admin-app-tun` is accepted, implemented, and folded. `bny6.4` `add-admitted-prefix-route` is accepted, implemented, and folded. The foreign `/48` is a device route on the open app TUN only while the caller presents both admit ops, and omitting either op removes it. A failed delete or a failed observation keeps that prefix owned until a later sync confirms it is gone. `bny6.9` `extract-mjolnir-app-tun` is open and does not wait on forwarding. `bny6.6`, `bny6.7`, `bny6.5`, and `bny6.8` wait on spike `overlay-ula-demux`.
 
@@ -15,7 +15,7 @@ Recorded steer is not re-asked. Pairwise countersign, the per-house `/48`, dual-
 
 ### 1. How does a house `/128` cross sites?
 
-Decided 2026-11-01 (user): measure the overlay demux before landing. Do not ship the Babel allows and do not teach `next_hop` until spike `overlay-ula-demux` says go.
+Decided 2026-11-01 (user): measure the overlay demux before landing. Spike `overlay-ula-demux` is go (`docs/spikes/overlay-ula-demux/finding.md`). Production `next_hop` is still unchanged.
 
 Decision that was open: once Babel has a house host route, which forwarding path may `add-ula-host-forwarding` claim?
 

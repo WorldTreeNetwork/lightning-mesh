@@ -22,5 +22,4 @@ The house address remains a `/128` on `br-mesh` only. The legacy `/64` stays. IP
 
 ## Unverified hypotheses
 
-- `house-ula-forward` is go for kernel and Babel on a veth: `docs/spikes/house-ula-forward/finding.md`. That finding does not cover `mjolnir0`.
-- `overlay-ula-demux`: an `fd` `/128` selects an already-open Iroh datagram connection, and the selection is withdrawn with the route. Confidence medium. Verification not empirically tested. `fd` is not an Iroh candidate and `10.254` stays the dial pin. Act on this change waits on a go finding.
+None. `house-ula-forward` is go for kernel and Babel on a veth: `docs/spikes/house-ula-forward/finding.md`. `overlay-ula-demux` is go: `docs/spikes/overlay-ula-demux/finding.md`. An `fd` `/128` via `fe80::2` selected the open `10.254.0.2` peer and that selection was gone after the route was deleted. The spike did not open an Iroh handshake, did not bind `fd`, and did not change `OverlayRouter::next_hop`.
