@@ -1,0 +1,19 @@
+[package]
+name = "mjolnir-app-tun"
+description = "House app addresses and a TUN session over a caller-supplied datagram connection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+async-trait = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tun = { version = "0.8", features = ["async"] }
+
+[dev-dependencies]
+libc = "0.2"

@@ -2656,6 +2656,7 @@ dependencies = [
  "identikey-log",
  "if-addrs",
  "libc",
+ "mjolnir-app-tun",
  "mjolnir-mesh",
  "netlink-packet-route 0.33.0",
  "objc2",
@@ -2795,6 +2796,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-app-tun"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "bytes",
+ "thiserror 2.0.20",
+ "tokio",
+ "tun",
+]
+
+[[package]]
 name = "mjolnir-mesh"
 version = "0.1.0"
 dependencies = [
@@ -2805,6 +2818,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "ipnet",
+ "mjolnir-app-tun",
  "postcard",
  "rtnetlink 0.21.0",
  "serde",

@@ -8,7 +8,9 @@
 
 ## Session
 
-The moved session matches the landed Admin runner: one TUN, MTU 1280, name `mja{n}`, local `/128` with `nodad`, one peer `/128`, encap supervision, and drop cleanup. A failed route delete or a failed observation keeps the prefix owned. Non-Linux reports the computed address with up false and installs nothing.
+The moved session keeps the landed address and route shape: one TUN, MTU 1280, name `mja{n}`, local `/128` with `nodad`, one peer `/128`. Cancellation does not match the landed runner. That runner drops the encap join handles, and dropping a Tokio join handle detaches the task. The session holds `EncapHandles` and cancels work only by `EncapHandles::abort`, which aborts both tasks.
+
+`spawn_encap_pair` still does not abort its sibling. When either task returns, the supervisor calls `abort()` on both handles, then removes the owned address, the peer `/128`, and the admitted prefixes. Session Drop calls that same `abort()` even when it runs before the supervisor has polled, aborts the supervisor, and then removes those same routes. A failed route delete or a failed observation keeps the prefix owned. Non-Linux reports the computed address with up false and installs nothing.
 
 Foreign `/48` sync takes the guild id stored at open and a list of 6-byte prefixes. Admin turns `admitted_pairs` into that list. The crate does not read a guild log.
 
@@ -18,4 +20,4 @@ The guild surface still blanks a nested access guild and still does not open a T
 
 ## Unverified hypotheses
 
-None. Spike skipped. `docs/spikes/admin-tun-encap/finding.md` is go, and the route retry is already tested on the session this change moves.
+None. Spike skipped. `docs/spikes/admin-tun-encap/finding.md` is go, and the route retry is already tested on the session this change moves. The cancellation correction is the Tokio fact that dropping a join handle detaches the task. The lifecycle tests in `tasks.md` are the act gate. No new spike.

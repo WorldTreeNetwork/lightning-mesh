@@ -2443,6 +2443,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-app-tun"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "bytes",
+ "libc",
+ "thiserror 2.0.18",
+ "tokio",
+ "tun",
+]
+
+[[package]]
 name = "mjolnir-apply"
 version = "0.1.0"
 dependencies = [
@@ -2493,6 +2506,7 @@ dependencies = [
  "iroh",
  "iroh-gossip",
  "iroh-mdns-address-lookup",
+ "mjolnir-app-tun",
  "postcard",
  "rand 0.9.2",
  "rtnetlink",

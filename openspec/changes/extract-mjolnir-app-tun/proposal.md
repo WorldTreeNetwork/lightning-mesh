@@ -11,6 +11,7 @@ The app TUN session lives inside Lightning Admin. Another desktop app cannot ope
 - Add workspace crate `mjolnir-app-tun` underneath `mjolnir-mesh` and Admin.
 - Move `house_ula_prefix`, `app_ula`, `DatagramConn`, `spawn_encap_pair`, and the Linux TUN session into that crate.
 - Admin keeps the guild window and calls the crate. Foreign `/48` sync takes prefix bytes, not Admin permit types.
+- The moved session cancels encap with `EncapHandles::abort`. Dropping a join handle is not cancellation.
 - No crates.io publish in this change.
 
 ## Impact
@@ -32,4 +33,4 @@ No new UI because the guild surface already shows the app address and still does
 
 ## Preparation
 
-Upstream: `add-admin-app-tun` folded in `57f7e2c`, `add-admitted-prefix-route` folded in `6054dc0`. Living specs `openspec/specs/admin-app-tun/spec.md` and `openspec/specs/admitted-prefix-route/spec.md`. Code anchors `admin/src-tauri/src/app_tun.rs`, `crates/mjolnir-mesh/src/tun/link.rs`, `crates/mjolnir-mesh/src/tun/encap.rs`. Outcome: new contract, steered 2026-11-01. Authority: the user added `mjolnir-mesh-bny6.9` to epic `mjolnir-mesh-bny6` and said to continue. Bounds: crate underneath, in-repo only, no Iroh, guild window stays in Admin. The demux spike was not confirmed and is not this node.
+Upstream: `add-admin-app-tun` folded in `57f7e2c`, `add-admitted-prefix-route` folded in `6054dc0`. Living specs `openspec/specs/admin-app-tun/spec.md` and `openspec/specs/admitted-prefix-route/spec.md`. Code anchors `admin/src-tauri/src/app_tun.rs`, `crates/mjolnir-mesh/src/tun/link.rs`, `crates/mjolnir-mesh/src/tun/encap.rs`. Outcome: revised after the 2026-11-01 send-back. The landed runner drops join handles, which detaches the tasks, so the session contract now requires `EncapHandles::abort` on either return and on Drop, including before the supervisor polls. Authority: the user added `mjolnir-mesh-bny6.9` to epic `mjolnir-mesh-bny6` and said to continue. Bounds: crate underneath, in-repo only, no Iroh, guild window stays in Admin. The demux spike was not confirmed and is not this node.
