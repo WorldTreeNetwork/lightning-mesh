@@ -169,8 +169,12 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
 - Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
   candidate). House `/48` is derived from the guild id; the router
   `/128` is subnet 0 and the app `/128` is subnet 1. The compiled
-  `/64` stays assigned. Babel is unchanged. `10.254` remains the Iroh
-  pin: `openspec/specs/identity-derived-ula/spec.md`
+  `/64` stays assigned. When that router `/128` is usable on `br-mesh`,
+  both Babel renders export it (`eq 128` on the house `/48`, then deny
+  the rest of `fc00::/7`). On `mjolnir0`, an IPv6 `/128` whose next hop
+  is overlay `fe80::H` selects the already-open `10.254` peer;
+  withdrawal drops the selection. `fd` is not an Iroh bind. `10.254`
+  remains the Iroh pin: `openspec/specs/identity-derived-ula/spec.md`
 - Mini-apps (TXT `app=v1`, node-side manifest fetch, Apps shelf,
   sandboxed cross-origin card; key origin ≠ app origin; identity
   over the bridge via one-shot MessagePort):
