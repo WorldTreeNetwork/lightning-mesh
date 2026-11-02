@@ -108,6 +108,38 @@ pub fn published_house_ula(
     house_addr_usable(body, iface, desired).then_some(desired)
 }
 
+/// Operator reference for a neighbor of this house. Unlike local publication,
+/// this needs the house guild, not an observation of the neighbor's interfaces.
+pub fn house_ula_reference(guild_text: Option<&str>, node_id: &str) -> Option<String> {
+    desired_router_ula(guild_text, node_id).map(|addr| addr.to_string())
+}
+
+/// Read-only inventory view; the input's walked transport column is unchanged.
+/// Pending hardware has no house reference until it has a node identity.
+pub fn fleet_reference_inventory(inventory: &str, guild_text: &str) -> Option<String> {
+    let guild = parse_house_guild_id(guild_text)?;
+    let mut output = String::from("name|transport pin|house /128 reference\n");
+    for line in inventory.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.splitn(5, '|');
+        let (Some(name), Some(transport), Some(node_id)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let reference = if node_id.is_empty() || node_id == "-" || transport == "-" {
+            String::new()
+        } else {
+            router_ula(&guild, node_id).to_string()
+        };
+        output.push_str(&format!("{name}|{transport}|{reference}\n"));
+    }
+    Some(output)
+}
+
 /// What to do with `/var/lib/mjolnir/house-ula` after the post-add observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HouseStateAction {
@@ -489,6 +521,38 @@ mod tests {
         let usable_after = desired.is_some_and(|addr| house_addr_usable(after, "br-mesh", addr));
         let (publish, action) = house_after(desired, usable_after);
         (intent, publish, action)
+    }
+
+    #[test]
+    fn reference_neighbor_uses_router_display() {
+        let text = guild_text(0x11);
+        let reference = house_ula_reference(Some(&text), "node-example").unwrap();
+        assert_eq!(reference, "fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df");
+        assert_eq!(reference, router_ula(&guild(0x11), "node-example").to_string());
+    }
+
+    #[test]
+    fn reference_missing_or_malformed_guild_is_omitted() {
+        assert_eq!(house_ula_reference(None, "node-example"), None);
+        for text in ["", "11", "not-a-guild", &"zz".repeat(32)] {
+            assert_eq!(house_ula_reference(Some(text), "node-example"), None);
+        }
+    }
+
+    #[test]
+    fn reference_fleet_keeps_transport_and_pending_identity() {
+        let inventory = "# name|backhaul_addr|node_id|model|notes\n\
+            example|10.254.0.2|node-example|model|note\n\
+            pending|-|-|model|note\n\
+            awaiting-id|10.254.0.3|-|model|note\n";
+        assert_eq!(
+            fleet_reference_inventory(inventory, &guild_text(0x11)).unwrap(),
+            "name|transport pin|house /128 reference\n\
+             example|10.254.0.2|fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df\n\
+             pending|-|\n\
+             awaiting-id|10.254.0.3|\n"
+        );
+        assert_eq!(fleet_reference_inventory(inventory, "invalid"), None);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 	import { copyText } from '$lib/clipboard';
 	import AddrCell from '$lib/discovery/AddrCell.svelte';
 	import { classifyIface, ifaceTitle, KIND_ORDER, kindLabel, type IfaceKind } from '$lib/discovery/groups';
-	import { groupResources, resourceLabel, type Resource } from '$lib/discovery/resources';
+	import { groupResources, resourceAddress, resourceLabel, type Resource } from '$lib/discovery/resources';
 	import { discovery } from '$lib/discovery/store.svelte';
 	import GuildPanel from '$lib/guild/mock/GuildPanel.svelte';
 	import { NETWORK_NAME_LABEL, networkName } from '$lib/network-name/store.svelte';
@@ -67,7 +67,7 @@
 			case 'address':
 				return resourceLabel(resource);
 			case 'where':
-				return resource.primary.address;
+				return resourceAddress(resource);
 			case 'mac':
 				return resource.via.join(',');
 			case 'state':
@@ -448,16 +448,20 @@
 										<span class="chip quiet">gateway</span>
 									{/if}
 									{#if resource.meshSubnet}
-										<div class="muted">{resource.meshSubnet} · {resource.meshBackhaul}</div>
+										<div class="muted">{resource.meshSubnet}</div>
+									{/if}
+									{#if resource.meshBackhaul}
+										<div class="muted">Transport pin: {resource.meshBackhaul}</div>
 									{/if}
 									{#if resource.rows.length > 1}
 										<span class="more">+{resource.rows.length - 1}</span>
 									{/if}
 								</td>
 								<td>
-									<button type="button" class="plain-addr" onclick={() => copyText(resource.primary.address)}>
-										{resource.primary.address}
+									<button type="button" class="plain-addr" onclick={() => copyText(resourceAddress(resource))}>
+										{resourceAddress(resource)}
 									</button>
+									{#if resource.houseUla}<span class="muted"> /128 reference</span>{/if}
 								</td>
 								<td title={resource.via.join(', ')}>{resource.local ? '—' : resource.via.join(', ') || ifaceTitle(resource.primary.iface)}</td>
 								<td class="state {resource.state}">{resourceState(resource)}</td>

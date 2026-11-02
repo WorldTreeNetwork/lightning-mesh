@@ -42,6 +42,8 @@ pub struct LinkLocalNeighbor {
     pub mesh_node_id: Option<String>,
     pub mesh_subnet: Option<String>,
     pub mesh_backhaul: Option<String>,
+    #[serde(default)]
+    pub house_ula: Option<String>,
 }
 
 impl LinkLocalNeighbor {
@@ -100,6 +102,7 @@ impl LinkLocalNeighbor {
             mesh_node_id: None,
             mesh_subnet: None,
             mesh_backhaul: None,
+            house_ula: None,
         }
     }
 }

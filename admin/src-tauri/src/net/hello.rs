@@ -34,6 +34,7 @@ pub struct HelloNode {
     pub node_id: String,
     pub subnet: String,
     pub backhaul_addr: String,
+    pub house_ula: Option<String>,
     pub link_local_lan: String,
     pub ula: String,
 }
@@ -44,6 +45,8 @@ struct NodeBody {
     node_id: String,
     subnet: String,
     backhaul_addr: String,
+    #[serde(default)]
+    house_ula: Option<String>,
     #[serde(default)]
     link_local_lan: String,
     #[serde(default)]
@@ -126,16 +129,21 @@ fn fetch_node(target: &ProbeTarget) -> Option<HelloNode> {
     if !text.contains("200") {
         return None;
     }
+    parse_node_body(&target.address, body)
+}
+
+fn parse_node_body(address: &str, body: &str) -> Option<HelloNode> {
     let parsed: NodeBody = serde_json::from_str(body).ok()?;
     if parsed.name.is_empty() || parsed.node_id.is_empty() {
         return None;
     }
     Some(HelloNode {
-        address: target.address.clone(),
+        address: address.to_string(),
         name: parsed.name,
         node_id: parsed.node_id,
         subnet: parsed.subnet,
         backhaul_addr: parsed.backhaul_addr,
+        house_ula: parsed.house_ula,
         link_local_lan: parsed.link_local_lan,
         ula: parsed.ula,
     })
@@ -155,6 +163,7 @@ pub fn apply_nodes(neighbors: &mut [LinkLocalNeighbor], nodes: &[HelloNode]) {
             row.mesh_node_id = Some(node.node_id.clone());
             row.mesh_subnet = Some(node.subnet.clone());
             row.mesh_backhaul = Some(node.backhaul_addr.clone());
+            row.house_ula = node.house_ula.clone();
         }
     }
 }
@@ -167,6 +176,43 @@ mod tests {
 
     fn row(addr: IpAddr, ifindex: u32) -> LinkLocalNeighbor {
         LinkLocalNeighbor::from_ip("eth0", ifindex, addr, None, "reachable", "neighbor", "kernel")
+    }
+
+    #[test]
+    fn house_ula_survives_the_probe_and_discovery_row() {
+        let address = "10.42.61.1";
+        let reference = "fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df";
+        let mut body = serde_json::json!({
+            "name": "example",
+            "node_id": "node-example",
+            "subnet": "10.42.61.0/24",
+            "backhaul_addr": "10.254.0.2",
+            "link_local_lan": "fe80::1",
+            "house_ula": reference,
+        });
+        let mut rows = vec![
+            row(address.parse().unwrap(), 2),
+            row("fe80::1".parse().unwrap(), 2),
+        ];
+        let node = parse_node_body(address, &body.to_string()).unwrap();
+        apply_nodes(&mut rows, &[node]);
+        for row in &rows {
+            assert_eq!(row.house_ula.as_deref(), Some(reference));
+            assert_eq!(row.mesh_backhaul.as_deref(), Some("10.254.0.2"));
+        }
+
+        // Older or unconfigured nodes omit the field; a fresh probe also clears
+        // a previously published reference without dropping the transport pin.
+        body.as_object_mut().unwrap().remove("house_ula");
+        let node = parse_node_body(address, &body.to_string()).unwrap();
+        assert_eq!(node.house_ula, None);
+        apply_nodes(&mut rows, &[node]);
+        for row in &rows {
+            assert_eq!(row.house_ula, None);
+            assert_eq!(row.mesh_backhaul.as_deref(), Some("10.254.0.2"));
+        }
+        body["house_ula"] = serde_json::Value::Null;
+        assert_eq!(parse_node_body(address, &body.to_string()).unwrap().house_ula, None);
     }
 
     #[test]

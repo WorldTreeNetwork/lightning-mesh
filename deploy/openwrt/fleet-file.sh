@@ -18,6 +18,8 @@
 # `fleet_kind <name> <addr> <node_id>` prints member, pending, or skip.
 # `fleet_peer_ids <conf> <self_id>` prints the other members' ids.
 # `fleet_render_peers <conf> <self_id> <ssh_host>` replaces the UCI peer list.
+# `fleet_print_references <conf> <house-guild-id file>` prints the operator view.
+# Or run: bash deploy/openwrt/fleet-file.sh --reference <house-guild-id file>
 
 fleet_conf() {
 	local dir="$1"
@@ -102,9 +104,56 @@ fleet_render_peers() {
 	ssh -o BatchMode=yes -o ConnectTimeout=6 "$3" 'sh -s' <<<"$script"
 }
 
+# Build a small host formatter against the library, so the displayed reference
+# is router_ula's Rust Display, never a shell reimplementation of its hash.
+# The temporary Cargo project and its build output stay outside the checkout.
+fleet_print_references() (
+	set -euo pipefail
+	local conf="$1" guild_file="$2" repo_dir scratch crate_path
+	repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+	scratch="$(mktemp -d)"
+	trap 'rm -rf "$scratch"' EXIT
+	crate_path="$repo_dir/crates/mjolnir-mesh"
+	crate_path="${crate_path//\\/\\\\}"
+	crate_path="${crate_path//\"/\\\"}"
+	cat >"$scratch/Cargo.toml" <<EOF
+[package]
+name = "lightning-fleet-reference"
+version = "0.0.0"
+edition = "2021"
+[dependencies]
+mjolnir-mesh = { path = "$crate_path" }
+[[bin]]
+name = "lightning-fleet-reference"
+path = "main.rs"
+EOF
+	cp -f "$repo_dir/Cargo.lock" "$scratch/Cargo.lock"
+	cat >"$scratch/main.rs" <<'RS'
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let inventory = std::fs::read_to_string(args.next().ok_or("missing inventory")?)?;
+    let guild = std::fs::read_to_string(args.next().ok_or("missing house guild file")?)?;
+    let view = mjolnir_mesh::tun::link::fleet_reference_inventory(&inventory, &guild)
+        .ok_or("house guild file must contain a 32-byte hex guild id")?;
+    print!("{view}");
+    Ok(())
+}
+RS
+	CARGO_TARGET_DIR="${LIGHTNING_REFERENCE_TARGET_DIR:-/tmp/lm-fleet-reference-target}" \
+		cargo run --quiet --manifest-path "$scratch/Cargo.toml" -- "$conf" "$guild_file"
+)
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	set -euo pipefail
 	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	if [ "${1:-}" = --reference ]; then
+		if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+			echo "usage: $0 --reference <house-guild-id file> [inventory.conf]" >&2
+			exit 1
+		fi
+		fleet_print_references "${3:-$(fleet_conf "$DIR")}" "$2"
+		exit
+	fi
 	got="$(fleet_conf "$DIR")"
 	[ "$got" = "$DIR/fleet-nodes.conf" ]
 	members=0

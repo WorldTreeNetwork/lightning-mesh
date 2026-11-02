@@ -14,6 +14,7 @@ export type Resource = {
 	meshNodeId: string | null;
 	meshSubnet: string | null;
 	meshBackhaul: string | null;
+	houseUla: string | null;
 	router: boolean;
 	/** Gateways seen on the same links as this resource. */
 	via: string[];
@@ -147,6 +148,7 @@ export function groupResources(rows: LinkLocalNeighbor[]): Resource[] {
 			meshNodeId: mesh?.mesh_node_id ?? null,
 			meshSubnet: mesh?.mesh_subnet ?? null,
 			meshBackhaul: mesh?.mesh_backhaul ?? null,
+			houseUla: sorted.find((row) => row.house_ula)?.house_ula ?? null,
 			router,
 			via: [],
 			local
@@ -166,4 +168,9 @@ export function groupResources(rows: LinkLocalNeighbor[]): Resource[] {
 
 export function resourceLabel(resource: Resource): string {
 	return labelOf(resource);
+}
+
+/** Address to read and copy: house reference, then the transport pin. */
+export function resourceAddress(resource: Resource): string {
+	return resource.houseUla ?? resource.meshBackhaul ?? resource.primary.address;
 }

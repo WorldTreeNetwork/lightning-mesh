@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { LinkLocalNeighbor } from './api';
-import { groupResources } from './resources';
+import { groupResources, resourceAddress } from './resources';
 
 function row(partial: Partial<LinkLocalNeighbor> & Pick<LinkLocalNeighbor, 'address' | 'iface' | 'ifindex'>): LinkLocalNeighbor {
 	return {
@@ -86,7 +86,7 @@ describe('groupResources', () => {
 		expect(resources.filter((resource) => resource.router)).toHaveLength(1);
 	});
 
-	test('names a Lightning node from the hello identity and prefers that over gateway', () => {
+	test('names a Lightning node and keeps its house_ula reference plus transport pin', () => {
 		const resources = groupResources([
 			row({
 				iface: 'eth0',
@@ -98,7 +98,8 @@ describe('groupResources', () => {
 				mesh_name: 'tr3000',
 				mesh_node_id: 'node-tr',
 				mesh_subnet: '10.42.61.0/24',
-				mesh_backhaul: '10.254.61.115'
+				mesh_backhaul: '10.254.61.115',
+				house_ula: 'fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df'
 			}),
 			row({
 				iface: 'eth0',
@@ -111,6 +112,13 @@ describe('groupResources', () => {
 		expect(resources).toHaveLength(1);
 		expect(resources[0].meshName).toBe('tr3000');
 		expect(resources[0].meshSubnet).toBe('10.42.61.0/24');
+		expect(resources[0].houseUla).toBe('fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df');
+		expect(resources[0].meshBackhaul).toBe('10.254.61.115');
+		expect(resourceAddress(resources[0])).toBe('fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df');
+
+		const withoutHouse = groupResources(resources[0].rows.map((row) => ({ ...row, house_ula: null })));
+		expect(withoutHouse[0].houseUla).toBeNull();
+		expect(resourceAddress(withoutHouse[0])).toBe('10.254.61.115');
 	});
 
 	test('does not merge addresses that have no MAC and no endpoint id', () => {
@@ -120,5 +128,6 @@ describe('groupResources', () => {
 		]);
 		expect(resources).toHaveLength(2);
 		expect(resources.every((r) => r.guess === false)).toBe(true);
+		expect(resourceAddress(resources[0])).toBe('fe80::1');
 	});
 });

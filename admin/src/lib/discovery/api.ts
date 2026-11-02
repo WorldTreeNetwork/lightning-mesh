@@ -33,6 +33,7 @@ export interface LinkLocalNeighbor {
 	mesh_node_id?: string | null;
 	mesh_subnet?: string | null;
 	mesh_backhaul?: string | null;
+	house_ula?: string | null;
 	/** Iroh endpoint id, when this host publishes mesh resources. */
 	iroh?: string | null;
 }

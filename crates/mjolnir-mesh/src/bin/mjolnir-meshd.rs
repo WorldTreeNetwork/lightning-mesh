@@ -3409,6 +3409,9 @@ fn stamp_node_link_locals(node: &mut DirectoryNode) {
 struct DirectoryNeighbor {
     node_id: String,
     addrs: Vec<String>,
+    /// House router reference; `addrs` remains the transport pin list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    house_ula: Option<String>,
     subnet: Option<String>,
     /// Operator-set human router name (bead mjolnir-mesh-t7i), from the
     /// node-name CRDT book. `None` when that node is nameless. Additive
@@ -3521,10 +3524,9 @@ fn owned_client_subnet(claims: &HashMap<String, SubnetClaim>, node_id: &str) -> 
 }
 
 /// Project the daemon's four in-memory CRDT stores into the read-only
-/// `directory.json` shape `mjolnir-hello` reads (bead avs). Pure over plain
-/// snapshots (no locks, no I/O) so it's natively unit-testable without the
-/// `daemon` feature's Linux-only dependencies — the timer/write wiring that
-/// calls this is exercised by [`write_directory_projection`] instead.
+/// `directory.json` shape `mjolnir-hello` reads (bead avs). Reads the local
+/// house guild for neighbor references; all other inputs are plain snapshots.
+/// The timer/write wiring is exercised by [`write_directory_projection`].
 fn build_directory_snapshot(
     claims: &HashMap<String, SubnetClaim>,
     addr_book: &AddrBook,
@@ -3550,12 +3552,17 @@ fn build_directory_snapshot(
         house_ula: None,
     };
 
+    let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
     let neighbors = addr_book
         .values()
         .filter(|entry| entry.node_id != self_id)
         .map(|entry| DirectoryNeighbor {
             node_id: entry.node_id.clone(),
             addrs: entry.direct_addrs.iter().map(ToString::to_string).collect(),
+            house_ula: mjolnir_mesh::tun::link::house_ula_reference(
+                guild.as_deref(),
+                &entry.node_id,
+            ),
             subnet: owned_client_subnet(claims, &entry.node_id),
             name: node_name_book.get(&entry.node_id).map(|e| e.name.clone()),
             coordinate: project_coordinate(coordinate_book, &entry.node_id),
@@ -3629,12 +3636,17 @@ fn build_directory_snapshot_v2(
         house_ula: None,
     };
 
+    let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
     let neighbors = addr_book
         .values()
         .filter(|entry| entry.node_id != self_id)
         .map(|entry| DirectoryNeighbor {
             node_id: entry.node_id.clone(),
             addrs: entry.direct_addrs.iter().map(ToString::to_string).collect(),
+            house_ula: mjolnir_mesh::tun::link::house_ula_reference(
+                guild.as_deref(),
+                &entry.node_id,
+            ),
             subnet: owned_client_subnet(claims, &entry.node_id),
             name: node_name_book.get(&entry.node_id).map(|e| e.name.clone()),
             coordinate: project_coordinate(coordinate_book, &entry.node_id),
