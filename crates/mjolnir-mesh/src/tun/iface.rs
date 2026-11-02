@@ -13,21 +13,7 @@ pub const TUNNEL_MTU: u16 = 1300;
 /// node multiplexing every peer, replacing the per-peer `mj-peer-*` tunnels.
 pub const OVERLAY_IFACE: &str = "mjolnir0";
 
-/// Derive a stable IPv6 link-local for the overlay TUN from the node's backhaul
-/// `/16` host address: `fe80::<host16>`, where `<host16>` is the 16-bit host part
-/// of `self_addr` within `10.254.0.0/16`.
-///
-/// babeld transports its protocol over `fe80::` and uses the interface's
-/// link-local as the neighbour address other nodes learn. Deriving it from the
-/// (already collision-resistant) backhaul host gives every node a distinct,
-/// deterministic link-local — instead of relying on the kernel's random
-/// stable-privacy address, which the buw.1 spike showed can coexist confusingly
-/// with an explicitly-assigned one.
-pub fn overlay_link_local(self_addr: Ipv4Addr) -> Ipv6Addr {
-    let o = self_addr.octets();
-    let host = u16::from_be_bytes([o[2], o[3]]);
-    Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, host)
-}
+pub use super::neighbor::overlay_link_local;
 
 /// A live single overlay TUN (`mjolnir0`). The [`tun::AsyncDevice`] is returned
 /// separately and owns the fd — dropping it removes the interface. This struct
@@ -35,8 +21,8 @@ pub fn overlay_link_local(self_addr: Ipv4Addr) -> Ipv6Addr {
 #[derive(Debug, Clone)]
 pub struct OverlayLink {
     pub iface_name: String,
-    /// This node's backhaul address (`10.254.x/16`) assigned to the overlay TUN.
-    pub self_addr: Ipv4Addr,
+    /// Identity used to derive this interface's sole link-local.
+    pub node_id: String,
     /// The `fe80::` babeld runs its protocol over (see [`overlay_link_local`]).
     pub link_local: Ipv6Addr,
     /// Kernel interface index.
@@ -158,29 +144,18 @@ where
     Err(IfaceError::Unsupported)
 }
 
-/// Bring up the single overlay TUN and return its [`tun::AsyncDevice`] plus the
-/// [`OverlayLink`] metadata. One per node for its whole lifetime (mjolnir-mesh-buw):
-/// babeld sees ONE multi-access interface instead of N churning per-peer tunnels.
-///
-/// Does, in order: create `iface_name` (MTU [`TUNNEL_MTU`]); assign this node's
-/// backhaul `/16` (`10.254.x`, from [`crate::tun::link::backhaul_addr`]); enable
-/// IPv6 and assign the derived link-local ([`overlay_link_local`]); set the link
-/// **up** and — crucially — set the **`MULTICAST`** flag, which a TUN lacks by
-/// default and without which babeld will not send Hellos to `ff02::1:6`
-/// (mjolnir-mesh-buw.1). The caller splits the device and drives the data plane
-/// with [`crate::tun::overlay::spawn_overlay`].
+/// Bring up the single overlay TUN, with no IPv4 or house host assigned.
+/// Its sole IPv6 link-local shares the router identity's hashed interface id.
 #[cfg(target_os = "linux")]
 pub async fn spawn_overlay_tun(
-    self_addr: std::net::Ipv4Addr,
+    node_id: &str,
     iface_name: &str,
 ) -> Result<(tun::AsyncDevice, OverlayLink), IfaceError> {
     use futures_util::stream::TryStreamExt;
     use rtnetlink::new_connection;
     use rtnetlink::packet_route::link::LinkFlags;
 
-    // `self_addr` is the node's effective backhaul address — usually the
-    // node-id derivation, but claim-aware after a lost collision (pt9).
-    let link_local = overlay_link_local(self_addr);
+    let link_local = overlay_link_local(node_id);
 
     // 1. Create the async TUN device (retained for the node's lifetime), MTU set.
     let mut config = tun::Configuration::default();
@@ -203,34 +178,25 @@ pub async fn spawn_overlay_tun(
     })?;
     let index = link.header.index;
 
-    // 3. Assign the backhaul /16 (the node's overlay address).
-    handle
-        .address()
-        .add(
-            index,
-            std::net::IpAddr::V4(self_addr),
-            crate::tun::link::BACKHAUL_PREFIX_LEN,
-        )
-        .execute()
-        .await?;
-
-    // 4. Enable IPv6 (containers/routers often disable it) and assign the derived
-    //    link-local so babeld has a distinct, deterministic fe80:: to speak over.
-    let _ = std::fs::write(
+    // Disable automatic link-local generation before enabling IPv6. This TUN
+    // has exactly one link-local, derived from the node id, and no IPv4/house IP.
+    std::fs::write(
+        format!("/proc/sys/net/ipv6/conf/{iface_name}/disable_ipv6"),
+        "1",
+    )?;
+    std::fs::write(
+        format!("/proc/sys/net/ipv6/conf/{iface_name}/addr_gen_mode"),
+        "1",
+    )?;
+    std::fs::write(
         format!("/proc/sys/net/ipv6/conf/{iface_name}/disable_ipv6"),
         "0",
-    );
-    if let Err(e) = handle
+    )?;
+    handle
         .address()
         .add(index, std::net::IpAddr::V6(link_local), 64)
         .execute()
-        .await
-    {
-        tracing::warn!(
-            iface = %iface_name, %link_local,
-            "could not assign overlay IPv6 link-local (babeld adjacency may not form): {e}"
-        );
-    }
+        .await?;
 
     // 5. Bring the link up AND set the MULTICAST flag. A TUN has no MULTICAST flag
     //    by default; without it babeld silently never emits Hellos to ff02::1:6,
@@ -242,11 +208,11 @@ pub async fn spawn_overlay_tun(
 
     let overlay = OverlayLink {
         iface_name: iface_name.to_string(),
-        self_addr,
+        node_id: node_id.to_owned(),
         link_local,
         index,
     };
-    tracing::info!(iface = %iface_name, %self_addr, %link_local, "overlay TUN up");
+    tracing::info!(iface = %iface_name, %node_id, %link_local, "overlay TUN up");
     Ok((device, overlay))
 }
 
@@ -387,19 +353,10 @@ mod tests {
 
     #[test]
     fn overlay_link_local_is_stable_and_distinct() {
-        // fe80::<host16>, derived from the backhaul /16 host part.
-        let a = crate::tun::link::backhaul_addr("alpha");
-        let b = crate::tun::link::backhaul_addr("beta");
-        let lla = overlay_link_local(a);
-        let llb = overlay_link_local(b);
-        // Deterministic.
-        assert_eq!(lla, overlay_link_local(a));
-        // Distinct nodes -> distinct link-locals.
-        assert_ne!(lla, llb);
-        // Always in fe80::/64 with the host in the last group.
-        assert_eq!(lla.segments()[0], 0xfe80);
-        let o = a.octets();
-        assert_eq!(lla.segments()[7], u16::from_be_bytes([o[2], o[3]]));
+        let a = overlay_link_local("peer-example");
+        assert_eq!(a.to_string(), "fe80::403d:2741:12c1:e5c0");
+        assert_eq!(a, overlay_link_local("peer-example"));
+        assert_ne!(a, overlay_link_local("node-example"));
     }
 
     #[cfg(target_os = "linux")]
@@ -409,12 +366,11 @@ mod tests {
         use futures_util::stream::TryStreamExt;
         use rtnetlink::packet_route::link::LinkFlags;
 
-        let addr = crate::tun::link::backhaul_addr("test-node-buw2");
-        let (device, link) = spawn_overlay_tun(addr, "mjtest0")
+        let (device, link) = spawn_overlay_tun("node-example", "mjtest0")
             .await
             .expect("overlay TUN up");
         assert_eq!(link.iface_name, "mjtest0");
-        assert_eq!(&link.self_addr.octets()[..2], &[10, 254]);
+        assert_eq!(link.link_local, overlay_link_local("node-example"));
 
         // Verify the MULTICAST flag is actually set on the kernel interface —
         // the one thing a TUN lacks by default and babel needs (buw.1).

@@ -3,16 +3,16 @@ pub mod fib;
 pub mod iface;
 pub mod link;
 pub mod mcast;
+pub mod neighbor;
 pub mod overlay;
-pub mod ula_host;
+pub mod underlay;
 
 pub use encap::{DatagramConn, EncapError, EncapHandles, spawn_encap_pair};
 pub use fib::Fib;
 #[cfg(target_os = "linux")]
 pub use iface::spawn_overlay_tun;
 pub use iface::{
-    IfaceError, OVERLAY_IFACE, OverlayLink, PeerInterface, TUNNEL_MTU, Tunnel, overlay_link_local,
-    spawn_tunnel,
+    IfaceError, OVERLAY_IFACE, OverlayLink, PeerInterface, TUNNEL_MTU, Tunnel, spawn_tunnel,
 };
 pub use link::{
     BACKHAUL_PREFIX_LEN, HOUSE_APP_SUBNET, HOUSE_GUILD_PATH, HOUSE_ROUTER_SUBNET, HOUSE_ULA_DOMAIN,
@@ -25,4 +25,5 @@ pub use link::{
 };
 pub use mcast::{BABEL_MCAST, BABEL_PORT, OverlayDest, classify, is_babel_multicast};
 pub use overlay::{OverlayHandles, UnicastRouter, spawn_overlay, spawn_overlay_routed};
-pub use ula_host::{UlaHostRoutes, parse_ula_host_routes};
+
+pub use neighbor::{NeighborRoutes, Neighbors, overlay_link_local};

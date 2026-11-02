@@ -40,8 +40,8 @@ use mjolnir_mesh::capability_beacon::CapabilityDescriptor;
 use mjolnir_mesh::capability_transport::{CAPABILITY_ALPN, handshake_response_frame};
 use mjolnir_mesh::https_status::{HttpsName, load_https_names};
 use mjolnir_mesh::tun::{
-    DatagramConn, EncapError, Fib, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel, UlaHostRoutes,
-    UnicastRouter, classify, parse_ula_host_routes, spawn_overlay_tun, spawn_tunnel,
+    DatagramConn, EncapError, NeighborRoutes, Neighbors, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel,
+    UnicastRouter, classify, spawn_overlay_tun, spawn_tunnel,
 };
 use mjolnir_mesh::{
     AddrBook, AppMarker, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport,
@@ -60,6 +60,10 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
+
+#[path = "meshd/transport.rs"]
+mod mesh_transport;
+use mesh_transport::{SessionTasks, HouseDialGate, peer_house_router, supervised_mesh};
 
 /// ALPN for the P0 mesh connectivity probe. Bumped per protocol revision.
 const MESH_ALPN: &[u8] = b"mjolnir/mesh/v0";
@@ -106,7 +110,7 @@ struct Cli {
     no_relay: bool,
 
     /// Bind to a specific socket address (e.g. 127.0.0.1:0 for a loopback-only
-    /// test). Default is iroh's wildcard bind.
+    /// test). Replaces the usable house /128 bind; wildcards are rejected.
     #[arg(long, global = true)]
     bind: Option<SocketAddr>,
 
@@ -236,10 +240,8 @@ enum Command {
         /// gateway — the router sits directly on the client L2.
         #[arg(long, default_value = "br-lan")]
         client_iface: String,
-        /// The container interface on the shared L2 segment (the veth facing the
-        /// other mesh nodes). meshd self-assigns this node's derived IPv4 backhaul
-        /// address here so peers discover + connect directly over the LAN, no DHCP.
-        #[arg(long, default_value = "eth0")]
+        /// Physical house interface. The house /128 and legacy /64 live on br-mesh.
+        #[arg(long, default_value = "br-mesh")]
         backhaul_iface: String,
         /// Re-enable per-peer iroh data-plane tunnels in LAN mode (default off —
         /// LAN data rides the shared-L2 backhaul, babel-routed). Opt-in for the
@@ -299,12 +301,8 @@ enum Command {
     },
 }
 
-/// Well-known UDP port every mesh node binds its iroh socket to in LAN mode, so
-/// a peer is reachable at a *fully derived* address — `backhaul_addr(node_id)` +
-/// this port — with no mDNS/discovery lookup (mjolnir-mesh-0yb.1). The pinned IP
-/// is unique per node, so the shared port is fine even with several nodes on one
-/// host. If the port is already taken, `build_endpoint` falls back to an
-/// ephemeral bind (losing derivability but staying up).
+/// Well-known house transport port. Bind failure waits and retries that same
+/// address and port; it never substitutes an ephemeral or wildcard socket.
 const MESH_IROH_PORT: u16 = 49737;
 
 #[tokio::main]
@@ -386,85 +384,18 @@ async fn main() -> Result<()> {
         return run_unpublish_cli(name, *device).await;
     }
 
-    // The deployed `mesh` daemon defaults to LAN mode (offline, mDNS, no relay),
-    // since the same-site mesh has no internet. Opt into internet/relay mode with
-    // `--internet` or by passing `--relay`. The lower-level test commands
-    // (listen/connect/id) keep their explicit-`--lan` behaviour unchanged.
-    let mesh_mode = matches!(cli.command, Command::Mesh { .. });
-    // In overlay mode the node's backhaul address (10.254.x) belongs to the
-    // single overlay TUN mjolnir0, NOT the underlay iface — so we skip assigning
-    // it to the backhaul iface and skip pinning the iroh socket to it (the iroh
-    // underlay uses its own transport / relays). Assigning it to both would
-    // collide (mjolnir0 vs backhaul iface with the same address).
-    let overlay_mode = matches!(cli.command, Command::Mesh { overlay: true, .. });
-    let internet = cli.internet || !cli.relay.is_empty();
-    let lan = cli.lan || (mesh_mode && !internet);
-    // --lan (and LAN-by-default) imply no relay (LAN discovery only).
-    let no_relay = cli.no_relay || lan;
-
-    // Load the node secret once so we know our id before binding. For `mesh`, we
-    // self-assign the derived IPv4 backhaul address to the shared-segment iface
-    // BEFORE building the endpoint, so iroh enumerates it at bind time and mDNS
-    // announces it to peers (mjolnir-mesh-4pk). Assigning after bind misses the
-    // initial address scan — and with no DHCP the iface has no other address.
     let secret = load_or_create_secret(cli.secret_file.as_deref())?;
-    // pt9: load the persisted claim map BEFORE deriving the backhaul address, so
-    // a node that previously lost a backhaul-address collision derives around
-    // the winner's persisted claim instead of re-colliding at every boot. The
-    // map is handed onward as the claim store seed (was loaded later, s9v).
-    let restored_claims = match &cli.command {
-        Command::Mesh { claims_file, .. } => load_claims(claims_file),
-        _ => HashMap::new(),
-    };
-    let backhaul_ip = pick_backhaul_addr(&restored_claims, &secret.public().to_string());
-    let l2_backhaul = match &cli.command {
-        // Overlay mode: mjolnir0 carries the backhaul address, so don't put it on
-        // the underlay iface too. (Overlay also ignores the l2 wired backhaul.)
-        Command::Mesh { backhaul_iface, .. } if !overlay_mode => {
-            assign_backhaul_addr(backhaul_iface, backhaul_ip).await
-        }
-        _ => None,
-    };
-    if !overlay_mode {
-        if let Some(iface) = l2_backhaul.clone() {
-            let node_id = secret.public().to_string();
-            let ula = mjolnir_mesh::tun::ula_addr(&node_id);
-            tokio::spawn(assign_ula_addr(iface.clone(), ula));
-            tokio::spawn(reconcile_backhaul_addr(iface, backhaul_ip, ula, node_id));
-        }
-        // LED loop does not wait on assign: overlay-sick is exactly "iface
-        // up, address missing" (849.5 / esz).
-        if let Command::Mesh { backhaul_iface, .. } = &cli.command {
-            tokio::spawn(led_status_loop(backhaul_iface.clone(), backhaul_ip));
-        }
+    if matches!(cli.command, Command::Mesh { .. }) {
+        return supervised_mesh(cli, secret).await;
     }
-    // Pin the iroh socket to the derived backhaul address in LAN/mesh mode so
-    // peers can dial us at a fully-derived address with no discovery lookup
-    // (mjolnir-mesh-0yb.1). NOTE: the `MultipathNotNegotiated` tunnel death this
-    // was once thought to prevent was NOT an iroh multipath bug — it was an
-    // L23/RouterOS-container artifact (a duplicate `172.20.0.2` on the shared L2,
-    // identical on every node, advertised as a bogus second candidate), proven by
-    // the auu native retest (OpenWrt: single DIRECT path, stable). So the pin is
-    // retained only for deterministic dialing, not to avoid multipath — iroh
-    // handles multiple candidates fine on clean networks. Explicit `--bind` still
-    // wins; overlay + non-mesh/non-LAN paths are unchanged.
-    let bind = match cli.bind {
-        Some(addr) => Some(addr),
-        // Overlay mode binds the underlay normally (mjolnir0 owns 10.254.x); only
-        // the per-peer LAN path pins iroh to the derived backhaul address.
-        None if lan && mesh_mode && !overlay_mode => {
-            // Pin a well-known port so peers can dial us at a fully-derived
-            // address (backhaul_addr + MESH_IROH_PORT), no mDNS needed (0yb.1).
-            // `backhaul_ip` is claim-aware (pt9): a collision loser binds its
-            // re-derived address, and peers learn it from the gossiped claim.
-            Some(SocketAddr::new(
-                std::net::IpAddr::V4(backhaul_ip),
-                MESH_IROH_PORT,
-            ))
-        }
-        None => None,
-    };
-    let endpoint = build_endpoint(secret, no_relay, bind, lan, &cli.relay).await?;
+    let no_relay = cli.no_relay || cli.lan;
+    let house = known_house_router(&secret.public().to_string())
+        .context("house /128 is not usable on br-mesh")?;
+    let bind = Some(
+        cli.bind
+            .unwrap_or(SocketAddr::new(IpAddr::V6(house), MESH_IROH_PORT)),
+    );
+    let endpoint = build_endpoint(secret, no_relay, bind, cli.lan, &cli.relay).await?;
 
     match cli.command {
         Command::Id => {
@@ -475,54 +406,7 @@ async fn main() -> Result<()> {
         Command::Connect { addr } => run_connect(endpoint, &addr).await?,
         Command::TunListen => run_tun_listen(endpoint, no_relay).await?,
         Command::TunConnect { addr } => run_tun_connect(endpoint, &addr).await?,
-        Command::Mesh {
-            roster,
-            peer,
-            babel_config,
-            client_iface,
-            // backhaul_iface was used before bind in `main`; the resolved name
-            // flows in via `l2_backhaul`.
-            backhaul_iface: _,
-            lan_tunnels,
-            claims_file,
-            directory_file,
-            spool_dir,
-            overlay,
-            gateway,
-            name,
-        } => {
-            // In LAN mode babel routes over the shared-L2 backhaul directly; pass
-            // the resolved interface so the reconciler can add it as the wireless L2 iface
-            // and skip the per-peer iroh tunnels (mjolnir-mesh-auu).
-            let l2 = if lan { l2_backhaul } else { None };
-            // Human router name (t7i): explicit `--name` wins, else the UCI
-            // `meshd.name` option (how the init script passes it), else nameless.
-            // A blank/whitespace value is treated as unset.
-            let node_name = name
-                .or_else(uci_node_name)
-                .map(|n| n.trim().to_string())
-                .filter(|n| !n.is_empty());
-            run_mesh(
-                endpoint,
-                no_relay,
-                roster,
-                peer,
-                babel_config,
-                client_iface,
-                lan,
-                lan_tunnels,
-                l2,
-                claims_file,
-                directory_file,
-                spool_dir,
-                overlay,
-                gateway,
-                node_name,
-                backhaul_ip,
-                restored_claims,
-            )
-            .await?
-        }
+        Command::Mesh { .. } => unreachable!("supervised above"),
         Command::TunTest
         | Command::Status
         | Command::Publish { .. }
@@ -809,7 +693,9 @@ async fn run_mesh(
     node_name: Option<String>,
     backhaul_ip: Ipv4Addr,
     restored_claims: HashMap<String, SubnetClaim>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
+    let tasks = SessionTasks::default();
     // Client-gateway IP for the well-known `.mesh` names (e21.1.2): `None`
     // until this node's client /24 claim lands, at which point `claim_manager`
     // writes the claimed `.1` address through this handle. The responder
@@ -928,11 +814,6 @@ async fn run_mesh(
         .lock()
         .expect("liveness tracker poisoned")
         .touch(&self_id_str, mjolnir_mesh::monotonic_now_ms());
-    // NB: the effective IPv4 backhaul address (`backhaul_ip`, claim-aware per
-    // pt9) was already assigned to the shared-segment iface in `main`, before
-    // the endpoint was built, so iroh picks it up at bind time and mDNS
-    // announces it (mjolnir-mesh-4pk).
-
     wait_until_addressable(&endpoint, no_relay).await;
     print_identity(&endpoint)?;
 
@@ -965,19 +846,18 @@ async fn run_mesh(
     // manager + inbound sender the accept handler and dialers register into.
     // When off, this is None and everything below takes the per-peer path.
     let overlay_state: Option<(ConnManager, tokio::sync::mpsc::Sender<Bytes>)> = if overlay {
-        let (device, link) = spawn_overlay_tun(backhaul_ip, OVERLAY_IFACE)
+        let (device, link) = spawn_overlay_tun(&self_id_str, OVERLAY_IFACE)
             .await
             .context("bringing up overlay TUN mjolnir0")?;
-        info!(iface = %link.iface_name, addr = %link.self_addr, ll = %link.link_local, "overlay mode: single mjolnir0 up");
+        info!(iface = %link.iface_name, ll = %link.link_local, "overlay mode: single mjolnir0 up");
         let (writer, reader) = device.split().context("splitting overlay TUN")?;
 
         let conns = ConnManager::new();
-        let fib = Arc::new(Mutex::new(Fib::new()));
-        let ula_hosts = Arc::new(Mutex::new(UlaHostRoutes::new()));
+        let routes = Arc::new(Mutex::new(NeighborRoutes::default()));
         let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<Bytes>(1024);
 
         // Writer task: every peer's inbound datagrams funnel here -> mjolnir0.
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             use tokio::io::AsyncWriteExt;
             let mut writer = writer;
             while let Some(pkt) = inbound_rx.recv().await {
@@ -987,15 +867,13 @@ async fn run_mesh(
             }
         });
         // Mirror babeld's mjolnir0 routes into the FIB (demux next hops).
-        tokio::spawn(fib_mirror(link.iface_name.clone(), fib.clone()));
-        tokio::spawn(ula_host_mirror(link.iface_name.clone(), ula_hosts.clone()));
+        tasks.spawn(neighbor_route_mirror(link.iface_name.clone(), routes.clone(), conns.clone()));
         // Reader task: mjolnir0 -> route unicast / flood multicast to peers.
         let router = OverlayRouter {
-            fib,
-            ula_hosts,
+            routes,
             conns: conns.clone(),
         };
-        tokio::spawn(overlay_reader(
+        tasks.spawn(overlay_reader(
             reader,
             conns.clone(),
             router,
@@ -1012,8 +890,7 @@ async fn run_mesh(
     // it for the local subnet to redistribute. Seeded from disk (mjolnir-mesh-s9v)
     // so a rebooting node has its own and any known peers' claims immediately,
     // before gossip has a chance to relearn them.
-    // Loaded once in `main` before backhaul-address derivation (pt9); reused
-    // here as the store seed so boot and claim state agree on one snapshot.
+    // Reloaded for each endpoint session from the persisted claim state.
     let restored = restored_claims;
     if !restored.is_empty() {
         info!(count = restored.len(), path = %claims_file.display(), "restored subnet claims from disk");
@@ -1158,37 +1035,14 @@ async fn run_mesh(
         .map(|a| a.id)
         .filter(|id| *id != self_id)
         .collect();
-    // LAN mode: seed iroh's address book with every roster peer's fully
-    // DERIVED address — backhaul ip from the node id + the well-known mesh
-    // port (0yb.1). Every node BINDS at that address, but dialing by bare id
-    // relied on mDNS, which is unreliable over 802.11s and not yet resolved
-    // at boot — so gossip bootstrap dials failed outright ("No addressing
-    // information available") and, with the one-shot join, left every node a
-    // permanent gossip island (mjolnir-mesh-eon). Derivation needs no
-    // discovery at all; mDNS stays as a second candidate source.
-    // One MemoryLookup the daemon owns for the whole run (mjolnir-mesh-0yb):
-    // seeded at boot with every roster peer's DERIVED LAN address (unchanged
-    // pre-existing behavior) and with the restored address book, then augmented
-    // as gossiped PeerAddrUpdate entries arrive so dialing by node id works for
-    // peers that were never L2 neighbors (multi-hop / cross-site). Registered
-    // once with the endpoint's address-lookup services; a clone feeds the gossip
-    // dispatch loop. `None` if the services are unavailable — dialing then falls
-    // back to derived seeding / mDNS as before.
+    // Seed the lookup with house hosts; all protocols share the physical-route
+    // gate, including gossip's independently initiated dials.
     let addr_lookup: Option<MemoryLookup> = match endpoint.address_lookup() {
         Ok(services) => {
             let lookup = MemoryLookup::with_provenance("mjolnir_addrbook");
-            if lan {
-                for id in &bootstrap {
-                    // Claim-aware (pt9): a peer that lost a backhaul collision
-                    // sits at a re-derived address, learned from its gossiped
-                    // (and persisted) /32 claim; derivation is the fallback.
-                    let ip = {
-                        let s = claims.lock().expect("claim store poisoned");
-                        peer_backhaul_hint(&s, &id.to_string())
-                    };
-                    let addr = SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT);
-                    lookup.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(addr));
-                    info!(peer = %id, %addr, "seeded derived peer address (no-discovery dialing)");
+            for id in &bootstrap {
+                if let Some(ip) = peer_house_router(&id.to_string()) {
+                    lookup.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT)));
                 }
             }
             // Also seed from the restored address book (0yb): a rebooting node
@@ -1214,7 +1068,7 @@ async fn run_mesh(
                 // Neighbor count: fed by the dispatch loop's NeighborUp/Down
                 // events; gates the first claim and drives the rejoin loop (eon).
                 let (neighbors_tx, neigh_rx) = tokio::sync::watch::channel(0usize);
-                let rejoin = tokio::spawn(gossip_rejoin_loop(
+                let rejoin = tasks.spawn(gossip_rejoin_loop(
                     sender.clone(),
                     bootstrap,
                     addr_book.clone(),
@@ -1238,7 +1092,6 @@ async fn run_mesh(
                     let sync = sync.clone();
                     let store = claims.clone();
                     let me = self_id_str.clone();
-                    let claims_path = claims_file.clone();
                     let book = addr_book.clone();
                     let book_path = addr_book_file.clone();
                     let lookup = addr_lookup.clone();
@@ -1259,7 +1112,7 @@ async fn run_mesh(
                     let leased_names = leased_names.clone();
                     let leased_names_persist_path = leased_names_file.clone();
                     let liveness = liveness.clone();
-                    tokio::spawn(async move {
+                    tasks.spawn(async move {
                         let result = sync
                         .run(move |msg| {
                             // Liveness beacon (e21.9): purely refresh the
@@ -1486,17 +1339,8 @@ async fn run_mesh(
                             let mut s = store.lock().expect("claim store poisoned");
                             if let Some(lost) = apply_subnet_message(&mut s, &msg, &me) {
                                 if mjolnir_mesh::tun::in_backhaul_block(&lost) {
-                                    // Lost our backhaul /32 claim (pt9): the earlier
-                                    // claimant keeps 10.254.x. The address is baked
-                                    // into the bound iroh socket and interface config,
-                                    // so persist the winner's claim and exit — procd
-                                    // respawns meshd, and pick_backhaul_addr() derives
-                                    // around the persisted winner at next boot.
-                                    error!(addr = %lost,
-                                        "backhaul address collision lost — restarting to re-derive (pt9)");
-                                    persist_claims(&s, &claims_path);
-                                    drop(s);
-                                    std::process::exit(EXIT_BACKHAUL_COLLISION);
+                                    // Ignore legacy transport claims retained in old stores.
+                                    return;
                                 }
                                 drop(s);
                                 let _ = reclaim_tx.send(lost);
@@ -1514,10 +1358,10 @@ async fn run_mesh(
                     let store = claims.clone();
                     let me = self_id_str.clone();
                     let neigh_rx = neigh_rx.clone();
-                    let claims_path = claims_file.clone();
                     let gateway = gateway_handle.clone();
                     let client_iface = client_iface.clone();
-                    tokio::spawn(async move {
+                    let claims_path = claims_file.clone();
+                    tasks.spawn(async move {
                         claim_manager(
                             sync,
                             store,
@@ -1567,7 +1411,7 @@ async fn run_mesh(
                         no_relay,
                         node_name: node_name.clone(),
                     };
-                    tokio::spawn(async move {
+                    tasks.spawn(async move {
                         anti_entropy_loop(
                             sync,
                             store,
@@ -1610,7 +1454,7 @@ async fn run_mesh(
                     let spool_path = spool_dir.clone();
                     let leased_names_path = leased_names_file.clone();
                     let self_id = self_id_str.clone();
-                    tokio::spawn(async move {
+                    tasks.spawn(async move {
                         name_claim_sweep_loop(
                             sync,
                             leased_names,
@@ -1633,7 +1477,7 @@ async fn run_mesh(
                     let coordinate_book = coordinate_book.clone();
                     let spool_path = spool_dir.clone();
                     let coordinate_book_path = coordinate_book_file.clone();
-                    tokio::spawn(async move {
+                    tasks.spawn(async move {
                         coordinate_stamp_sweep_loop(
                             sync,
                             coordinate_book,
@@ -1651,7 +1495,7 @@ async fn run_mesh(
                 // degrades silently on a box with no mesh interface.
                 {
                     let directory_path = directory_file.clone();
-                    tokio::spawn(radio_telemetry_loop(directory_path, backhaul_ip));
+                    tasks.spawn(radio_telemetry_loop(directory_path, backhaul_ip));
                 }
 
                 // Roaming (bead sz9): hold a mobility /32 for every client that
@@ -1659,7 +1503,7 @@ async fn run_mesh(
                 // so a phone keeps its IP — and its connections — when it walks
                 // between rooms. Needs only the claim store (to know which
                 // addresses are ours) and the client interface.
-                tokio::spawn(roam_loop(
+                tasks.spawn(roam_loop(
                     claims.clone(),
                     self_id_str.clone(),
                     client_iface.clone(),
@@ -1673,7 +1517,7 @@ async fn run_mesh(
                     let leases = lease_book.clone();
                     let leases_path = lease_book_file.clone();
                     let me = self_id_str.clone();
-                    tokio::spawn(
+                    tasks.spawn(
                         async move { dhcp_roam_loop(sync, leases, leases_path, me).await },
                     );
                 }
@@ -1747,7 +1591,7 @@ async fn run_mesh(
         // per-peer interfaces means the config never churns (qz9 by construction).
         let claims = claims.clone();
         let me = self_id_str.clone();
-        tokio::spawn(
+        tasks.spawn(
             async move { babel_reconciler_overlay(claims, me, babel_config, gateway).await },
         )
     } else {
@@ -1755,7 +1599,7 @@ async fn run_mesh(
         let claims = claims.clone();
         let me = self_id_str.clone();
         let l2 = l2_backhaul.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             babel_reconciler(registry, claims, me, babel_config, l2, gateway).await
         })
     };
@@ -1763,8 +1607,8 @@ async fn run_mesh(
     // captive/dead uplink stops advertising egress (fail-open). Self-gates on
     // uplink presence, so it's harmless on a non-gateway node; detached because
     // its verdict is consumed via local_egress, not a join handle.
-    tokio::spawn(gateway_probe_task());
-    tokio::spawn(reconcile_client_dataplane(
+    tasks.spawn(gateway_probe_task());
+    tasks.spawn(reconcile_client_dataplane(
         claims.clone(),
         self_id_str.clone(),
         client_iface.clone(),
@@ -1810,36 +1654,23 @@ async fn run_mesh(
             if peer == self_id {
                 continue; // our own id appears in the roster — skip
             }
-            // Per-peer LAN: dial the peer at its DERIVED backhaul address
-            // (10.254.x:MESH_IROH_PORT), reachable over the babel-routed underlay
-            // with no flat-L2 mDNS (mjolnir-mesh-0yb.1). NOT in overlay mode: there
-            // 10.254.x is the peer's OVERLAY address (on mjolnir0, reachable only
-            // over the overlay itself), and iroh isn't pinned to that port — so
-            // overlay dials by NODE ID and lets iroh discovery (mDNS/relay) resolve
-            // the underlay address (mjolnir-mesh-buw.8). Internet mode likewise
-            // keeps discovery/relay resolution.
-            let addr = if lan && overlay_state.is_none() {
-                let ip = {
-                    let s = claims.lock().expect("claim store poisoned");
-                    peer_backhaul_hint(&s, &peer.to_string())
-                };
-                addr.with_ip_addr(SocketAddr::new(std::net::IpAddr::V4(ip), MESH_IROH_PORT))
-            } else {
-                addr
-            };
+            // Derive the peer host from our guild and its authenticated node id.
+            let addr = if let Some(ip) = peer_house_router(&peer.to_string()) {
+                addr.with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT))
+            } else { addr };
             if self_id_str < peer.to_string() {
                 let ep = endpoint.clone();
                 let label = entry.label.clone();
                 if let Some((conns, inbound)) = &overlay_state {
                     let conns = conns.clone();
                     let inbound = inbound.clone();
-                    dialers.push(tokio::spawn(async move {
+                    dialers.push(tasks.spawn(async move {
                         connector_loop_overlay(ep, addr, conns, inbound, label).await;
                     }));
                 } else {
                     let reg = registry.clone();
                     let sid = self_id_str.clone();
-                    dialers.push(tokio::spawn(async move {
+                    dialers.push(tasks.spawn(async move {
                         connector_loop(ep, addr, sid, reg, label).await;
                     }));
                 }
@@ -1853,9 +1684,7 @@ async fn run_mesh(
         "mesh up — holding (Ctrl-C to exit)"
     );
 
-    tokio::signal::ctrl_c()
-        .await
-        .context("waiting for Ctrl-C")?;
+    if !*shutdown.borrow() { let _ = shutdown.changed().await; }
     info!("shutting down mesh");
     for d in &dialers {
         d.abort();
@@ -2073,16 +1902,13 @@ async fn claim_manager<T: GossipTransport>(
     store: ClaimStore,
     self_id: String,
     client_iface: String,
-    backhaul_ip: Ipv4Addr,
-    claims_file: PathBuf,
+    _backhaul_ip: Ipv4Addr,
+    _claims_file: PathBuf,
     mut reclaim_rx: tokio::sync::mpsc::UnboundedReceiver<Ipv4Net>,
     neigh_rx: tokio::sync::watch::Receiver<usize>,
     gateway: mjolnir_mesh::dns_responder::GatewayHandle,
 ) {
-    // Backhaul /32 claim first (pt9): the address is already assigned and the
-    // socket bound to it, so publish immediately — no neighbor gating. FWW
-    // arbitrates any collision; the loser restarts and re-derives.
-    claim_backhaul_and_publish(&sync, &store, &self_id, backhaul_ip, &claims_file).await;
+    // No backhaul address claim: transport identity is the house router /128.
     let has_own_claim = {
         let s = store.lock().expect("claim store poisoned");
         // Backhaul /32 claims don't count — this gates the CLIENT /24 pick.
@@ -2153,12 +1979,6 @@ fn partition_claims(
     (keep, extras, foreign)
 }
 
-/// Exit code used when this node loses its backhaul-address claim (pt9): the
-/// address is baked into the bound socket and interface config, so the clean
-/// resolution is a supervised restart — `pick_backhaul_addr` then derives
-/// around the persisted winner. procd respawns meshd on any nonzero exit.
-const EXIT_BACKHAUL_COLLISION: i32 = 86;
-
 /// How many salted derivations to try before giving up on avoidance and letting
 /// FWW arbitrate at runtime. 64 misses in a ~65k slot space would take a mesh of
 /// thousands of pathologically colliding nodes — effectively unreachable.
@@ -2201,77 +2021,6 @@ fn pick_backhaul_addr(store: &HashMap<String, SubnetClaim>, self_id: &str) -> Ip
     mjolnir_mesh::tun::backhaul_addr(self_id)
 }
 
-/// Resolve the address to dial a roster peer at: its gossiped backhaul /32
-/// claim if we know one (a collision loser sits at a re-derived address), else
-/// the attempt-0 derivation — the pre-pt9 behavior (0yb.1 derived seeding).
-fn peer_backhaul_hint(store: &HashMap<String, SubnetClaim>, peer_id: &str) -> Ipv4Addr {
-    let mut owned: Vec<&SubnetClaim> = store
-        .values()
-        .filter(|c| c.owner_node_id == peer_id)
-        .filter(|c| matches!(c.cidr, IpNet::V4(n) if mjolnir_mesh::tun::in_backhaul_block(&n)))
-        .collect();
-    owned.sort_by(|a, b| a.claimed_at.cmp(&b.claimed_at));
-    if let Some(c) = owned.first()
-        && let IpNet::V4(n) = c.cidr
-    {
-        return n.addr();
-    }
-    mjolnir_mesh::tun::backhaul_addr(peer_id)
-}
-
-/// Record and gossip this node's backhaul /32 claim (pt9). Reuses an existing
-/// own claim on the address (restored across restarts — preserves first-writer
-/// seniority, mirroring the eon rule for client /24s). If another node already
-/// holds a claim on this address, the deterministic merge decides: if we would
-/// lose, exit for a supervised restart (pick_backhaul_addr avoids the winner);
-/// if we would win (e.g. the other claim is wall-clock-skewed into our future),
-/// claim anyway — the other node is the one that must move.
-async fn claim_backhaul_and_publish<T: GossipTransport>(
-    sync: &GossipSync<T>,
-    store: &ClaimStore,
-    self_id: &str,
-    addr: Ipv4Addr,
-    claims_file: &Path,
-) {
-    let net = Ipv4Net::new(addr, 32).expect("/32 prefix is always valid");
-    let key = IpNet::V4(net).to_string();
-    let claim = {
-        let mut s = store.lock().expect("claim store poisoned");
-        let fresh = SubnetClaim {
-            cidr: IpNet::V4(net),
-            owner_node_id: self_id.to_string(),
-            site_name: None,
-            claimed_at: now_hlc(self_id),
-        };
-        match merge_subnet_claim(s.get(&key), &fresh) {
-            MergeResult::Conflict { winner, .. } if winner.owner_node_id != self_id => {
-                error!(%addr, winner = %winner.owner_node_id,
-                    "backhaul address already claimed by an earlier writer — restarting to re-derive (pt9)");
-                persist_claims(&s, claims_file);
-                drop(s);
-                std::process::exit(EXIT_BACKHAUL_COLLISION);
-            }
-            _ => {
-                let entry = match s.get(&key) {
-                    Some(c) if c.owner_node_id == self_id => c.clone(),
-                    _ => fresh,
-                };
-                s.insert(key.clone(), entry.clone());
-                entry
-            }
-        }
-    };
-    match sync
-        .publish(GossipMessage::SubnetClaimUpdate {
-            cidr: key,
-            entry: claim,
-        })
-        .await
-    {
-        Ok(()) => info!(%addr, "published backhaul address claim (pt9)"),
-        Err(e) => warn!(%addr, "backhaul claim publish failed: {e}"),
-    }
-}
 
 /// Publish this node's subnet claim. A claim we already own — typically
 /// restored from disk across a restart — is reused and re-published as-is
@@ -4733,6 +4482,7 @@ fn feed_addr_lookup(lookup: &MemoryLookup, entry: &PeerAddrEntry) {
     };
     let mut ep_addr = EndpointAddr::new(id);
     for a in &entry.direct_addrs {
+        if a.ip().is_unspecified() || matches!(a.ip(), IpAddr::V4(v) if v.octets()[..2] == [10,254]) { continue; }
         ep_addr = ep_addr.with_ip_addr(*a);
     }
     if let Some(url) = &entry.relay_url {
@@ -5311,18 +5061,16 @@ struct SelfAnnounce {
 }
 
 /// Build this node's self-announced address-book entry: our observed direct
-/// addresses (from the endpoint) plus the deterministic bound backhaul address
-/// every node binds in LAN mode (`backhaul_ip:MESH_IROH_PORT`), and our relay
+/// addresses (from the endpoint) plus its actual bound house host, and our relay
 /// URL unless relays are disabled. The existing HLC is retained when those
 /// fields are unchanged; a real address or relay change receives a fresh HLC.
 /// See mjolnir-mesh-0yb and mjolnir-mesh-7bf.
 fn build_self_addr_entry(ctx: &SelfAnnounce, existing: Option<&PeerAddrEntry>) -> PeerAddrEntry {
     let observed = ctx.endpoint.addr();
     let mut direct: Vec<SocketAddr> = observed.ip_addrs().copied().collect();
-    // Always include the derived bound backhaul address: in LAN mode this is the
-    // address peers dial, and it may not appear in the endpoint's observed set
-    // until discovery settles (PeerAddrEntry::new dedups if it does).
-    direct.push(SocketAddr::new(IpAddr::V4(ctx.backhaul_ip), MESH_IROH_PORT));
+    // Include the bound house address even before discovery publishes it.
+    direct.extend(ctx.endpoint.bound_sockets());
+    direct.retain(|a| !a.ip().is_unspecified() && !matches!(a.ip(), IpAddr::V4(ip) if ip.octets()[..2] == [10,254]));
     let relay_url = if ctx.no_relay {
         None
     } else {
@@ -6340,6 +6088,7 @@ async fn control_api_start<T: GossipTransport + 'static>(
     let bound = listener.local_addr()?;
     info!(%bound, "control API listening (localhost only)");
     let handle = tokio::spawn(async move {
+        let requests = SessionTasks::default();
         loop {
             let (stream, _) = match listener.accept().await {
                 Ok(s) => s,
@@ -6348,7 +6097,7 @@ async fn control_api_start<T: GossipTransport + 'static>(
                     continue;
                 }
             };
-            tokio::spawn(control_api_handle_conn(
+            requests.spawn(control_api_handle_conn(
                 stream,
                 sync.clone(),
                 service_book_v2.clone(),
@@ -7313,101 +7062,6 @@ async fn reconcile_dnsmasq_uci() {
 #[cfg(not(target_os = "linux"))]
 async fn reconcile_dnsmasq_uci() {}
 
-/// Self-assign this node's derived IPv4 backhaul address (`10.254.0.0/16`, host
-/// from the node id) to the shared-segment interface, so every node has a stable,
-/// collision-free, DHCP-free underlay address in one shared /16. Peers are then
-/// on-link to each other and iroh/mDNS discover + connect directly over the LAN
-/// (mjolnir-mesh-4pk). IPv4 (not an IPv6 ULA) because iroh surfaces private IPv4
-/// as a connection candidate and announces it over mDNS, but not IPv6 ULAs — see
-/// the `iroh-lan-backhaul-findings` memory. Best-effort: an unreachable interface
-/// or an already-present address is logged, not fatal — the node still runs.
-///
-/// Returns the resolved backhaul interface name (which may differ from the
-/// configured `iface` — RouterOS doesn't name it `eth0` — via the sole-interface
-/// fallback below). Callers use it as babel's wireless L2 interface
-/// (mjolnir-mesh-auu). `None` means no usable interface was found.
-#[cfg(target_os = "linux")]
-async fn assign_backhaul_addr(iface: &str, addr: Ipv4Addr) -> Option<String> {
-    use rtnetlink::new_connection;
-
-    let prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN;
-
-    let (connection, handle, _) = match new_connection() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(%addr, "netlink connect for backhaul address failed: {e}");
-            return None;
-        }
-    };
-    tokio::spawn(connection);
-
-    // Resolve the backhaul interface from sysfs. RouterOS (a) brings the
-    // container veth up a moment AFTER the process starts, and (b) does NOT name
-    // it `eth0` like the plain Linux containers 4pk was validated on. So retry for
-    // the startup race and be name-agnostic: prefer the configured name if it
-    // appears, else fall back to the SOLE non-loopback interface — a fresh
-    // container has just `lo` + the backhaul veth (the mj-peer-* TUNs don't exist
-    // yet). The address must be assigned before iroh binds, so we wait here.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let (target, index) = loop {
-        let candidates: Vec<String> = std::fs::read_dir("/sys/class/net")
-            .map(|rd| {
-                rd.filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-                    .filter(|n| n != "lo" && !n.starts_with("mj-peer-"))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let chosen = if candidates.iter().any(|n| n == iface) {
-            Some(iface.to_string())
-        } else if candidates.len() == 1 {
-            Some(candidates[0].clone())
-        } else {
-            None
-        };
-        if let Some(name) = chosen {
-            // ifindex straight from sysfs — avoids the netlink "No such device" path.
-            if let Some(idx) = std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
-                .ok()
-                .and_then(|s| s.trim().parse::<u32>().ok())
-            {
-                break (name, idx);
-            }
-        }
-        if Instant::now() >= deadline {
-            warn!(
-                configured = iface, available = ?candidates,
-                "no backhaul interface found — is the container bridged onto the shared L2 \
-                 segment? set --backhaul-iface to one of the available interfaces"
-            );
-            return None;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    };
-
-    match handle
-        .address()
-        .add(index, std::net::IpAddr::V4(addr), prefix)
-        .execute()
-        .await
-    {
-        Ok(()) => info!(
-            %addr, iface = %target, prefix,
-            "assigned IPv4 backhaul address — peers discover this node here via mDNS"
-        ),
-        Err(e) => {
-            warn!(%addr, iface = %target, "could not assign backhaul address (may already exist): {e}")
-        }
-    }
-    // The interface exists either way (the address may already be present); hand
-    // its resolved name back so babel can route over it as the wireless L2 iface.
-    Some(target)
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn assign_backhaul_addr(_iface: &str, _addr: Ipv4Addr) -> Option<String> {
-    None
-}
-
 /// Connectivity LEDs. Hardware row from [`mjolnir_mesh::led::HARDWARE`].
 #[cfg(target_os = "linux")]
 async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
@@ -7547,7 +7201,7 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
 #[cfg(not(target_os = "linux"))]
 async fn led_status_loop(_backhaul_iface: String, _overlay: Ipv4Addr) {}
 
-/// Keep the derived backhaul address present when netifd recreates or flushes
+/// Keep the legacy /64 and current house /128 present when netifd recreates or flushes
 /// the L2 device during a wifi reload. The interface name is stable across that
 /// operation, but its ifindex is not, so every pass resolves the index afresh.
 #[cfg(target_os = "linux")]
@@ -7580,57 +7234,6 @@ async fn reconcile_backhaul_addr(iface: String, addr: Ipv4Addr, ula: Ipv6Addr, n
                 continue;
             }
         };
-
-        let mut present = Vec::new();
-        let mut addresses = handle.address().get().execute();
-        let mut dump_failed = false;
-        loop {
-            match addresses.try_next().await {
-                Ok(Some(msg)) => {
-                    if msg.header.index != index {
-                        continue;
-                    }
-                    present.extend(
-                        msg.attributes
-                            .iter()
-                            .filter_map(|attribute| match attribute {
-                                AddressAttribute::Local(IpAddr::V4(ip))
-                                | AddressAttribute::Address(IpAddr::V4(ip)) => Some(*ip),
-                                _ => None,
-                            }),
-                    );
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    warn!(%addr, %iface, "could not dump addresses for backhaul reconciliation: {e}");
-                    dump_failed = true;
-                    break;
-                }
-            }
-        }
-        if dump_failed {
-            continue;
-        }
-        if mjolnir_mesh::tun::backhaul_addr_missing(&present, addr) {
-            match handle
-                .address()
-                .add(
-                    index,
-                    IpAddr::V4(addr),
-                    mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
-                )
-                .execute()
-                .await
-            {
-                Ok(()) => info!(
-                    %addr,
-                    %iface,
-                    prefix = mjolnir_mesh::tun::BACKHAUL_PREFIX_LEN,
-                    "re-added missing IPv4 backhaul address after interface reload"
-                ),
-                Err(e) => warn!(%addr, %iface, "could not re-add missing backhaul address: {e}"),
-            }
-        }
 
         let mut have_ula = false;
         let mut addrs = handle.address().get().execute();
@@ -7818,43 +7421,6 @@ async fn reconcile_backhaul_addr(
     _node_id: String,
 ) {
 }
-
-#[cfg(target_os = "linux")]
-async fn assign_ula_addr(iface: String, ula: Ipv6Addr) {
-    use rtnetlink::new_connection;
-    let Some(index) = std::fs::read_to_string(format!("/sys/class/net/{iface}/ifindex"))
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-    else {
-        warn!(%ula, %iface, "no ifindex for identity ULA assign");
-        return;
-    };
-    let (connection, handle, _) = match new_connection() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(%ula, %iface, "netlink connect for ULA assign failed: {e}");
-            return;
-        }
-    };
-    tokio::spawn(connection);
-    match handle
-        .address()
-        .add(index, IpAddr::V6(ula), mjolnir_mesh::tun::ULA_PREFIX_LEN)
-        .execute()
-        .await
-    {
-        Ok(()) => info!(
-            %ula,
-            %iface,
-            prefix = mjolnir_mesh::tun::ULA_PREFIX_LEN,
-            "assigned identity ULA on br-mesh (nodad-equivalent: hash, not SLAAC)"
-        ),
-        Err(e) => warn!(%ula, %iface, "could not assign identity ULA (may already exist): {e}"),
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn assign_ula_addr(_iface: String, _ula: Ipv6Addr) {}
 
 /// Enable IPv4 forwarding in this (container) network namespace so the kernel
 /// routes client traffic between the TUN tunnels and the veth/bridge. Required
@@ -8246,7 +7812,7 @@ impl ProtocolHandler for TunnelHandler {
 
 /// buw connection manager (mjolnir-mesh-buw.3): the live iroh [`Connection`] for
 /// each peer, indexed BOTH by node id (lifecycle / dedup) and by the peer's
-/// derived overlay address `10.254.x` (data-plane demux: FIB next-hop -> conn).
+/// house router /128 (authenticated link-local next-hop -> key -> connection).
 /// Decoupled from any interface — a dropped connection removes a map entry, not
 /// a babel interface, so babeld's config never churns (the qz9 fix).
 #[derive(Clone, Default)]
@@ -8257,7 +7823,8 @@ struct ConnManager {
 #[derive(Default)]
 struct ConnManagerInner {
     by_peer: HashMap<EndpointId, Connection>,
-    by_addr: HashMap<Ipv4Addr, Connection>,
+    neighbors: Neighbors,
+    by_addr: HashMap<Ipv6Addr, Connection>,
 }
 
 impl std::fmt::Debug for ConnManager {
@@ -8272,41 +7839,69 @@ impl ConnManager {
         Self::default()
     }
 
-    /// The peer's derived overlay address (`10.254.x`) — the demux key, matching
-    /// the address `spawn_overlay_tun` assigns and babeld's next hops.
-    fn addr_of(peer: &EndpointId) -> Ipv4Addr {
-        mjolnir_mesh::tun::backhaul_addr(&peer.to_string())
-    }
-
-    /// Register `conn` for `peer`, updating BOTH indexes atomically. Returns
-    /// `false` if a connection for this peer already exists (caller refuses the
-    /// duplicate) — the one-connection-per-peer invariant.
     fn register(&self, peer: EndpointId, conn: Connection) -> bool {
-        let addr = Self::addr_of(&peer);
+        let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
+        let Some(key) = mjolnir_mesh::tun::desired_router_ula(guild.as_deref(), &peer.to_string())
+        else {
+            return false;
+        };
         let mut g = self.inner.lock().expect("connmgr poisoned");
-        if g.by_peer.contains_key(&peer) {
+        if g.by_peer.contains_key(&peer) || g.by_addr.contains_key(&key) {
             return false;
         }
-        g.by_peer.insert(peer, conn.clone());
-        g.by_addr.insert(addr, conn);
+        if !g
+            .neighbors
+            .register(conn.stable_id() as u64, guild.as_deref(), &peer.to_string())
+        {
+            return false;
+        }
+        g.by_addr.insert(key, conn.clone());
+        g.by_peer.insert(peer, conn);
         true
     }
 
-    /// Remove `peer` from both indexes. No-op if absent.
     fn deregister(&self, peer: &EndpointId) {
-        let addr = Self::addr_of(peer);
         let mut g = self.inner.lock().expect("connmgr poisoned");
-        g.by_peer.remove(peer);
-        g.by_addr.remove(&addr);
+        if let Some(conn) = g.by_peer.remove(peer) {
+            if let Some(key) = g.neighbors.key(conn.stable_id() as u64) {
+                g.by_addr.remove(&key);
+            }
+            g.neighbors.remove(conn.stable_id() as u64);
+        }
     }
 
-    /// The connection whose peer owns overlay address `addr`, if connected.
-    fn by_addr(&self, addr: Ipv4Addr) -> Option<Connection> {
+    fn observe(&self, conn: &Connection, packet: &[u8]) {
         self.inner
             .lock()
             .expect("connmgr poisoned")
-            .by_addr
-            .get(&addr)
+            .neighbors
+            .observe(conn.stable_id() as u64, packet);
+    }
+
+    fn prune(&self) {
+        let mut g = self.inner.lock().expect("connmgr poisoned");
+        let dead: Vec<_> = g
+            .by_peer
+            .iter()
+            .filter(|(_, c)| c.close_reason().is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in dead {
+            if let Some(conn) = g.by_peer.remove(&id) {
+                if let Some(key) = g.neighbors.key(conn.stable_id() as u64) {
+                    g.by_addr.remove(&key);
+                }
+                g.neighbors.remove(conn.stable_id() as u64);
+            }
+        }
+    }
+
+    fn select(&self, routes: &NeighborRoutes, dest: IpAddr) -> Option<Connection> {
+        let g = self.inner.lock().expect("connmgr poisoned");
+        let key = routes.next_hop_key(dest, &g.neighbors)?;
+        g.by_addr
+            .get(&key)
+            .filter(|c| c.close_reason().is_none())
             .cloned()
     }
 
@@ -8322,73 +7917,28 @@ impl ConnManager {
     }
 }
 
-/// Resolves a unicast overlay packet to the peer connection that should carry
-/// it (mjolnir-mesh-buw.4): v4 client/overlay traffic via the FIB (or on-link
-/// `10.254/16`), v6 babel link-local (`fe80::X`) via the `fe80 <-> 10.254`
-/// derivation, and other v6 hosts via the current /128 route map, then the
-/// connection manager's addr index -> [`Connection`].
+/// Select a live authenticated neighbor through Babel's link-local next hop.
 #[derive(Clone)]
 struct OverlayRouter {
-    fib: Arc<Mutex<Fib>>,
-    ula_hosts: Arc<Mutex<UlaHostRoutes>>,
+    routes: Arc<Mutex<NeighborRoutes>>,
     conns: ConnManager,
-}
-
-impl OverlayRouter {
-    /// The `10.254.x` next hop for a unicast packet, or `None` if unroutable.
-    fn next_hop(&self, packet: &[u8]) -> Option<Ipv4Addr> {
-        match packet.first()? >> 4 {
-            4 => {
-                let d: [u8; 4] = packet.get(16..20)?.try_into().ok()?;
-                let dest = Ipv4Addr::from(d);
-                // Overlay-block (10.254.0.0/16) unicast is NEVER forwarded across
-                // the overlay: those are the mjolnir0 interface/neighbour
-                // addresses, not a data path. Client traffic routes by its OWN
-                // destination via the FIB — the 10.254.x next hop is resolved from
-                // the FIB entry, never carried as a packet destination (true for
-                // single- and multi-hop). Dropping the block (return None) stops
-                // iroh — which advertises mjolnir0's own 10.254.x as a candidate
-                // direct address, with no public API to suppress it (buw.8) — from
-                // forming a bogus, fragile iroh-over-overlay path to a peer's
-                // overlay address. The underlay reaches peers via iroh's native
-                // discovery (mDNS/relay), not the overlay.
-                if dest.octets()[..2] == [10, 254] {
-                    None
-                } else {
-                    self.fib.lock().expect("fib poisoned").lookup(dest)
-                }
-            }
-            6 => {
-                let d: [u8; 16] = packet.get(24..40)?.try_into().ok()?;
-                let dest = Ipv6Addr::from(d);
-                let seg = dest.segments();
-                // fe80::X (babel IHU to a neighbour) -> next-hop 10.254.X, the
-                // reverse of tun::iface::overlay_link_local.
-                if seg[0] == 0xfe80 {
-                    let host = seg[7];
-                    Some(Ipv4Addr::new(
-                        10,
-                        254,
-                        (host >> 8) as u8,
-                        (host & 0xff) as u8,
-                    ))
-                } else {
-                    self.ula_hosts
-                        .lock()
-                        .expect("ula hosts poisoned")
-                        .get(&dest)
-                        .copied()
-                }
-            }
-            _ => None,
-        }
-    }
 }
 
 impl UnicastRouter<IrohDatagramConn> for OverlayRouter {
     fn resolve(&self, packet: &[u8]) -> Option<IrohDatagramConn> {
-        let nh = self.next_hop(packet)?;
-        self.conns.by_addr(nh).map(|conn| IrohDatagramConn { conn })
+        let dest = match packet.first()? >> 4 {
+            4 => IpAddr::V4(Ipv4Addr::from(
+                <[u8; 4]>::try_from(packet.get(16..20)?).ok()?,
+            )),
+            6 => IpAddr::V6(Ipv6Addr::from(
+                <[u8; 16]>::try_from(packet.get(24..40)?).ok()?,
+            )),
+            _ => return None,
+        };
+        let routes = self.routes.lock().expect("routes poisoned");
+        self.conns
+            .select(&routes, dest)
+            .map(|conn| IrohDatagramConn { conn })
     }
 }
 
@@ -8430,61 +7980,19 @@ where
     }
 }
 
-/// Mirror babeld's kernel routes on `iface` (mjolnir0) into `fib` by polling
-/// `ip -4 route show dev <iface>` (route-event subscription is a later
-/// optimization). A `dest/len via 10.254.x` line becomes `fib[dest/len] =
-/// 10.254.x` — the demux the overlay reader needs, since the raw packet carries
-/// only the client dest, not babeld's next hop.
-async fn fib_mirror(iface: String, fib: Arc<Mutex<Fib>>) {
+/// Replace the route snapshot on every poll. Withdrawal and command failure
+/// fail closed; route removal never closes the authenticated connection.
+async fn neighbor_route_mirror(iface: String, routes: Arc<Mutex<NeighborRoutes>>, conns: ConnManager) {
     loop {
-        let out = tokio::process::Command::new("ip")
-            .args(["-4", "route", "show", "dev", &iface])
-            .output()
-            .await;
-        if let Ok(out) = out {
-            let text = String::from_utf8_lossy(&out.stdout);
-            let mut next = Fib::new();
-            for line in text.lines() {
-                let toks: Vec<&str> = line.split_whitespace().collect();
-                let Some(prefix) = toks.first() else { continue };
-                let gw = toks
-                    .iter()
-                    .position(|t| *t == "via")
-                    .and_then(|i| toks.get(i + 1))
-                    .and_then(|s| s.parse::<Ipv4Addr>().ok());
-                if let (Some((net, len)), Some(gw)) = (parse_cidr(prefix), gw) {
-                    next.upsert(net, len, gw);
-                }
+        conns.prune();
+        let mut dumps = [String::new(), String::new()];
+        for (slot, family) in ["-4", "-6"].into_iter().enumerate() {
+            if let Ok(out) = tokio::process::Command::new("ip").args([family, "route", "show", "dev", &iface]).output().await {
+                if out.status.success() { dumps[slot] = String::from_utf8_lossy(&out.stdout).into_owned(); }
             }
-            *fib.lock().expect("fib poisoned") = next;
         }
+        *routes.lock().expect("routes poisoned") = NeighborRoutes::snapshots(&dumps[0], &dumps[1], &iface);
         tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-}
-
-/// Replace the IPv6 host selection on each poll, independently of the IPv4 FIB.
-async fn ula_host_mirror(iface: String, ula_hosts: Arc<Mutex<UlaHostRoutes>>) {
-    loop {
-        let out = tokio::process::Command::new("ip")
-            .args(["-6", "route", "show", "dev", &iface])
-            .output()
-            .await;
-        let next = match out {
-            Ok(out) if out.status.success() => {
-                parse_ula_host_routes(&String::from_utf8_lossy(&out.stdout))
-            }
-            _ => UlaHostRoutes::new(),
-        };
-        *ula_hosts.lock().expect("ula hosts poisoned") = next;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-}
-
-/// Parse `a.b.c.d/len` (or a bare host = /32) into `(network, len)`.
-fn parse_cidr(s: &str) -> Option<(Ipv4Addr, u8)> {
-    match s.split_once('/') {
-        Some((ip, len)) => Some((ip.parse().ok()?, len.parse().ok()?)),
-        None => Some((s.parse().ok()?, 32)),
     }
 }
 
@@ -8502,15 +8010,18 @@ async fn serve_overlay_conn(
         conn.close(2u32.into(), b"duplicate connection");
         return Ok(());
     }
-    info!(%peer, addr = %ConnManager::addr_of(&peer), "overlay peer connected");
+    info!(%peer, "overlay peer connected");
     spawn_path_logger(conn.clone(), peer);
 
     // Receiver: each inbound datagram from this peer -> the single mjolnir0 writer.
+    let receivers = SessionTasks::default();
     let recv = {
         let conn = conn.clone();
-        tokio::spawn(async move {
+        let observations = conns.clone();
+        receivers.spawn(async move {
             // Ok = a datagram; Err = connection closed (loop ends).
             while let Ok(pkt) = conn.read_datagram().await {
+                observations.observe(&conn, &pkt);
                 if inbound.send(pkt).await.is_err() {
                     break; // writer gone
                 }
@@ -8847,41 +8358,33 @@ async fn build_endpoint(
     lan: bool,
     relays: &[String],
 ) -> Result<Endpoint> {
+    let gate = HouseDialGate::configured(no_relay);
+    build_endpoint_with_gate(secret, no_relay, bind, lan, relays, gate).await
+}
+
+async fn build_endpoint_with_gate(
+    secret: SecretKey,
+    no_relay: bool,
+    bind: Option<SocketAddr>,
+    lan: bool,
+    relays: &[String],
+    gate: HouseDialGate,
+) -> Result<Endpoint> {
+    let addr = bind.context("no usable house /128 or explicit --bind")?;
+    anyhow::ensure!(!addr.ip().is_unspecified(), "wildcard --bind is forbidden");
     if lan {
-        // LAN-direct: start from the Minimal preset (crypto provider only, no
-        // pkarr/n0-DNS publishing, so no internet dependency and no DNS spam),
-        // relays off, and add ONLY mDNS address lookup for same-network peers.
-        //
-        // `bind` carries the single backhaul address in mesh mode (auu): pinning
-        // the socket to it advertises exactly one reachable addr, avoiding the
-        // multi-candidate-path prune that killed the tunnel. If that addr isn't
-        // on an interface yet (the backhaul assign raced or failed), fall back to
-        // all-interfaces rather than crash-loop the daemon.
-        if let Some(addr) = bind {
-            let attempt = Endpoint::builder(presets::Minimal)
-                .relay_mode(RelayMode::Disabled)
-                .secret_key(secret.clone())
-                .transport_config(tunnel_transport_config())
-                .address_lookup(MdnsAddressLookup::builder())
-                .bind_addr(addr)
-                .context("invalid bind address")?;
-            match attempt.bind().await {
-                Ok(ep) => return Ok(ep),
-                Err(e) => warn!(
-                    %addr,
-                    "binding iroh to the backhaul address failed ({e}); \
-                     falling back to all interfaces",
-                ),
-            }
-        }
         return Endpoint::builder(presets::Minimal)
+            .clear_ip_transports()
             .relay_mode(RelayMode::Disabled)
             .secret_key(secret)
             .transport_config(tunnel_transport_config())
             .address_lookup(MdnsAddressLookup::builder())
+            .hooks(gate)
+            .bind_addr(addr)
+            .context("invalid bind address")?
             .bind()
             .await
-            .context("failed to bind iroh endpoint");
+            .context("failed to bind house endpoint");
     }
 
     let relay_mode = if no_relay {
@@ -8912,15 +8415,18 @@ async fn build_endpoint(
     // resolves direct LAN socket addresses with no relay or internet, so same-LAN
     // peers form a direct path regardless of pkarr — relay stays as the off-LAN
     // fallback, pkarr/DNS as global discovery. Best of all worlds, additive only.
-    let mut builder = Endpoint::builder(presets::N0)
+    Endpoint::builder(presets::N0)
+        .clear_ip_transports()
         .secret_key(secret)
         .transport_config(tunnel_transport_config())
         .address_lookup(MdnsAddressLookup::builder())
-        .relay_mode(relay_mode);
-    if let Some(addr) = bind {
-        builder = builder.bind_addr(addr).context("invalid --bind address")?;
-    }
-    builder.bind().await.context("failed to bind iroh endpoint")
+        .hooks(gate)
+        .relay_mode(relay_mode)
+        .bind_addr(addr)
+        .context("invalid --bind address")?
+        .bind()
+        .await
+        .context("failed to bind house endpoint")
 }
 
 /// Wait until the endpoint has at least one publishable address. With relays
@@ -8947,17 +8453,6 @@ fn check_reachability(endpoint: &Endpoint, no_relay: bool) {
     let addr = endpoint.addr();
     let has_relay = addr.relay_urls().next().is_some();
     let ips: Vec<IpAddr> = addr.ip_addrs().map(|sa| sa.ip()).collect();
-    let ula: Vec<IpAddr> = ips
-        .iter()
-        .copied()
-        .filter(|ip| matches!(ip, IpAddr::V6(v) if v.is_unique_local()))
-        .collect();
-    if !ula.is_empty() {
-        error!(
-            ?ula,
-            "iroh candidates include Unique Local addresses — identity ULA must not be a QUIC candidate (add-identity-derived-ula)"
-        );
-    }
     let has_public = ips.iter().any(|ip| is_globally_reachable(*ip));
     let has_nonloopback = ips.iter().any(|ip| !ip.is_loopback());
 
@@ -8969,8 +8464,7 @@ fn check_reachability(endpoint: &Endpoint, no_relay: bool) {
         );
     } else if no_relay && has_nonloopback {
         warn!(
-            "--no-relay: only private/LAN addresses — reachable on the LOCAL network only, \
-             not across NATs. Fine for a same-LAN test; useless for a real swarm peer."
+            "--no-relay: house peers are reached through physical Babel host routes"
         );
     } else {
         error!(
@@ -9533,59 +9027,6 @@ mod tests {
     use super::*;
     use mjolnir_mesh::LostName;
 
-    fn house_forward_packet(dest: Ipv6Addr) -> [u8; 40] {
-        let mut packet = [0u8; 40];
-        packet[0] = 0x60;
-        packet[24..40].copy_from_slice(&dest.octets());
-        packet
-    }
-
-    #[test]
-    fn house_forward_overlay_selects_exact_host_and_withdraws() {
-        let dest: Ipv6Addr = "fd81:2b22:8aca::2".parse().unwrap();
-        let peer = Ipv4Addr::new(10, 254, 0, 2);
-        let routes = Arc::new(Mutex::new(parse_ula_host_routes(
-            "fd81:2b22:8aca::2/128 via fe80::2 dev mjolnir0",
-        )));
-        let router = OverlayRouter {
-            fib: Arc::new(Mutex::new(Fib::new())),
-            ula_hosts: routes.clone(),
-            conns: ConnManager::new(),
-        };
-        let packet = house_forward_packet(dest);
-        assert_eq!(router.next_hop(&packet), Some(peer));
-        assert_ne!(router.next_hop(&packet), Some(Ipv4Addr::new(10, 254, 0, 3)));
-        for unknown in ["fd12:3456:789a::1", "fd81:2b22:8aca::99"] {
-            assert_eq!(
-                router.next_hop(&house_forward_packet(unknown.parse().unwrap())),
-                None
-            );
-        }
-        // The connection index remains authoritative; no live Iroh is needed.
-        assert!(router.resolve(&packet).is_none());
-        *routes.lock().unwrap() = parse_ula_host_routes("");
-        assert_eq!(router.next_hop(&packet), None);
-        assert_eq!(
-            router.next_hop(&house_forward_packet("fe80::2".parse().unwrap())),
-            Some(peer)
-        );
-    }
-
-    #[test]
-    fn house_forward_return_host_uses_the_routes_via() {
-        let local = mjolnir_mesh::tun::router_ula(&[0x11; 32], "node-example");
-        let router = OverlayRouter {
-            fib: Arc::new(Mutex::new(Fib::new())),
-            ula_hosts: Arc::new(Mutex::new(parse_ula_host_routes(&format!(
-                "{local}/128 via fe80::3 dev mjolnir0"
-            )))),
-            conns: ConnManager::new(),
-        };
-        let packet = house_forward_packet(local);
-        assert_eq!(router.next_hop(&packet), Some(Ipv4Addr::new(10, 254, 0, 3)));
-        assert!(router.resolve(&packet).is_none());
-    }
-
     fn store_of(claims: &[SubnetClaim]) -> HashMap<String, SubnetClaim> {
         claims
             .iter()
@@ -9788,20 +9229,6 @@ config meshd 'meshd'
         assert_eq!(
             pick_backhaul_addr(&store, "me"),
             mjolnir_mesh::tun::backhaul_addr("me")
-        );
-    }
-
-    #[test]
-    fn peer_hint_uses_gossiped_claim_else_derivation() {
-        let moved = claim("10.254.7.7/32", "peer-a", 100);
-        let store = store_of(&[moved]);
-        assert_eq!(
-            peer_backhaul_hint(&store, "peer-a"),
-            "10.254.7.7".parse::<Ipv4Addr>().unwrap()
-        );
-        assert_eq!(
-            peer_backhaul_hint(&store, "peer-b"),
-            mjolnir_mesh::tun::backhaul_addr("peer-b")
         );
     }
 

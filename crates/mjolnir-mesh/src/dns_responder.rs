@@ -400,12 +400,17 @@ impl NameTable for LeasedNameTable {
     }
 }
 
-/// A bound, running responder. Dropping this does not stop the background
-/// task — call [`ResponderHandle::abort`] at shutdown, as `mjolnir-meshd` does.
+/// A bound, running responder. Drop or call `abort` to stop its task.
 pub struct ResponderHandle {
     /// The address actually bound (useful in tests that pass port 0).
     pub local_addr: SocketAddr,
     task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ResponderHandle {
+    fn drop(&mut self) {
+        self.abort();
+    }
 }
 
 impl ResponderHandle {
