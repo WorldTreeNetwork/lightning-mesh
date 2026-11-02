@@ -6,16 +6,19 @@ up, Admin installs a device route for the foreign house `/48` on that
 TUN. Omitting either op removes the route. There is no withdrawal op.
 A stock prefix, this house's own `/48`, and a pair that does not include
 this house get no route. Babel and the Iroh bind set stay unchanged.
-Folded from `add-admitted-prefix-route` (2026-11-01).
+Admin passes foreign prefix bytes; the `mjolnir-app-tun` session does
+not read the guild log. Folded from `add-admitted-prefix-route`
+(2026-11-01); bytes seam by `extract-mjolnir-app-tun` (2026-11-01).
 
 Code: `admin/src-tauri/src/app_tun.rs` (`sync_admitted_routes`,
-`prefixes_for_house`).
+`prefixes_for_house`); `crates/mjolnir-app-tun`
+(`AppTunOpen::sync_admitted_routes`).
 
 ## Requirements
 
 ### Requirement: An admitted foreign prefix is a TUN device route
 
-Admin SHALL install a route for a foreign house `/48` only when `admitted_pairs` contains a pair that includes the house that opened the app TUN session and that session is up. The house id SHALL be the one stored at open. A later sync SHALL NOT accept a different guild. The route SHALL point at that TUN and SHALL NOT assign the `/48` on the interface. Omitting either admit op, so the pair is absent, SHALL remove the route. A failed deletion, or a failed observation of whether the route is gone, SHALL keep the prefix owned and SHALL surface the failure so the next sync retries. A prefix this session wrote SHALL stay owned when the observation of that write fails. Confirmed absence SHALL drop it. There SHALL be no withdrawal op. A stock OpenWrt prefix, this house's own `/48`, and a pair that does not include this house SHALL NOT gain a route. This SHALL NOT change Babel or the Iroh bind set.
+Admin SHALL install a route for a foreign house `/48` only when `admitted_pairs` contains a pair that includes the house that opened the app TUN session and that session is up. The house id SHALL be the one stored at open. A later sync SHALL NOT accept a different guild. The route SHALL point at that TUN and SHALL NOT assign the `/48` on the interface. Omitting either admit op, so the pair is absent, SHALL remove the route. A failed deletion, or a failed observation of whether the route is gone, SHALL keep the prefix owned and SHALL surface the failure so the next sync retries. A prefix this session wrote SHALL stay owned when the observation of that write fails. Confirmed absence SHALL drop it. There SHALL be no withdrawal op. A stock OpenWrt prefix, this house's own `/48`, and a pair that does not include this house SHALL NOT gain a route. This SHALL NOT change Babel or the Iroh bind set. The session SHALL be the `mjolnir-app-tun` session. Admin SHALL pass the foreign prefix bytes from `admitted_pairs`. The crate SHALL NOT read the guild log.
 
 #### Scenario: Both directions install the foreign prefix
 

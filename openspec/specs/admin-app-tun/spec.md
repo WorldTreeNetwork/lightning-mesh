@@ -2,13 +2,14 @@
 
 Lightning Admin computes an app `/128` from the selected house guild and
 the actor's Ed25519 public key, and shows it on the existing guild
-surface. A second process opens one Linux TUN at that address and passes
-one IP packet through `spawn_encap_pair`. The surface does not open the
-TUN. The address is not an Iroh candidate, and the router dial pin stays
-`10.254`. Folded from `add-admin-app-tun` (2026-11-01).
+surface. The runner `open_app_tun` lives in `mjolnir-app-tun`; Admin
+calls that crate. The surface does not open the TUN. The address is not
+an Iroh candidate, and the router dial pin stays `10.254`. Folded from
+`add-admin-app-tun` (2026-11-01); session moved by
+`extract-mjolnir-app-tun` (2026-11-01).
 
-Code: `admin/src-tauri/src/app_tun.rs` (`open_app_tun`),
-`crates/mjolnir-mesh/src/tun/link.rs` (`app_ula`).
+Code: `crates/mjolnir-app-tun` (`open_app_tun`, `app_ula`);
+`admin/src-tauri/src/app_tun.rs` (guild window, admitted prefix bytes).
 
 ## Requirements
 
@@ -16,7 +17,7 @@ Code: `admin/src-tauri/src/app_tun.rs` (`open_app_tun`),
 
 Lightning Admin SHALL compute its app address as `app_ula` of one house guild id and the actor's Ed25519 public key. The house guild is the one already selected on the existing guild surface when that guild has no outer guild. A workplace guild is such a house. A nested access guild has an outer and SHALL NOT yield an app address. That address SHALL use subnet id 1. Admin SHALL NOT assign a covering prefix. The guild surface SHALL show the computed address when both inputs exist and SHALL NOT open a TUN, add a button, or stage the client SSID.
 
-The runner `open_app_tun` SHALL accept that guild id, the actor public key, one peer node id, that peer's app `/128`, and exactly one `DatagramConn` bound to that node id. An unknown node id SHALL NOT select another conn. On Linux the runner SHALL open one TUN at MTU 1280, assign only the local app `/128`, install only that peer `/128` via the TUN, and pass one IP packet through `spawn_encap_pair`. The reply SHALL return through the same conn. The session SHALL own the device, both encap tasks, and the route it added. If installing the peer route fails, the runner SHALL remove the address and close the device. When either encap task returns, the session SHALL abort the other task, remove the address and the peer route, and set up false while still reporting the computed address. Drop SHALL do that same cleanup. A guild or key change SHALL be the caller dropping the session rather than the session retargeting itself. Up SHALL be true only when the assigned `/128` is usable (prefix 128, not tentative, not DAD-failed), the peer `/128` route is installed, and both tasks are still running. Up SHALL NOT mean the peer answered. The address SHALL NOT be added to an Iroh candidate or bind set. A missing guild id, a missing actor key, a failed or unprivileged TUN open, or a non-Linux build SHALL NOT install a route, change Babel, or stage the client SSID. When the inputs exist and the TUN is not usable, the computed address SHALL still be reported with up false.
+The runner `open_app_tun` SHALL live in `mjolnir-app-tun`, and Admin SHALL call that crate. The runner SHALL accept that guild id, the actor public key, one peer node id, that peer's app `/128`, and exactly one `DatagramConn` bound to that node id. An unknown node id SHALL NOT select another conn. On Linux the runner SHALL open one TUN at MTU 1280, assign only the local app `/128`, install only that peer `/128` via the TUN, and pass one IP packet through `spawn_encap_pair`. The reply SHALL return through the same conn. The session SHALL own the device, both encap tasks, and the route it added. If installing the peer route fails, the runner SHALL remove the address and close the device. When either encap task returns, the session SHALL abort both encap tasks by calling `EncapHandles::abort`. Dropping those join handles SHALL NOT be the cancellation. The session SHALL then remove the address and the peer route, and set up false while still reporting the computed address. Drop of the session SHALL call that same `abort()` on both encap tasks, including when Drop runs before the supervisor first polls, and SHALL then remove the owned address and routes. A guild or key change SHALL be the caller dropping the session rather than the session retargeting itself. Up SHALL be true only when the assigned `/128` is usable (prefix 128, not tentative, not DAD-failed), the peer `/128` route is installed, and both tasks are still running. Up SHALL NOT mean the peer answered. The address SHALL NOT be added to an Iroh candidate or bind set. A missing guild id, a missing actor key, a failed or unprivileged TUN open, or a non-Linux build SHALL NOT install a route, change Babel, or stage the client SSID. When the inputs exist and the TUN is not usable, the computed address SHALL still be reported with up false. The guild-window blank for a nested access guild SHALL stay in Admin.
 
 #### Scenario: Fixture app address
 
@@ -64,7 +65,25 @@ The runner `open_app_tun` SHALL accept that guild id, the actor public key, one 
 
 - GIVEN `open_app_tun` is up and the conn then closes
 - WHEN either encap task returns
-- THEN the sibling task is aborted, the owned address and peer route are removed, and up is false while the computed address remains
+- THEN both encap tasks have been aborted through `EncapHandles::abort`, the owned address and peer route are removed, and up is false while the computed address remains
+
+#### Scenario: A pending receive is aborted when the TUN read returns
+
+- GIVEN the session is up and the receive task is blocked in `recv_datagram`
+- WHEN the TUN read task returns
+- THEN the receive task is aborted, the owned address and peer route are removed, and up is false
+
+#### Scenario: A pending TUN read is aborted when the receive returns
+
+- GIVEN the session is up and the TUN read task is blocked
+- WHEN the receive task returns
+- THEN the TUN read task is aborted, the owned address and peer route are removed, and up is false
+
+#### Scenario: Drop before the supervisor polls aborts both tasks
+
+- GIVEN both encap tasks are running and the supervisor has not yet observed either one
+- WHEN the session is dropped
+- THEN both encap tasks are aborted and the owned address and peer route are removed
 
 #### Scenario: Missing guild opens nothing
 

@@ -34,6 +34,13 @@ SSH-mutate UCI. `update-fleet.sh` remains the full binary+radio rollout.
 WPS arms a prefix-boxed nft WAN SSH window; not UCI persist; overlay
 remains the management plane.
 
+App TUN session (`extract-mjolnir-app-tun`, bead `mjolnir-mesh-bny6.9`):
+`crates/mjolnir-app-tun` sits under `mjolnir-mesh` and Lightning Admin.
+It does not depend on `mjolnir-mesh`, does not link Iroh, and does not
+enable feature `daemon`. Cancellation is `EncapHandles::abort`; dropping
+a join handle is not cancellation. The guild window stays in Admin.
+Living spec: `openspec/specs/mjolnir-app-tun/spec.md`.
+
 Lightning Admin also hosts owner-drawn `canvas-*` overlays whose wells
 show allowlisted host stdout. The first source is macOS `/sbin/ifconfig`
 with no extra args, a 5 second timeout, and a 65536 byte capture cap.
@@ -168,7 +175,12 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
   `10.254` stays mesh-wide): `openspec/specs/link-local-mgmt/spec.md`
 - Identity-derived ULA on `br-mesh` beside `10.254` (not an iroh
   candidate). House `/48` is derived from the guild id; the router
-  `/128` is subnet 0 and the app `/128` is subnet 1. The compiled
+  `/128` is subnet 0 and the app `/128` is subnet 1. The app session
+  is `crates/mjolnir-app-tun` (no mesh dependency, no Iroh, no
+  `daemon` feature; cancel with `EncapHandles::abort`):
+  `openspec/specs/mjolnir-app-tun/spec.md`,
+  `openspec/specs/admin-app-tun/spec.md`,
+  `openspec/specs/admitted-prefix-route/spec.md`. The compiled
   `/64` stays assigned. When that router `/128` is usable on `br-mesh`,
   both Babel renders export it (`eq 128` on the house `/48`, then deny
   the rest of `fc00::/7`). On `mjolnir0`, an IPv6 `/128` whose next hop
