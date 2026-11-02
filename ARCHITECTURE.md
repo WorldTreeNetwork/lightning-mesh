@@ -189,7 +189,10 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
   IPv6 `/128` whose next hop
   is overlay `fe80::H` selects the already-open `10.254` peer;
   withdrawal drops the selection. `fd` is not an Iroh bind. `10.254`
-  remains the Iroh pin: `openspec/specs/identity-derived-ula/spec.md`
+  remains the Iroh pin. Directory neighbors, the Admin address list,
+  and the fleet reference printer show `router_ula` as the operator
+  backhaul reference; `10.254` stays the transport pin and the walked
+  fleet column: `openspec/specs/identity-derived-ula/spec.md`
 - Mini-apps (TXT `app=v1`, node-side manifest fetch, Apps shelf,
   sandboxed cross-origin card; key origin ≠ app origin; identity
   over the bridge via one-shot MessagePort):
