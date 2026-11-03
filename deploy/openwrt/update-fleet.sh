@@ -35,6 +35,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=fleet-file.sh
 source "$DIR/fleet-file.sh"
 CONF="$(fleet_conf "$DIR")"
+if [ ! -f "$DIR/mjolnir-hello-aarch64" ]; then
+	echo "WARNING: $DIR/mjolnir-hello-aarch64 is missing. This rollout will not ship the front desk." >&2
+	echo "WARNING: build it with deploy/openwrt/build-hello.sh, then re-run." >&2
+fi
 
 INSTALL_ARGS=()
 ONLY=()

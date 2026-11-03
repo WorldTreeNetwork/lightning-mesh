@@ -25,8 +25,8 @@ deploy/openwrt/build-hello.sh       # -> deploy/openwrt/mjolnir-hello-aarch64
 ```
 
 `mjolnir-hello` is an entirely optional peripheral service — a node runs the
-mesh fine without it, and `install-node.sh` / `update-fleet.sh` skip staging it
-if this binary isn't present. **Ordering dependency:** the SvelteKit frontend
+mesh fine without it. If `deploy/openwrt/mjolnir-hello-aarch64` is missing,
+`install-node.sh` prints a warning and does not stage it. **Ordering dependency:** the SvelteKit frontend
 must be built and synced into `crates/mjolnir-hello/static/` *before* the Rust
 cross-build, because `rust-embed` bakes the contents of that directory into
 the binary at compile time (`crates/mjolnir-hello/src/assets.rs`).

@@ -204,7 +204,8 @@ if [ -f "$HELLO_BIN" ]; then
 	echo ">> staging mjolnir-hello (optional front desk)"
 	scp -O "$HELLO_BIN" "$HOST:$STAGE/mjolnir-hello"
 else
-	echo ">> mjolnir-hello-aarch64 not built locally — skipping (mesh-only install; see README)"
+	echo "WARNING: $HELLO_BIN is missing, so this install does not ship mjolnir-hello." >&2
+	echo "WARNING: the node runs the mesh with no front desk. Build it with deploy/openwrt/build-hello.sh, then re-run the install." >&2
 fi
 
 RUN_WIRELESS=0
