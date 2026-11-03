@@ -18,9 +18,10 @@ capability has shipped. Living specs change only when a child change folds.
 
 Reconciled 2026-11-03. Folded slices are listed in [tasks.md](tasks.md):
 welcome, owner claim, durable apply, wired profiles, private Wi-Fi plan,
-uplink plan, and admin record checks. Still owed: grant engine (`ai0.1`),
-signed control (`b6j.2`), visible shared admin (`bf7.7`), link policy
-(`ai0.8`), hardware qualification (`lpv`), and observed use (`isnx`).
+uplink plan, and admin record checks. The grant library (`ai0.1`) is
+closed and unfolded. Still owed: signed control (`b6j.2`), visible shared
+admin (`bf7.7`), link policy (`ai0.8`), hardware qualification (`lpv`),
+and observed use (`isnx`).
 
 Design: [technical model and hardware inputs](design.md).
 Experience: [brief](../../../.design/household-network/DESIGN_BRIEF.md) and

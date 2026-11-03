@@ -40,8 +40,9 @@ as scoped grants. Agency SHALL use the IdentiKey Biscuit format with a defined
 mesh profile, destination verification, and no authority inferred from membership.
 A second owner SHALL NOT be required for setup. Recovery SHALL be explicit.
 
-The ceremony is `household-owner-claim`. Issuance and destination checks remain
-`mjolnir-mesh-ai0.1`. Signed transport remains `mjolnir-mesh-b6j.2`.
+The ceremony is `household-owner-claim`. Destination checks for the v1 profile
+are the grant library (`mjolnir-mesh-ai0.1`, closed, not folded). Putting a
+preset on a node and carrying the request remain `mjolnir-mesh-b6j.2`.
 
 #### Scenario: Admin exceeds a delegated node scope
 
@@ -106,7 +107,9 @@ authority. A node that missed a revocation SHALL show enforcement as pending
 and SHALL NOT accept a fresh grant from expired authority. Reconnect SHALL
 reconcile revocations before accepting fresh grants.
 
-This is not the owner ceremony. It remains with `mjolnir-mesh-ai0.1`.
+This is not the owner ceremony. The grant library refuses a grant once this
+destination has verified the withdrawal, or once authority is stale. Pending
+enforcement and reconnect reconciliation remain outside that library.
 
 #### Scenario: Last owner would be removed
 

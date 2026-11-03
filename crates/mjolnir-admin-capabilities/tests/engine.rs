@@ -1,5 +1,6 @@
 //! Authorization-engine vectors. Fixtures are local, not live recovery proof.
 
+use biscuit_auth::builder::BlockBuilder;
 use biscuit_auth::macros::biscuit;
 use biscuit_auth::{Biscuit, KeyPair, PublicKey};
 use ed25519_dalek::{Signer, SigningKey};
@@ -52,9 +53,20 @@ fn proof_for(
     hk: &HolderKey,
     epoch: u64,
 ) -> (Vec<u8>, mjolnir_admin_capabilities::VerifiedHolderProof) {
+    proof_on(op, raw, sk, hk, epoch, b32(0x22))
+}
+
+fn proof_on(
+    op: Operation,
+    raw: &[u8],
+    sk: &SigningKey,
+    hk: &HolderKey,
+    epoch: u64,
+    node: [u8; 32],
+) -> (Vec<u8>, mjolnir_admin_capabilities::VerifiedHolderProof) {
     let request = AdminRequest::new(
         b32(0x11),
-        b32(0x22),
+        node,
         epoch,
         op,
         TokenIdentity::from_raw_token(raw).unwrap(),
@@ -524,4 +536,417 @@ fn biscuit_to_vec_is_not_required_preimage_identity_is_raw_bytes() {
         .unwrap_err();
         assert!(matches!(err, AuthzError::Codec(_)));
     }
+}
+
+fn apply_op() -> Operation {
+    Operation::ApplyNetworkPlan {
+        plan_id: b32(1),
+        expected_revision: b32(2),
+        plan_digest: b32(3),
+    }
+}
+
+fn mint_code(root: &KeyPair, source: &str) -> Vec<u8> {
+    Biscuit::builder()
+        .code(source)
+        .expect("code")
+        .build(root)
+        .expect("mint")
+        .to_vec()
+        .expect("serialize")
+}
+
+fn attenuate_to_diagnostics(raw: &[u8], issuer: PublicKey) -> Vec<u8> {
+    let token = Biscuit::from(raw, issuer).unwrap();
+    let block = BlockBuilder::new()
+        .check(r#"check if operation("diagnostics_status")"#)
+        .unwrap();
+    token.append(block).unwrap().to_vec().unwrap()
+}
+
+#[test]
+fn relaxed_firewall_and_guest_claim_caps_at_twenty_four_hours() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let issued = 1_700_000_000u64;
+    let day = 24 * 3600u64;
+    let source = format!(
+        r#"
+        right("apply_network_plan");
+        right("guest_wifi");
+        holder("{h}");
+        issued_at({issued});
+        expires_at({exp});
+        "#,
+        h = hex_key(&hk),
+        exp = issued + 30 * day,
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(apply_op(), &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Relaxed,
+    );
+    let mut floor = HighWaterFloor::default();
+    let inside = issued + day - 1;
+    let grant = authorize(&proof, &raw, &hk, &auth, time(inside, inside), &mut floor).unwrap();
+    assert_eq!(grant.effective_expiry, Some(issued + day));
+    assert_eq!(grant.replay.authority_epoch, 1);
+    let err = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(issued + day, issued + day),
+        &mut floor,
+    )
+    .unwrap_err();
+    assert_eq!(err, AuthzError::Expired);
+}
+
+#[test]
+fn relaxed_network_authority_older_than_twenty_four_hours_is_stale() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let now = 2_000_000u64;
+    let issued = now - 3600;
+    let source = format!(
+        r#"
+        right("apply_network_plan");
+        holder("{h}");
+        issued_at({issued});
+        expires_at({exp});
+        "#,
+        h = hex_key(&hk),
+        exp = issued + 30 * 24 * 3600,
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(apply_op(), &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Relaxed,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(now, now - 24 * 3600 - 1),
+        &mut floor,
+    )
+    .unwrap_err();
+    assert_eq!(err, AuthzError::StaleAuthority);
+    authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(now, now - 24 * 3600),
+        &mut floor,
+    )
+    .unwrap();
+}
+
+#[test]
+fn attenuation_allows_diagnostics_and_refuses_configuration() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let issued = 1_000u64;
+    let source = format!(
+        r#"
+        right("apply_network_plan");
+        right("diagnostics_status");
+        holder("{h}");
+        issued_at({issued});
+        expires_at({exp});
+        "#,
+        h = hex_key(&hk),
+        exp = issued + 30 * 24 * 3600,
+    );
+    let raw = attenuate_to_diagnostics(&mint_code(&root, &source), root.public());
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Relaxed,
+    );
+    let (_, diag) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let mut floor = HighWaterFloor::default();
+    let grant = authorize(&diag, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap();
+    assert_eq!(grant.effective_expiry, Some(issued + 24 * 3600));
+    let (_, apply) = proof_for(apply_op(), &raw, &sk, &hk, 1);
+    let err = authorize(&apply, &raw, &hk, &auth, time(5_001, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::PolicyDenied);
+}
+
+#[test]
+fn attenuated_grant_refuses_a_different_node() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("apply_network_plan");
+        right("diagnostics_status");
+        holder("{h}");
+        issued_at(1000);
+        expires_at(1000000);
+        "#,
+        h = hex_key(&hk),
+    );
+    let raw = attenuate_to_diagnostics(&mint_code(&root, &source), root.public());
+    let (_, proof) = proof_on(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1, b32(0x99));
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::TargetMismatch);
+}
+
+#[test]
+fn ownership_right_caps_a_mixed_token_at_five_minutes() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let issued = 10_000u64;
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        right("ownership_change");
+        holder("{h}");
+        issued_at({issued});
+        expires_at({exp});
+        "#,
+        h = hex_key(&hk),
+        exp = issued + 7 * 24 * 3600,
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::Ownership,
+        SecurityProfile::Relaxed,
+    );
+    let mut floor = HighWaterFloor::default();
+    let grant = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(issued + 5 * 60 - 1, issued),
+        &mut floor,
+    )
+    .unwrap();
+    assert_eq!(grant.effective_expiry, Some(issued + 5 * 60));
+    let err = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(issued + 5 * 60, issued),
+        &mut floor,
+    )
+    .unwrap_err();
+    assert_eq!(err, AuthzError::Expired);
+}
+
+#[test]
+fn firmware_right_caps_a_mixed_token_at_fifteen_minutes() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let issued = 10_000u64;
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        right("firmware_install");
+        holder("{h}");
+        issued_at({issued});
+        expires_at({exp});
+        "#,
+        h = hex_key(&hk),
+        exp = issued + 7 * 24 * 3600,
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::Firmware,
+        SecurityProfile::Relaxed,
+    );
+    let mut floor = HighWaterFloor::default();
+    let grant = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(issued + 15 * 60 - 1, issued),
+        &mut floor,
+    )
+    .unwrap();
+    assert_eq!(grant.effective_expiry, Some(issued + 15 * 60));
+    let err = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(issued + 15 * 60, issued),
+        &mut floor,
+    )
+    .unwrap_err();
+    assert_eq!(err, AuthzError::Expired);
+}
+
+#[test]
+fn diagnostics_without_expiry_succeeds_inside_the_stale_window() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        holder("{h}");
+        issued_at(1000);
+        "#,
+        h = hex_key(&hk),
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let grant = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap();
+    assert!(grant.effective_expiry.is_none());
+    let err = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(1000 + 24 * 3600 + 1, 1000),
+        &mut floor,
+    )
+    .unwrap_err();
+    assert_eq!(err, AuthzError::StaleAuthority);
+}
+
+#[test]
+fn configuration_grant_without_expiry_is_refused() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("apply_network_plan");
+        holder("{h}");
+        issued_at(1000);
+        "#,
+        h = hex_key(&hk),
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(apply_op(), &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Relaxed,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::MissingIssuanceTimes);
+}
+
+#[test]
+fn appended_right_does_not_authorize_apply() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        holder("{h}");
+        issued_at(1000);
+        expires_at(1000000);
+        "#,
+        h = hex_key(&hk),
+    );
+    let token = Biscuit::from(mint_code(&root, &source), root.public()).unwrap();
+    let block = BlockBuilder::new()
+        .code(r#"right("apply_network_plan");"#)
+        .unwrap();
+    let raw = token.append(block).unwrap().to_vec().unwrap();
+    let (_, proof) = proof_for(apply_op(), &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::PolicyDenied);
+}
+
+#[test]
+fn appended_expiry_does_not_extend_the_authority_block() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let issued = 1_000u64;
+    let source = format!(
+        r#"
+        right("apply_network_plan");
+        holder("{h}");
+        issued_at({issued});
+        expires_at({exp});
+        "#,
+        h = hex_key(&hk),
+        exp = issued + 3600,
+    );
+    let token = Biscuit::from(mint_code(&root, &source), root.public()).unwrap();
+    let block = BlockBuilder::new()
+        .code(format!("expires_at({});", issued + 30 * 24 * 3600))
+        .unwrap();
+    let raw = token.append(block).unwrap().to_vec().unwrap();
+    let (_, proof) = proof_for(apply_op(), &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::NetworkRadio,
+        SecurityProfile::Relaxed,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(
+        &proof,
+        &raw,
+        &hk,
+        &auth,
+        time(issued + 3600, issued + 3600),
+        &mut floor,
+    )
+    .unwrap_err();
+    assert_eq!(err, AuthzError::Expired);
+}
+
+#[test]
+fn unknown_right_is_refused() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        right("become_root");
+        holder("{h}");
+        issued_at(1000);
+        expires_at(100000);
+        "#,
+        h = hex_key(&hk),
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert!(matches!(err, AuthzError::UnknownRight(_)));
 }

@@ -268,6 +268,8 @@ pub enum AuthzError {
     TargetMismatch,
     #[error("holder does not match the grant")]
     HolderMismatch,
+    #[error("token right {0} is not in the v1 profile")]
+    UnknownRight(String),
     #[error("operation is not allowed by this grant class")]
     ClassDenied,
     #[error("grant lineage is revoked")]
@@ -312,13 +314,11 @@ pub fn authorize(
         return Err(AuthzError::TargetMismatch);
     }
 
-    let class = GrantClass::for_operation(request.operation());
-    if class != authority.grant_class {
+    // Diagnostics is the only cross-class narrowing. Any other operation must
+    // match the control record, so a read issuer cannot authorize a radio change.
+    let op_class = GrantClass::for_operation(request.operation());
+    if op_class != authority.grant_class && op_class != GrantClass::DiagnosticsRead {
         return Err(AuthzError::ClassDenied);
-    }
-
-    if time.staleness_secs() > authority.profile.max_stale_secs() {
-        return Err(AuthzError::StaleAuthority);
     }
 
     let token = Biscuit::from(raw_token, authority.issuer).map_err(token_err)?;
@@ -330,18 +330,34 @@ pub fn authorize(
     }
     reject_reserved_facts(&token)?;
 
+    let rights = token_rights(&token)?;
+    let classes = classes_of(&rights)?;
+    let op_right = match request.operation() {
+        Operation::DiagnosticsStatus => "diagnostics_status",
+        Operation::ApplyNetworkPlan { .. } => "apply_network_plan",
+    };
+    if !rights.iter().any(|right| right == op_right) {
+        return Err(AuthzError::PolicyDenied);
+    }
+    // A network right keeps the stale window at 24h even under Relaxed.
+    // Mixed tokens take that tighter window too.
+    if time.staleness_secs() > staleness_limit(authority.profile, &classes) {
+        return Err(AuthzError::StaleAuthority);
+    }
+
     for id in token.revocation_identifiers() {
         if authority.revoked_lineage.iter().any(|r| r == &id) {
             return Err(AuthzError::Revoked);
         }
     }
 
-    let (issued_at, expires_at) = issuance_times(&token)?;
+    let class_cap = tightest_token_cap(authority.profile, &classes);
+    let (issued_at, expires_at) = issuance_times(&token, class_cap.is_none())?;
     if issued_at > time.unix_seconds() {
         return Err(AuthzError::IssuedInTheFuture);
     }
 
-    let effective_expiry = effective_expiry(issued_at, expires_at, authority.profile, class, None)?;
+    let effective_expiry = effective_expiry(issued_at, expires_at, authority.profile, class_cap)?;
     if effective_expiry.is_some_and(|exp| time.unix_seconds() >= exp) {
         return Err(AuthzError::Expired);
     }
@@ -434,41 +450,99 @@ fn reject_reserved_facts(token: &Biscuit) -> Result<(), AuthzError> {
     Ok(())
 }
 
-fn issuance_times(token: &Biscuit) -> Result<(u64, u64), AuthzError> {
+/// v1 right atoms. A later wire operation is not required for a right to
+/// tighten the cap: a mixed token takes the shortest class present.
+fn class_for_right(right: &str) -> Result<GrantClass, AuthzError> {
+    match right {
+        "diagnostics_status" => Ok(GrantClass::DiagnosticsRead),
+        "apply_network_plan" => Ok(GrantClass::NetworkRadio),
+        "guest_wifi" => Ok(GrantClass::GuestWifi),
+        "firmware_install" => Ok(GrantClass::Firmware),
+        "ownership_change" => Ok(GrantClass::Ownership),
+        _ => Err(AuthzError::UnknownRight(right.to_string())),
+    }
+}
+
+fn token_rights(token: &Biscuit) -> Result<Vec<String>, AuthzError> {
+    let mut authorizer = token.authorizer().map_err(token_err)?;
+    // Later blocks may only add checks. A fact there is not a right.
+    let hits: Vec<(String,)> = authorizer
+        .query("data($r) <- right($r) trusting authority")
+        .map_err(token_err)?;
+    if hits.is_empty() {
+        return Err(AuthzError::PolicyDenied);
+    }
+    Ok(hits.into_iter().map(|(right,)| right).collect())
+}
+
+fn classes_of(rights: &[String]) -> Result<Vec<GrantClass>, AuthzError> {
+    let mut classes = Vec::new();
+    for right in rights {
+        let class = class_for_right(right)?;
+        if !classes.contains(&class) {
+            classes.push(class);
+        }
+    }
+    Ok(classes)
+}
+
+/// Shortest grant-class lifetime, in seconds. `None` means every right is
+/// the diagnostics waiver.
+fn tightest_token_cap(profile: SecurityProfile, classes: &[GrantClass]) -> Option<u64> {
+    let mut tightest: Option<u64> = None;
+    for class in classes {
+        if let Some(cap) = class.token_cap_secs(profile) {
+            tightest = Some(match tightest {
+                Some(so_far) => so_far.min(cap),
+                None => cap,
+            });
+        }
+    }
+    tightest
+}
+
+/// Profile stale window, tightened to 24h when the token carries a network right.
+fn staleness_limit(profile: SecurityProfile, classes: &[GrantClass]) -> u64 {
+    let mut limit = profile.max_stale_secs();
+    if classes.contains(&GrantClass::NetworkRadio) {
+        limit = limit.min(24 * 3600);
+    }
+    limit
+}
+
+fn issuance_times(token: &Biscuit, waive_expiry: bool) -> Result<(u64, Option<u64>), AuthzError> {
     let mut authorizer = token.authorizer().map_err(token_err)?;
     let issued: Vec<(i64,)> = authorizer
-        .query("data($t) <- issued_at($t)")
+        .query("data($t) <- issued_at($t) trusting authority")
         .map_err(token_err)?;
     let expires: Vec<(i64,)> = authorizer
-        .query("data($t) <- expires_at($t)")
+        .query("data($t) <- expires_at($t) trusting authority")
         .map_err(token_err)?;
-    match (issued.as_slice(), expires.as_slice()) {
-        ([(issued,)], [(expires,)]) if *issued >= 0 && *expires >= 0 => {
-            Ok((*issued as u64, *expires as u64))
-        }
-        _ => Err(AuthzError::MissingIssuanceTimes),
-    }
+    let issued_at = match issued.as_slice() {
+        [(issued,)] if *issued >= 0 => *issued as u64,
+        _ => return Err(AuthzError::MissingIssuanceTimes),
+    };
+    let expires_at = match expires.as_slice() {
+        [] if waive_expiry => None,
+        [(expires,)] if *expires >= 0 => Some(*expires as u64),
+        _ => return Err(AuthzError::MissingIssuanceTimes),
+    };
+    Ok((issued_at, expires_at))
 }
 
 fn effective_expiry(
     issued_at: u64,
-    expires_at: u64,
+    expires_at: Option<u64>,
     profile: SecurityProfile,
-    class: GrantClass,
-    parent_ceiling: Option<u64>,
+    class_cap: Option<u64>,
 ) -> Result<Option<u64>, AuthzError> {
-    if class == GrantClass::DiagnosticsRead {
+    let Some(class_cap) = class_cap else {
         return Ok(None);
-    }
+    };
+    let expires_at = expires_at.ok_or(AuthzError::MissingIssuanceTimes)?;
     let mut cap = expires_at;
-    let class_cap = class
-        .token_cap_secs(profile)
-        .ok_or(AuthzError::ClassDenied)?;
     cap = min_expiry(cap, add_secs(issued_at, class_cap)?)?;
     cap = min_expiry(cap, add_secs(issued_at, profile.token_ceiling_secs())?)?;
-    if let Some(parent) = parent_ceiling {
-        cap = min_expiry(cap, add_secs(issued_at, parent)?)?;
-    }
     Ok(Some(cap))
 }
 

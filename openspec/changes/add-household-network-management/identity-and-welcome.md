@@ -3,7 +3,7 @@
 > 2026-09-14 refinement. User decision: one initial owner delegates to admins,
 > members, and guests. Everyone connecting should be invited to discover the hub
 > and optionally create an identity. The welcome shipped in
-> `house-hub-welcome`. Delegated grant runtime remains open on `mjolnir-mesh-ai0.1`.
+> `house-hub-welcome`. The grant library closed on `mjolnir-mesh-ai0.1` and does not execute a grant. Signed control remains `mjolnir-mesh-b6j.2`.
 
 ## Evidence after pulling latest
 
