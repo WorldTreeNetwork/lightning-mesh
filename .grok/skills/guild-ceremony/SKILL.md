@@ -93,6 +93,7 @@ The config directory is mode 0700. Never print the seed, put it on a command lin
 
 ## Leave alone
 
-- Wraps stay empty. This ceremony does not mint a guild PTK.
+- The ceremony leaves wraps empty and does not mint a guild PTK.
+- Admit a person onto an access guild, not a house: `lightning-guild admit --guild <access id or name> --recipient <64-hex>`. That signs `keyspace.join` and records their encapsulation key. The line does not contain the guild secret.
 - Signing does not change the client SSID and does not SSH the op to the router.
 - A second Admin genesis is refused while the log is non-empty.

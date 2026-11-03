@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use lightning_admin_lib::guild_ceremony::{
     config_dir, run_ceremony, CeremonyMode, CeremonyRequest,
 };
-use lightning_admin_lib::guild_view::{inspect, project, resolve_guild};
+use lightning_admin_lib::guild_view::{admit_access_member, inspect, project, resolve_guild};
 use serde_json::Value;
 
 fn main() -> ExitCode {
@@ -43,6 +43,22 @@ fn run() -> Result<(), String> {
             let id = resolve_guild(&config, &query)?;
             let one = project(&view, &id)?;
             emit(json, &one, &render_show(&one));
+        }
+        "admit" => {
+            let guild = flag(&args, "--guild")?;
+            let recipient = flag(&args, "--recipient")?;
+            let keyspace = resolve_guild(&config, &guild)?;
+            let receipt = admit_access_member(&config, &keyspace, &recipient)?;
+            let view = inspect(&config)?;
+            let one = project(&view, &keyspace)?;
+            let text = format!(
+                "admitted onto {}\n{}",
+                receipt.keyspace_id,
+                render_show(&one)
+            );
+            let mut value = one;
+            value["receipt"] = serde_json::to_value(&receipt).map_err(|e| e.to_string())?;
+            emit(json, &value, &text);
         }
         "assign" => {
             let guild = flag(&args, "--guild")?;
@@ -147,7 +163,8 @@ fn render_show(view: &Value) -> String {
     if let Some(roster) = g["roster"].as_array() {
         for m in roster {
             let role = if m["admin"] == true { "admin" } else { "member" };
-            out.push_str(&format!("    {role}  {}\n", m["actor"].as_str().unwrap_or("")));
+            let who = m["actor"].as_str().or(m["recipient"].as_str()).unwrap_or("");
+            out.push_str(&format!("    {role}  {who}\n"));
         }
     }
     out.push_str("\n  nodes\n");
@@ -203,6 +220,7 @@ fn usage() -> String {
     "\
 lightning-guild                       list guilds on this machine
 lightning-guild show [name|id]        one guild, its roster, nodes, and ops
+lightning-guild admit --guild NAME --recipient HEX
 lightning-guild assign --guild NAME --node-name NAME --node-id HEX
 lightning-guild ceremony --workplace NAME --node-name NAME --node-id HEX
 lightning-guild ceremony --workplace-id HEX --node-name NAME --node-id HEX

@@ -1,20 +1,25 @@
 <script lang="ts">
   let {
     guildName,
+    showAdmit = false,
     onLocalName,
     onAssign,
+    onAdmit,
   }: {
     guildName: string;
+    showAdmit?: boolean;
     onLocalName: (name: string) => void;
     onAssign: (nodeName: string, nodeId: string) => void;
+    onAdmit?: (recipient: string) => void;
   } = $props();
 
   const NODE_ID = /^[0-9a-fA-F]{64}$/;
 
-  let task = $state<'rename' | 'assign' | null>(null);
+  let task = $state<'rename' | 'assign' | 'admit' | null>(null);
   let localName = $state('');
   let nodeName = $state('');
   let nodeId = $state('');
+  let recipient = $state('');
 
   $effect(() => {
     localName = guildName;
@@ -22,6 +27,7 @@
 
   const canSaveName = $derived(localName.trim().length > 0);
   const canAssign = $derived(nodeName.trim().length > 0 && NODE_ID.test(nodeId.trim()));
+  const canAdmit = $derived(NODE_ID.test(recipient.trim()));
 
   function saveName() {
     const name = localName.trim();
@@ -34,6 +40,12 @@
     nodeName = '';
     nodeId = '';
   }
+
+  function admit() {
+    if (!canAdmit || !onAdmit) return;
+    onAdmit(recipient.trim());
+    recipient = '';
+  }
 </script>
 
 <div class="editors">
@@ -44,6 +56,11 @@
     <button type="button" class:on={task === 'assign'} aria-pressed={task === 'assign'} onclick={() => (task = task === 'assign' ? null : 'assign')}>
       Assign node
     </button>
+    {#if showAdmit}
+      <button type="button" class:on={task === 'admit'} aria-pressed={task === 'admit'} onclick={() => (task = task === 'admit' ? null : 'admit')}>
+        Admit someone
+      </button>
+    {/if}
   </div>
 
   {#if task === 'rename'}
@@ -76,6 +93,24 @@
       </label>
       <div class="actions">
         <button type="submit" disabled={!canAssign}>Assign</button>
+      </div>
+    </form>
+  {:else if task === 'admit'}
+    <form onsubmit={(e) => { e.preventDefault(); admit(); }}>
+      <label>
+        <span>Their key</span>
+        <input
+          class="mono"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="64 hex characters"
+          aria-invalid={recipient.trim().length > 0 && !NODE_ID.test(recipient.trim())}
+          bind:value={recipient}
+        />
+      </label>
+      <div class="actions">
+        <button type="submit" disabled={!canAdmit}>Admit</button>
       </div>
     </form>
   {/if}

@@ -18,7 +18,7 @@ Your public key is not on that guild's roster. The role chip says absent.
 
 The child guild created for one router. Assigning ap3000-outdoor-b to Strawberry Creek creates one. Its profile in the signed record is `access-node`. Its id is the hash of the nest that created it. The screen lists it only from that node's **Open access guild** button.
 
-A house roster is the people who run the group. The access guild is where a holder would later wrap a key for someone admitted at that router. hello.mesh looks for an access-node keyspace id and, when one is present, can ask the holder to wrap a login key. Joining the client Wi-Fi does not consult this guild.
+A house roster is the people who run the group. The access guild is where a holder records someone who should be admitted at that router. **Admit someone** signs a `keyspace.join` that puts their encapsulation key on that roster, at the current epoch. hello.mesh looks for an access-node keyspace id and, when one is present, can ask the holder to do that. Joining the client Wi-Fi does not consult this guild.
 
 ### Actor
 
@@ -134,7 +134,7 @@ A house marked `workplace: true` in `guilds.json`. That mark is local. The signe
 
 ### Wrap
 
-An encrypted copy of the guild secret, addressed to one member. The joins and the nest on this computer carry an empty wrap list. No pairwise transient key is minted. A wrap is the step that would later admit someone at a router. A spool file from hello.mesh asking for a wrap is a request to the holder. It is not membership and it does not contain the secret.
+A record that one person's encapsulation key may hold the guild secret at a given epoch. **Admit someone** writes that record on the access guild. The signed line does not contain the secret itself. A spool file from hello.mesh asking for a wrap is a request. It is not yet membership.
 
 ### XID
 

@@ -22,6 +22,13 @@ pub fn guild_snapshot() -> Result<Value, String> {
     crate::guild_view::inspect(&config_dir()?)
 }
 
+#[tauri::command]
+pub fn guild_admit(keyspace_id: String, recipient: String) -> Result<crate::guild::GuildReceipt, String> {
+    validate_id(&keyspace_id)?;
+    validate_id(&recipient)?;
+    crate::guild_view::admit_access_member(&config_dir()?, &keyspace_id, &recipient)
+}
+
 fn validate_id(id: &str) -> Result<(), String> {
     if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("expected a 64-hex id".into());

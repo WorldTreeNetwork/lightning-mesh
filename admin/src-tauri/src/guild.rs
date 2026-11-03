@@ -245,6 +245,66 @@ fn encode_admit(id: [u8; 32], peer: [u8; 32], prefix: Option<[u8; 6]>) -> Result
     Ok(CBOR::from(body).to_cbor_data())
 }
 
+/// Sign a `keyspace.join` onto an access guild.
+///
+/// The body matches identikey-keys `wrap_login`: the person's X25519
+/// encapsulation key is recorded at the current epoch. The op carries no
+/// sealed guild secret. The parent is the access guild's own id.
+pub fn sign_access_admit(
+    seed_hex: &str,
+    keyspace_hex: &str,
+    recipient_hex: &str,
+    epoch: u64,
+    now_ms: u64,
+    counter: u64,
+    log_path: &Path,
+) -> Result<GuildReceipt, String> {
+    let seed = parse_hex32(seed_hex, "actor seed")?;
+    let keyspace = parse_hex32(keyspace_hex, "access guild")?;
+    let recipient = parse_hex32(recipient_hex, "their key")?;
+    let author = Author::from_seed(&seed);
+    let actor = author.actor();
+    if recipient == actor {
+        return Err("that key is this computer's signing key".into());
+    }
+    let body = encode_access_admit(keyspace, recipient, epoch)?;
+    let op = Op::new(KIND_JOIN, actor, Hlc::new(now_ms, counter))
+        .with_body(body)
+        .with_parents([keyspace])
+        .with_target_fp(keyspace);
+    let signed = author.sign(op).map_err(|e| e.to_string())?;
+    sign::verify(&signed).map_err(|e| e.to_string())?;
+    let hash = codec::content_hash(&signed.op).map_err(|e| e.to_string())?;
+    let bytes = codec::encode_signed(&signed).map_err(|e| e.to_string())?;
+    append_log(log_path, &bytes)?;
+    Ok(GuildReceipt {
+        kind: KIND_JOIN.to_owned(),
+        keyspace_id: hex32(&keyspace),
+        content_hash: hex32(&hash),
+        actor: hex32(&actor),
+        log_path: log_path.display().to_string(),
+    })
+}
+
+fn encode_access_admit(keyspace: [u8; 32], recipient: [u8; 32], epoch: u64) -> Result<Vec<u8>, String> {
+    let mut puk = Map::new();
+    puk.insert("alg", "x25519");
+    puk.insert("key", CBOR::to_byte_string(recipient));
+    let mut entry = Map::new();
+    entry.insert("admin", false);
+    entry.insert("puks", vec![CBOR::from(puk)]);
+    let mut wrap = Map::new();
+    wrap.insert("alg", "x25519-xchacha20poly1305");
+    wrap.insert("recipient", CBOR::to_byte_string(recipient));
+    wrap.insert("epoch", epoch);
+    let mut body = Map::new();
+    body.insert("keyspace", CBOR::to_byte_string(keyspace));
+    body.insert("roster", vec![CBOR::from(entry)]);
+    body.insert("wraps", vec![CBOR::from(wrap)]);
+    body.insert("epoch", epoch);
+    Ok(CBOR::from(body).to_cbor_data())
+}
+
 fn encode_nest(actor: [u8; 32], outer: [u8; 32]) -> Result<Vec<u8>, String> {
     let mut body = Map::new();
     body.insert("outer", CBOR::to_byte_string(outer));

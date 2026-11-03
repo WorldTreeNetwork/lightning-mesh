@@ -28,3 +28,23 @@ NOT be the recipient. A house guild id SHALL NOT be the target.
 - WHEN identikey login verifies
 - THEN the spool kind is `keyspace.join` and the profile is `access-node`
 - AND the response names that keyspace id
+
+### Requirement: A holder admits that person on the access guild
+
+An admin of an access-node guild SHALL be able to sign a `keyspace.join` that records one X25519 encapsulation key on that guild at the current epoch. The join SHALL add that key to the roster as a non-admin member and to the wrap list. The join SHALL NOT replace the access guild, SHALL NOT change its epoch, and SHALL NOT carry a sealed guild secret. The same call on a house guild SHALL be refused. The signer's own signing key SHALL be refused as the recipient.
+
+#### Scenario: Admit keeps the access guild and adds the person
+
+- GIVEN an access-node guild nested under a house, with one admin on its roster
+- WHEN the holder admits a distinct 32-byte encapsulation key
+- THEN the access guild still has the same id, profile, outer guild, and epoch
+- AND the roster has the admin and one non-admin member for that key
+- AND the wrap list names that key at the same epoch
+- AND the house roster and assigned nodes are unchanged
+
+#### Scenario: A house guild refuses the admit
+
+- GIVEN a house guild id
+- WHEN the holder admits a key on that id
+- THEN no op is appended
+- AND the error says to admit on the access guild

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { guildSnapshot, guildRename, guildAssign } from '../api';
+	import { guildSnapshot, guildRename, guildAssign, guildAdmit } from '../api';
 	import type { GuildActor, GuildRecord } from './types';
 	import IdentityCard from './IdentityCard.svelte';
 	import GuildList from './GuildList.svelte';
@@ -33,7 +33,8 @@
 				hex: g.keyspaceId,
 				outer: g.profile === 'access-node' && g.outer ? ids.get(g.outer) ?? null : null,
 				roster: g.roster.map((member) => ({
-					role: member.admin ? 'admin' : 'member', actor: member.actor
+					role: member.admin ? 'admin' : 'member',
+					actor: member.actor ?? member.recipient ?? 'member'
 				})),
 				nodes: g.nodes.map((node) => ({
 					name: node.name ?? 'node', nodeId: node.nodeId, accessId: node.accessId ?? 'pending'
@@ -63,6 +64,20 @@
 		error = '';
 		try {
 			await guildRename(selected.hex, name);
+			await reload();
+		} catch (cause) {
+			error = String(cause);
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function onAdmit(recipient: string) {
+		if (!selected || loading || !NODE_ID.test(recipient)) return;
+		loading = true;
+		error = '';
+		try {
+			await guildAdmit(selected.hex, recipient);
 			await reload();
 		} catch (cause) {
 			error = String(cause);
@@ -106,7 +121,13 @@
 					onOpen={openGuild}
 					onOpenOuter={() => outer && (selectedId = outer.id)}
 				/>
-				<GuildEditors guildName={selected.name} {onLocalName} {onAssign} />
+				<GuildEditors
+					guildName={selected.name}
+					showAdmit={selected.profile === 'access-node'}
+					{onLocalName}
+					{onAssign}
+					{onAdmit}
+				/>
 			{/key}
 		{:else}
 			<div class="empty">No guild</div>

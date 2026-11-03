@@ -31,7 +31,11 @@ export interface GuildSnapshot {
 		keyspaceId: string;
 		outer: string | null;
 		you: 'admin' | 'member' | 'absent' | 'no-seed';
-		roster: Array<{ admin: boolean; actor: string }>;
+		roster: Array<{
+			admin: boolean;
+			actor: string | null;
+			recipient: string | null;
+		}>;
 		nodes: Array<{
 			name: string | null;
 			nodeId: string;
@@ -57,4 +61,8 @@ export async function guildAssign(
 	nodeId: string
 ): Promise<unknown> {
 	return invoke<unknown>('guild_assign', { keyspaceId, nodeName, nodeId });
+}
+
+export async function guildAdmit(keyspaceId: string, recipient: string): Promise<GuildReceipt> {
+	return invoke<GuildReceipt>('guild_admit', { keyspaceId, recipient });
 }

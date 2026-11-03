@@ -16,7 +16,7 @@ pub mod permit;
 use canvas::{close_canvas, list_canvases, open_canvas};
 use commands::claim::{claim_owner_key, claim_prove, claim_request};
 use commands::discovery::scan_link_local;
-use commands::guild::{sign_guild_op, guild_snapshot, guild_rename, guild_assign};
+use commands::guild::{guild_admit, guild_assign, guild_rename, guild_snapshot, sign_guild_op};
 use commands::network_name::apply_network_name;
 use stdout::fill_canvas_source;
 
@@ -58,6 +58,7 @@ pub fn run() {
             guild_snapshot,
             guild_rename,
             guild_assign,
+            guild_admit,
             claim_owner_key,
             claim_request,
             claim_prove,

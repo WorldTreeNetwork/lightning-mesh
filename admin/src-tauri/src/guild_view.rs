@@ -19,6 +19,14 @@ use crate::net::encode_base58;
 struct Member {
     admin: bool,
     actor: String,
+    /// X25519 encapsulation key, when this entry is a wrap-on-login member.
+    recipient: String,
+}
+
+#[derive(Clone, Debug)]
+struct WrapRec {
+    recipient: String,
+    epoch: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -27,6 +35,7 @@ struct Space {
     profile: String,
     outer: Option<String>,
     roster: Vec<Member>,
+    wraps: Vec<WrapRec>,
     nodes: Vec<String>,
     epoch: u64,
 }
@@ -103,8 +112,15 @@ pub fn inspect(config: &Path) -> Result<Value, String> {
             "epoch": space.epoch,
             "roster": space.roster.iter().map(|m| json!({
                 "admin": m.admin,
-                "actor": encode_base58(&parse_hex32(&m.actor).unwrap_or([0; 32])),
-                "actorHex": m.actor,
+                "actor": id_of(&m.actor),
+                "actorHex": hex_of(&m.actor),
+                "recipient": id_of(&m.recipient),
+                "recipientHex": hex_of(&m.recipient),
+            })).collect::<Vec<_>>(),
+            "wraps": space.wraps.iter().map(|w| json!({
+                "recipient": id_of(&w.recipient),
+                "recipientHex": w.recipient,
+                "epoch": w.epoch,
             })).collect::<Vec<_>>(),
             "nodes": nodes,
             "appAddress": display_app_address(space.outer.as_deref(), &space.id, you.as_deref()),
@@ -239,21 +255,36 @@ fn apply_op(spaces: &mut BTreeMap<String, Space>, hash: &str, op: &identikey_log
     let body = op_map(op)?;
     match op.kind.as_str() {
         "keyspace.join" => {
-            let id = text_or_bytes(&body, "keyspace").unwrap_or_else(|| hash.to_string());
-            let profile = text_field(&body, "profile").unwrap_or_else(|| "house".into());
-            let epoch = uint_field(&body, "epoch").unwrap_or(0);
-            let roster = roster(&body)?;
-            spaces.insert(
-                id.clone(),
-                Space {
-                    id,
-                    profile,
-                    outer: None,
-                    roster,
-                    nodes: Vec::new(),
-                    epoch,
-                },
-            );
+            let cited = text_or_bytes(&body, "keyspace").filter(|id| !id.is_empty());
+            if let Some(id) = cited {
+                let space = spaces.get_mut(&id).ok_or("join cites an unknown guild")?;
+                merge_members(&mut space.roster, roster(&body)?);
+                let incoming = wraps(&body)?;
+                if space.profile == "access-node" {
+                    merge_wraps(&mut space.wraps, incoming);
+                } else {
+                    space.wraps = incoming;
+                    if let Some(epoch) = uint_field(&body, "epoch") {
+                        space.epoch = epoch;
+                    }
+                }
+            } else {
+                let id = hash.to_string();
+                let profile = text_field(&body, "profile").unwrap_or_else(|| "house".into());
+                let epoch = uint_field(&body, "epoch").unwrap_or(0);
+                spaces.insert(
+                    id.clone(),
+                    Space {
+                        id,
+                        profile,
+                        outer: None,
+                        roster: roster(&body)?,
+                        wraps: wraps(&body)?,
+                        nodes: Vec::new(),
+                        epoch,
+                    },
+                );
+            }
         }
         "keyspace.assign-node" => {
             let id = text_or_bytes(&body, "keyspace").ok_or("assign-node missing keyspace")?;
@@ -277,6 +308,7 @@ fn apply_op(spaces: &mut BTreeMap<String, Space>, hash: &str, op: &identikey_log
                     profile,
                     outer: Some(outer),
                     roster,
+                    wraps: wraps(&body)?,
                     nodes: Vec::new(),
                     epoch: uint_field(&body, "epoch").unwrap_or(0),
                 },
@@ -327,9 +359,139 @@ fn roster(map: &Map) -> Result<Vec<Member>, String> {
             .and_then(|v| v.try_into_bool().ok())
             .unwrap_or(false);
         let actor = text_or_bytes(&m, "actor").unwrap_or_default();
-        out.push(Member { admin, actor });
+        let recipient = x25519_puk(&m).unwrap_or_default();
+        out.push(Member { admin, actor, recipient });
     }
     Ok(out)
+}
+
+fn x25519_puk(entry: &Map) -> Option<String> {
+    let v = entry.get::<&str, CBOR>("puks")?;
+    let CBORCase::Array(items) = v.into_case() else {
+        return None;
+    };
+    for item in items {
+        let CBORCase::Map(m) = item.into_case() else {
+            continue;
+        };
+        if text_field(&m, "alg").as_deref() != Some("x25519") {
+            continue;
+        }
+        if let Some(key) = text_or_bytes(&m, "key") {
+            return Some(key);
+        }
+    }
+    None
+}
+
+fn wraps(map: &Map) -> Result<Vec<WrapRec>, String> {
+    let Some(v) = map.get::<&str, CBOR>("wraps") else {
+        return Ok(Vec::new());
+    };
+    let CBORCase::Array(items) = v.into_case() else {
+        return Err("wraps is not an array".into());
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let CBORCase::Map(m) = item.into_case() else {
+            return Err("wrap entry is not a map".into());
+        };
+        let Some(recipient) = text_or_bytes(&m, "recipient") else {
+            continue;
+        };
+        if recipient.is_empty() {
+            continue;
+        }
+        out.push(WrapRec {
+            recipient,
+            epoch: uint_field(&m, "epoch").unwrap_or(0),
+        });
+    }
+    Ok(out)
+}
+
+fn merge_members(dst: &mut Vec<Member>, src: Vec<Member>) {
+    for entry in src {
+        if !entry.actor.is_empty() {
+            dst.retain(|have| have.actor != entry.actor);
+        } else if !entry.recipient.is_empty() {
+            dst.retain(|have| have.recipient != entry.recipient);
+        }
+        dst.push(entry);
+    }
+}
+
+fn merge_wraps(dst: &mut Vec<WrapRec>, src: Vec<WrapRec>) {
+    for entry in src {
+        dst.retain(|have| have.recipient != entry.recipient);
+        dst.push(entry);
+    }
+}
+
+fn id_of(hex: &str) -> Value {
+    match parse_hex32(hex) {
+        Ok(bytes) => json!(encode_base58(&bytes)),
+        Err(_) => Value::Null,
+    }
+}
+
+fn hex_of(hex: &str) -> Value {
+    if hex.is_empty() { Value::Null } else { json!(hex) }
+}
+
+/// Record a person's encapsulation key on an access guild.
+///
+/// The signed line is a `keyspace.join` at the guild's current epoch.
+/// A house guild is refused. The log gains no sealed secret.
+pub fn admit_access_member(
+    config: &Path,
+    keyspace_hex: &str,
+    recipient_hex: &str,
+) -> Result<crate::guild::GuildReceipt, String> {
+    let keyspace_hex = keyspace_hex.trim().to_ascii_lowercase();
+    let recipient_hex = recipient_hex.trim().to_ascii_lowercase();
+    parse_hex32(&keyspace_hex)?;
+    parse_hex32(&recipient_hex)?;
+    let view = inspect(config)?;
+    let actor_hex = view["actor"]["hex"].as_str().unwrap_or("");
+    if actor_hex.is_empty() {
+        return Err("this computer has no signing key".into());
+    }
+    if recipient_hex == actor_hex {
+        return Err("that key is this computer's signing key".into());
+    }
+    let guilds = view["guilds"].as_array().ok_or("no guilds")?;
+    let guild = guilds
+        .iter()
+        .find(|g| g["keyspaceId"].as_str() == Some(keyspace_hex.as_str()))
+        .ok_or("no guild with that id")?;
+    if guild["profile"] != "access-node" {
+        return Err("admit someone on the access guild, not the house".into());
+    }
+    let already = guild["wraps"].as_array().is_some_and(|wraps| {
+        wraps.iter().any(|wrap| wrap["recipientHex"].as_str() == Some(recipient_hex.as_str()))
+    }) || guild["roster"].as_array().is_some_and(|roster| {
+        roster.iter().any(|member| member["recipientHex"].as_str() == Some(recipient_hex.as_str()))
+    });
+    if already {
+        return Err("that key is already on this access guild".into());
+    }
+    let seed = fs::read_to_string(config.join("actor-seed")).map_err(|e| e.to_string())?;
+    let epoch = guild["epoch"].as_u64().unwrap_or(0);
+    let counter = view["ops"].as_array().map(|ops| ops.len() as u64).unwrap_or(0);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis() as u64;
+    crate::guild::sign_access_admit(
+        seed.trim(),
+        &keyspace_hex,
+        &recipient_hex,
+        epoch,
+        now_ms,
+        counter,
+        &config.join("guild-ops.log"),
+    )
 }
 
 fn text_or_bytes(map: &Map, key: &str) -> Option<String> {
@@ -516,6 +678,70 @@ mod tests {
             .find(|op| op["kind"] == "keyspace.admit-prefix")
             .unwrap();
         assert_eq!(admit["about"], "11".repeat(32));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn access_join_adds_a_person_and_keeps_the_guild() {
+        let dir = std::env::temp_dir().join(format!(
+            "lm-guild-access-admit-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        run_ceremony(
+            &dir,
+            &CeremonyRequest {
+                mode: CeremonyMode::Genesis,
+                workplace_name: "Strawberry Creek".into(),
+                workplace_id: String::new(),
+                node_name: "ap3000-outdoor-b".into(),
+                node_id: "a7a8841b13de5fbf20daec51318bad40dffc4425853edda6e9defc59af374037".into(),
+            },
+        )
+        .unwrap();
+        let before = inspect(&dir).unwrap();
+        let creek = before["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "Strawberry Creek")
+            .unwrap();
+        let access_hex = creek["nodes"][0]["accessNodeKeyspaceId"].as_str().unwrap().to_string();
+        let creek_hex = creek["keyspaceId"].as_str().unwrap().to_string();
+        let recipient = "22".repeat(32);
+        let house = admit_access_member(&dir, &creek_hex, &recipient).unwrap_err();
+        assert!(house.contains("access guild"));
+        admit_access_member(&dir, &access_hex, &recipient).unwrap();
+        let again = admit_access_member(&dir, &access_hex, &recipient).unwrap_err();
+        assert!(again.contains("already"));
+        let view = inspect(&dir).unwrap();
+        let access = view["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["keyspaceId"] == access_hex)
+            .unwrap();
+        assert_eq!(access["profile"], "access-node");
+        assert_eq!(access["epoch"], 0);
+        assert_eq!(access["outer"], creek_hex);
+        assert_eq!(access["roster"].as_array().unwrap().len(), 2);
+        let guest = access["roster"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["recipientHex"] == recipient)
+            .unwrap();
+        assert_eq!(guest["admin"], false);
+        assert!(guest["actor"].is_null());
+        assert_eq!(access["wraps"][0]["recipientHex"], recipient);
+        assert_eq!(access["wraps"][0]["epoch"], 0);
+        let creek_after = view["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["keyspaceId"] == creek_hex)
+            .unwrap();
+        assert_eq!(creek_after["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(creek_after["roster"].as_array().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
