@@ -5,8 +5,10 @@ Winbox / UniFi Network: sit on a LAN, discover the boxes, then administer
 them. Built like [Papyrus](https://github.com/): Tauri 2 wrapping a SvelteKit
 static SPA (`adapter-static` + `ssr = false`).
 
-The window is discovery, the fleet **network name**, and **guild**
-membership. Unique Local
+The window keeps three jobs apart. **Backhaul** is the radio mesh: the
+client network name lives there, and a phone keeps its address anywhere
+on that mesh. **Guild** is ownership of routers and who may be admitted.
+**Nearby** is what this computer can see on the wire. Unique Local
 (`fc00::/7`) and link-local (`fe80::`) IPv6 on every local interface, plus
 neighbors from the kernel table and an ICMPv6 echo to `ff02::1` (all-nodes)
 scoped per interface. The **Network name** control sets the client AP SSID
