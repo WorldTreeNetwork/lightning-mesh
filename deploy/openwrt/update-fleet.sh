@@ -20,11 +20,10 @@
 #   fleet-nodes.conf, or LIGHTNING_FLEET / LIGHTNING_FLEET_FILE. Leaf-first,
 #   wired jump node last. Lines with no node id are recorded hardware, not
 #   rollout targets.
-# - Reaching 10.254.x from the workstation needs the jump-host ssh config from
-#   the README ("Fleet rollout" section); unreachable nodes are skipped and
-#   reported, not fatal — power-cycled/absent nodes are normal.
-# - After each apply, rewrites `list peer` from this inventory and restarts
-#   mjolnir-meshd so the running process has that list.
+# - Dial the address fleet-scan.sh recorded for that node id, otherwise the
+#   file's ssh_addr column. Unreachable nodes are skipped and reported.
+# - After each apply, rewrites `list peer` to the other members of the same
+#   group and restarts mjolnir-meshd. A bench line is not a house peer.
 set -euo pipefail
 
 # install-node.sh writes the inventory peers and, on a direct run, starts
@@ -58,7 +57,7 @@ want() {
 UPDATED=() SKIPPED=() PENDING=()
 # Read the inventory on FD 3 — the ssh/scp calls inside the loop would
 # otherwise eat the remaining lines from stdin and end the rollout early.
-while IFS='|' read -r -u3 name addr node_id model notes; do
+while IFS='|' read -r -u3 name addr node_id model notes _group; do
 	case "$(fleet_kind "$name" "$addr" "$node_id")" in
 		skip) continue ;;
 		pending)
@@ -70,15 +69,19 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 	esac
 	want "$name" || continue
 
+	dial="$(fleet_dial_addr "$node_id" "$addr")"
 	echo
-	echo "===== $name ($model) — root@$addr ====="
-	if ! ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$addr" true 2>/dev/null; then
+	echo "===== $name ($model) — root@$dial ====="
+	if [ "$dial" != "$addr" ]; then
+		echo ">> scan address $dial (inventory fallback $addr)"
+	fi
+	if ! ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$dial" true 2>/dev/null; then
 		echo ">> UNREACHABLE — skipping ($notes)"
 		SKIPPED+=("$name")
 		continue
 	fi
 
-	if ! "$DIR/install-node.sh" "${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}" "root@$addr"; then
+	if ! "$DIR/install-node.sh" "${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}" "root@$dial"; then
 		# install-node couldn't READ the result in time — but the applier writes
 		# it even on rollback, and a bouncing transit path (ProxyJump through a
 		# wifi-reloading node) can outlast the read window on a node that actually
@@ -86,7 +89,7 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 		# final direct read once the node has had a moment to settle: if it says
 		# OK, the apply stuck — continue instead of stranding downstream nodes.
 		sleep 15
-		final=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "root@$addr" \
+		final=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "root@$dial" \
 			"cat /root/mjolnir-stage/result 2>/dev/null" 2>/dev/null || true)
 		case "$final" in
 			OK*)
@@ -97,7 +100,7 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 				echo
 				echo ">> ROLLOUT HALTED at $name — result='${final:-<unreadable>}'. If unreadable,"
 				echo ">> the node may just be slow to rejoin; verify directly before assuming failure:"
-				echo ">>   ssh root@$addr 'cat /root/mjolnir-stage/result; tail -40 /root/mjolnir-stage/apply.log'"
+				echo ">>   ssh root@$dial 'cat /root/mjolnir-stage/result; tail -40 /root/mjolnir-stage/apply.log'"
 				echo ">> Already updated this run: ${UPDATED[*]:-none}. Re-running is safe (idempotent)."
 				exit 1
 				;;
@@ -105,14 +108,14 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 	fi
 
 	if [ "$STAGE_ONLY" = 0 ]; then
-		echo ">> $name: rendering full inventory peer set and starting meshd"
-		fleet_render_peers "$CONF" "$node_id" "root@$addr"
-		ssh -o BatchMode=yes -o ConnectTimeout=8 "root@$addr" \
+		echo ">> $name: rendering this group's peer set and starting meshd"
+		fleet_render_peers "$CONF" "$node_id" "root@$dial"
+		ssh -o BatchMode=yes -o ConnectTimeout=8 "root@$dial" \
 			'/etc/init.d/mjolnir-meshd enable; /etc/init.d/mjolnir-meshd restart'
 	fi
 
 	# Post-check beyond the node's own health gate: it still routes the mesh.
-	routes=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$addr" \
+	routes=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$dial" \
 		"ip -4 route | grep -c 'via 10\.254' || true" 2>/dev/null || echo 0)
 	echo ">> $name: OK (babel routes to $routes neighbour(s))"
 	UPDATED+=("$name")

@@ -22,7 +22,7 @@ source "$DIR/fleet-file.sh"
 CONF="$(fleet_conf "$DIR")"
 
 FLEET=0 FAIL=0
-while IFS='|' read -r -u3 name addr node_id model notes; do
+while IFS='|' read -r -u3 name addr node_id model notes _group; do
 	case "$(fleet_kind "$name" "$addr" "$node_id")" in
 		skip) continue ;;
 		pending)
@@ -31,8 +31,9 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 			;;
 	esac
 	FLEET=$((FLEET + 1))
-	echo "===== $name (expect $addr)"
-	out=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$addr" '
+	dial="$(fleet_dial_addr "$node_id" "$addr")"
+	echo "===== $name (dial $dial, inventory $addr)"
+	out=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$dial" '
 		service mjolnir-meshd diag 2>/dev/null | grep -E "build:|node id:|backhaul:" | head -3
 		L=$(logread 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g")
 		echo "peer /32 claims seen: $(echo "$L" | grep "received peer subnet claim" | grep -o "cidr=10\.254\.[0-9.]*/32" | sort -u | wc -l | tr -d " ")"

@@ -39,7 +39,7 @@ want() {
 SEEDED=() SKIPPED=() PENDING=()
 # Read the inventory on FD 3 — the ssh calls inside the loop would otherwise
 # eat the remaining lines from stdin and end the walk early.
-while IFS='|' read -r -u3 name addr node_id model notes; do
+while IFS='|' read -r -u3 name addr node_id model notes _group; do
 	case "$(fleet_kind "$name" "$addr" "$node_id")" in
 		skip) continue ;;
 		pending)
@@ -51,9 +51,10 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 	esac
 	want "$name" || continue
 
+	dial="$(fleet_dial_addr "$node_id" "$addr")"
 	echo
-	echo "===== $name ($model) — root@$addr ====="
-	if ! ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$addr" true 2>/dev/null; then
+	echo "===== $name ($model) — root@$dial ====="
+	if ! ssh -o BatchMode=yes -o ConnectTimeout=6 "root@$dial" true 2>/dev/null; then
 		echo ">> UNREACHABLE — skipping ($notes)"
 		SKIPPED+=("$name")
 		continue
@@ -61,7 +62,7 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 
 	# Set the name and restart meshd. Single-quote the value on the remote so a
 	# name with shell-special chars is set literally; names are simple handles.
-	if ssh -o BatchMode=yes "root@$addr" \
+	if ssh -o BatchMode=yes "root@$dial" \
 		"uci set mjolnir.meshd.name='$name' && uci commit mjolnir && /etc/init.d/mjolnir-meshd restart"; then
 		echo ">> seeded name '$name'"
 		SEEDED+=("$name")

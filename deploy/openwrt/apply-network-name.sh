@@ -45,7 +45,7 @@ if [ "${#HOSTS[@]}" -eq 0 ]; then
 	CONF="$(fleet_conf "$DIR")"
 	while IFS='|' read -r name addr node_id _rest; do
 		case "$(fleet_kind "$name" "$addr" "$node_id")" in
-			member) HOSTS+=("root@$addr") ;;
+			member) HOSTS+=("root@$(fleet_dial_addr "$node_id" "$addr")") ;;
 			pending) echo ">> $name: recorded, no node id yet — not applied" >&2 ;;
 		esac
 	done <"$CONF"

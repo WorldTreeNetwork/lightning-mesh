@@ -169,11 +169,16 @@ stock `babeld` service so the two don't both run. Note babeld 1.13 exits on
 
 ## Fleet rollout
 
-The current installation is `fleet-nodes.conf` (name → derived `10.254.x` →
-node id → model; leaf-first order, wired jump node last). Another
+The current installation is `fleet-nodes.conf` (name, fallback SSH address,
+node id, model, notes, group; leaf-first order, wired jump node last).
+Peers are the other members of the same group (`house` or `bench`). Another
 installation is a separate file: `LIGHTNING_FLEET_FILE=/path/to.conf`, or
 `LIGHTNING_FLEET=<name>` for gitignored `fleet.d/<name>.conf` (template
 `fleet.d/installation.conf.example`). `deploy/openwrt/fleet-file.sh` resolves that.
+`deploy/openwrt/fleet-scan.sh` asks neighbors and the fallback addresses for
+`GET /api/node` and writes `~/.config/lightning-admin/fleet-reach.json`.
+Rollout dials that address when the node id is there. The scan does not edit
+the working file, and it is not the guild list.
 Lines written `name|-|-|model|notes` are hardware in the installation that
 has no node id yet; rollout tools skip them. Roll an update to every
 reachable member, one at a time, with:

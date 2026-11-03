@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # Which installation a fleet tool walks.
 #
-# One file is one installation: the nodes updated, flashed, and upgraded
-# together, and one gossip peer set. A second
-# household is another file, not more lines in this one.
+# One file is one working set: the nodes you update together, in rollout
+# order. A second installation is another file, not more lines in this one.
+# Guild membership (who may administer a place) lives in the local guild
+# log, not here. Who answers SSH right now lives in the reachability JSON
+# written by fleet-scan.sh, not here.
 #
 #   LIGHTNING_FLEET_FILE=/path/to.conf    explicit file
 #   LIGHTNING_FLEET=name                  deploy/openwrt/fleet.d/name.conf
 #   (unset)                               deploy/openwrt/fleet-nodes.conf
+#   LIGHTNING_FLEET_REACH=/path/to.json   scan result (default below)
 #
-# Columns: name|backhaul_addr|node_id|model|notes
-# A member has a name, backhaul address, and 64-hex node id.
-# `name|-|-|model|notes` records hardware in this installation that has no
-# node id yet. Rollout tools skip those lines.
+# Columns: name|ssh_addr|node_id|model|notes|group
+# A member has a name, an SSH address, and a 64-hex node id.
+# `name|-|-|model|notes` records hardware with no node id yet. Rollout skips it.
+# `group` defaults to `house` when the column is empty. Gossip peers are the
+# other members of the same group. `bench` is a cabled unit, not a house peer.
+# ssh_addr is the fallback dial address. fleet_dial_addr prefers the scan.
 #
 # Source this file. `fleet_conf <deploy/openwrt dir>` prints the path.
 # `fleet_kind <name> <addr> <node_id>` prints member, pending, or skip.
-# `fleet_peer_ids <conf> <self_id>` prints the other members' ids.
+# `fleet_peer_ids <conf> <self_id>` prints the other members of that group.
 # `fleet_render_peers <conf> <self_id> <ssh_host>` replaces the UCI peer list.
 # `fleet_print_references <conf> <house-guild-id file>` prints the operator view.
 # Or run: bash deploy/openwrt/fleet-file.sh --reference <house-guild-id file>
@@ -76,15 +81,87 @@ fleet_kind() {
 	printf 'member\n'
 }
 
-fleet_peer_ids() {
+# Sixth column. Empty means house, so a five-column line still peers with house.
+fleet_group_name() {
+	local group="$1"
+	case "$group" in
+		''|house) printf 'house\n' ;;
+		*[!A-Za-z0-9._-]*) printf 'house\n' ;;
+		*) printf '%s\n' "$group" ;;
+	esac
+}
+
+# Group of one member id. Empty (and status 1) when that id is not a member.
+fleet_member_group() {
 	local conf="$1" self_id="$2"
-	local name addr node_id model notes
+	local name addr node_id _model _notes group
 	self_id="$(printf '%s' "$self_id" | tr 'A-F' 'a-f')"
-	while IFS='|' read -r name addr node_id model notes || [ -n "$name" ]; do
+	while IFS='|' read -r name addr node_id _model _notes group || [ -n "$name" ]; do
 		[ "$(fleet_kind "$name" "$addr" "$node_id")" = member ] || continue
+		node_id="$(printf '%s' "$node_id" | tr 'A-F' 'a-f')"
+		if [ "$node_id" = "$self_id" ]; then
+			fleet_group_name "$group"
+			return 0
+		fi
+	done <"$conf"
+	return 1
+}
+
+fleet_peer_ids() {
+	local conf="$1" self_id="$2" want
+	local name addr node_id _model _notes group
+	want="$(fleet_member_group "$conf" "$self_id")" || return 0
+	self_id="$(printf '%s' "$self_id" | tr 'A-F' 'a-f')"
+	while IFS='|' read -r name addr node_id _model _notes group || [ -n "$name" ]; do
+		[ "$(fleet_kind "$name" "$addr" "$node_id")" = member ] || continue
+		[ "$(fleet_group_name "$group")" = "$want" ] || continue
 		node_id="$(printf '%s' "$node_id" | tr 'A-F' 'a-f')"
 		[ "$node_id" = "$self_id" ] || printf '%s\n' "$node_id"
 	done <"$conf"
+}
+
+# Scan file from fleet-scan.sh. Not the working set and not a guild.
+fleet_reach_file() {
+	if [ -n "${LIGHTNING_FLEET_REACH:-}" ]; then
+		printf '%s\n' "$LIGHTNING_FLEET_REACH"
+		return 0
+	fi
+	printf '%s\n' "${HOME}/.config/lightning-admin/fleet-reach.json"
+}
+
+# Print the address a scan recorded for this node id. Status 1 when absent.
+fleet_reach_addr() {
+	local node_id="$1" file
+	file="$(fleet_reach_file)"
+	[ -f "$file" ] || return 1
+	python3 - "$file" "$node_id" <<'PY'
+import json, sys
+path, nid = sys.argv[1], sys.argv[2].lower()
+try:
+    data = json.load(open(path))
+except (OSError, ValueError):
+    sys.exit(1)
+for key, row in (data.get("nodes") or {}).items():
+    if str(key).lower() != nid:
+        continue
+    ssh = str((row or {}).get("ssh") or "").strip()
+    if ssh.startswith("root@"):
+        ssh = ssh[5:]
+    if ssh:
+        print(ssh)
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# Address rollout tools dial. The scan wins when it has this node id.
+fleet_dial_addr() {
+	local node_id="$1" fallback="$2" got
+	if got="$(fleet_reach_addr "$node_id" 2>/dev/null)"; then
+		printf '%s\n' "$got"
+	else
+		printf '%s\n' "$fallback"
+	fi
 }
 
 fleet_peer_script() {
@@ -185,11 +262,7 @@ pending|-|-|model|ethernet $mac
 EOF
 	peers="$(fleet_peer_ids "$tmp" "$id_b")"
 	[ "$peers" = "$(printf '%s\n' "$id_a" "$id_c")" ]
-	[ "$(fleet_peer_ids "$tmp" "$(printf '%064d' 4)")" = "$(printf '%s\n' "$id_a" "$id_b" "$id_c")" ]
-	[ "$(fleet_kind pending - "$id_a")" = pending ]
-	[ "$(fleet_kind pending 10.254.1.4 -)" = pending ]
-	[ "$(fleet_kind bad 10.254.1.4 "$mac")" = skip ]
-	[ "$(fleet_kind bad 10.254.1.4 "${id_a}0")" = skip ]
+	[ -z "$(fleet_peer_ids "$tmp" "$(printf '%064d' 4)")" ]
 	script="$(fleet_peer_script "$tmp" "$id_b")"
 	[ "$script" = "$(printf '%s\n' 'set -e' 'uci -q delete mjolnir.meshd.peer || true';
 		printf "uci add_list mjolnir.meshd.peer='%s'\n" "$id_a" "$id_c";
@@ -197,6 +270,20 @@ EOF
 	case "$peers$script" in
 		*"$mac"*|*pending*) echo 'non-peer data emitted' >&2; exit 1 ;;
 	esac
+	id_d="$(printf '%064d' 5)"
+	cat >"$tmp" <<EOF
+a|10.254.1.1|$id_a|model|note|house
+b|10.254.1.2|$id_b|model|note|house
+d|192.168.1.1|$id_d|model|cabled|bench
+EOF
+	[ "$(fleet_member_group "$tmp" "$id_d")" = bench ]
+	[ "$(fleet_peer_ids "$tmp" "$id_b")" = "$id_a" ]
+	[ -z "$(fleet_peer_ids "$tmp" "$id_d")" ]
+	[ "$(fleet_peer_ids "$tmp" "$id_a")" = "$id_b" ]
+	[ "$(fleet_kind pending - "$id_a")" = pending ]
+	[ "$(fleet_kind pending 10.254.1.4 -)" = pending ]
+	[ "$(fleet_kind bad 10.254.1.4 "$mac")" = skip ]
+	[ "$(fleet_kind bad 10.254.1.4 "${id_a}0")" = skip ]
 	unset LIGHTNING_FLEET_FILE
 	if LIGHTNING_FLEET='../fleet-nodes' fleet_conf "$DIR" >/dev/null 2>&1; then
 		echo "path escape was accepted" >&2

@@ -394,7 +394,8 @@ case "$RES" in
 		fi
 		cat <<EOF
 >> done on $HOST.
-   Peers are the other members of $CONF. The daemon is started with that list.
+   Peers are the other members of this node's group in $CONF.
+   The daemon is started with that list.
    This node's id: ${node_id:-<not read>}
    If that id is not a member line in the inventory yet, add it and run
    update-fleet.sh so the routers already in the file learn it.
