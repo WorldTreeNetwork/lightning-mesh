@@ -44,7 +44,7 @@ passage are possible policies; no commercial terms or wire protocol are chosen.
 - Bootstrap access to discover offers and reach settlement before paying, with
   bounds preventing that access from becoming unrestricted free transit.
 - Trust boundaries: current setup places mesh in the LAN firewall zone and uses
-  an 802.11s forwarding island. It is not a safe public-transit admission system
+  an 802.11s forwarding domain. It is not a safe public-transit admission system
   merely because capabilities are added to an application API.
 - Protection from untrusted routing advertisements and management requests;
   payload encryption above an open radio; abuse limits and hardware budgets.

@@ -29,7 +29,7 @@ Babel:
 - Supports IPv4-only, IPv6-only, and dual-stack carriage.
 - Has explicit support for non-multicast interfaces (point-to-point tunnels) via `neighbour` directives.
 
-Babel routes **everywhere**: between per-node client /24s on the same 802.11s island
+Babel routes **everywhere**: between per-node client /24s on the same 802.11s backhaul
 (directly over the L2 backhaul, where it routes most efficiently) and across sites over
 the iroh overlay. The original "cross-site only" framing assumed a shared-L2 Mode 1
 that was never shipped — see `network-architecture.md`.
@@ -140,7 +140,7 @@ The daemon **reads** `/subnets/{cidr}` for *its own* claim and writes the matchi
 ## 6. Cross-Site Packet Flow (Revised)
 
 > **Superseded detail:** the per-peer `mj-peer-*` interfaces in this walk-through are
-> now the single `mjolnir0` overlay TUN (§4); same-island traffic never enters a TUN —
+> now the single `mjolnir0` overlay TUN (§4); on this backhaul traffic never enters a TUN —
 > it is babel-routed straight over `br-mesh`. The step-3 point (kernel routing table,
 > not a CRDT) is unchanged and is the part that matters.
 

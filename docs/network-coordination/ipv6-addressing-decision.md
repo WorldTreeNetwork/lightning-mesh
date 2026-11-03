@@ -18,7 +18,7 @@ the service identity layer — so the case for IPv6 collapses to interop, and
 interop alone does not pay for the risk.
 
 Revisit triggers (either reopens this decision):
-- A **single giant physically-connected 802.11s island** approaching the limits of
+- A **single giant physically-connected 802.11s backhaul** approaching the limits of
   claimed IPv4 space (hundreds of co-located nodes / >65k devices in one fabric).
 - A hard **interoperability requirement** with IPv6-first mesh ecosystems
   (LibreMesh et al) where translation at the border is insufficient.

@@ -178,17 +178,19 @@ pub fn parse_host_route_dests(output: &str) -> Vec<Ipv4Addr> {
     out
 }
 
-// --- island formation (read-only, mjolnir-mesh-77f / 190 / 3kd) -----------
+// --- broadcast-scope partition (read-only, mjolnir-mesh-77f) ----------------
+// Not a roam group. Fast roam is the mobility `/32` above, across the whole
+// backhaul. This partition only describes where a broadcast would stay if
+// something later scoped one. Nothing calls it from the daemon.
 
 /// Knobs for [`islands`].
 #[derive(Debug, Clone, Copy)]
 pub struct IslandConfig {
-    /// Below this many nodes the mesh is *always* one island. A household fleet
-    /// never splits: splitting answers a broadcast/coordination cost that
-    /// simply is not there at single-digit node counts, and a wrong split costs
-    /// more than no split.
+    /// Below this many nodes the mesh stays one partition. A household fleet
+    /// never splits: splitting answers a broadcast cost that is not there at
+    /// single-digit node counts, and a wrong split costs more than no split.
     pub min_split_nodes: usize,
-    /// Backhaul links at or above this RSSI (dBm) hold an island together.
+    /// Backhaul links at or above this RSSI (dBm) hold a partition together.
     /// Anything weaker is a candidate cut.
     pub weak_link_dbm: i32,
 }
@@ -202,22 +204,18 @@ impl Default for IslandConfig {
     }
 }
 
-/// Partition nodes into islands: connected components over the backhaul links
-/// strong enough to hold, once the mesh is big enough to be worth splitting.
+/// Partition nodes into broadcast scopes: connected components over the
+/// backhaul links strong enough to hold, once the mesh is big enough to be
+/// worth splitting.
 ///
 /// `links` are undirected `(a, b, signal_dbm)` backhaul edges. Nodes with no
-/// surviving strong link fall out as singleton islands. Output is sorted both
-/// within and across islands, so every node computing it from the same inputs
-/// gets byte-identical results — the prerequisite for ever acting on this
-/// without an election.
+/// surviving strong link fall out as singletons. Output is sorted both within
+/// and across components, so every node computing it from the same inputs gets
+/// byte-identical results.
 ///
-/// **Read-only today.** Since roaming is solved at L3 by the mobility `/32`s
-/// above, an island is no longer "the set of nodes sharing a subnet" but *the
-/// scope broadcast and ARP propagate across* — a much safer thing to get wrong
-/// (a mis-drawn broadcast boundary degrades discovery; a mis-drawn subnet
-/// boundary renumbers someone's phone). Acting on it still needs the per-link
-/// signal view gossiped into the CRDT so members agree on the partition. See
-/// `docs/network-coordination/island-formation.md` and bead `77f`.
+/// **Read-only.** Roaming does not use this. A phone keeps its address via the
+/// mobility `/32`s above, on the whole backhaul. The old shared-subnet design
+/// is retired; see the banner in `docs/network-coordination/island-formation.md`.
 pub fn islands(
     nodes: &[String],
     links: &[(String, String, i32)],
@@ -270,8 +268,9 @@ pub fn islands(
     out
 }
 
-/// Island-member addresses sit in `.2`..=`.99`. DHCP for phones starts at
-/// `.100` (OpenWrt `dhcp.lan.start`). The claim owner is always `.1`.
+/// Host addresses for the retired shared-subnet sketch sit in `.2`..=`.99`.
+/// DHCP for phones starts at `.100` (OpenWrt `dhcp.lan.start`). The claim
+/// owner is always `.1`.
 pub const ISLAND_HOST_MIN: u32 = 2;
 pub const ISLAND_HOST_MAX: u32 = 99;
 
@@ -284,12 +283,12 @@ pub struct IslandClaim<'a> {
     pub claimed_at: u64,
 }
 
-/// How this node should sit on a household client island.
+/// Retired shared-subnet placement. **Not the live DHCP path.**
 ///
-/// Same function on every node — no `ROLE=core`. **Not the live DHCP path.**
-/// Live roam DHCP is LWW [`crate::crdt::lease::LeaseEntry`] (wvg.4): every
-/// node still runs dnsmasq. `run_dhcp` on the oldest claim is an election;
-/// do not wire it. `stitch_l2` is the later shared-L2 option, also unwired.
+/// Live roam keeps each node's own `/24` and follows a phone with a mobility
+/// `/32`. This type is the old "one `/24` for the room" sketch: every node
+/// still runs meshd, `run_dhcp` on the oldest claim is an election, and
+/// `stitch_l2` would bridge client L2. Do not wire either.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IslandJoin {
     pub subnet: Ipv4Net,
@@ -299,7 +298,7 @@ pub struct IslandJoin {
     pub stitch_l2: bool,
 }
 
-/// Pick the island `/24` (oldest client claim) and this node's address on it.
+/// Pick the oldest client `/24` and this node's address on it. Retired.
 ///
 /// Empty input → `None` (caller claims a unique `/24` as today). One claim
 /// we own, no peers → stay the unique-`/24` node, do not stitch. Two or more
@@ -354,7 +353,7 @@ mod island_tests {
     #[test]
     fn small_fleet_is_always_one_island_even_with_a_weak_link() {
         // The household case: four nodes, one barely reachable. Still one
-        // island — splitting buys nothing at this size.
+        // partition — splitting buys nothing at this size.
         let nodes = ids(4);
         let links = vec![
             (nodes[0].clone(), nodes[1].clone(), -40),
@@ -409,7 +408,7 @@ mod island_tests {
 
     #[test]
     fn island_output_is_deterministic_regardless_of_input_order() {
-        // Every node must compute byte-identical islands from the same facts —
+        // Every node must compute byte-identical partitions from the same facts —
         // the precondition for ever acting on this without an election.
         let nodes = ids(10);
         let links: Vec<(String, String, i32)> = nodes
@@ -443,7 +442,7 @@ mod island_tests {
         let got = join_island("wr3000s-a", &claims).unwrap();
         assert_eq!(got.local_addr, "10.42.242.1".parse::<Ipv4Addr>().unwrap());
         assert!(got.run_dhcp);
-        assert!(!got.stitch_l2, "a single node is not an island yet");
+        assert!(!got.stitch_l2, "a single node does not stitch client L2");
     }
 
     #[test]

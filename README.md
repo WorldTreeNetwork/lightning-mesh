@@ -162,7 +162,7 @@ applied detached with health-gated auto-rollback, no ethernet required
 (see [node operations](docs/deploy/node-operations.md)).
 
 A key lesson from deployment: a local mesh routes most efficiently over
-its own L2 island; the iroh L3 overlay earns its keep on internet hops
+its own backhaul; the iroh L3 overlay earns its keep on internet hops
 and as a first-hop security gateway, not as the local fast path.
 
 Built since (September 2026): the `hello.mesh` front desk and directory, a

@@ -19,7 +19,7 @@ These boxes mirror what this change owes once activated.
 Not owed here (bullets, not boxes):
 
 - `9u5y` local-EVM transit
-- `3kd` / `190` client-L2 islands
+- `3kd` / `190` shared client L2 (retired; not this change)
 - `rp9` user IdentiKey
 - Fold (after act lands)
 - Flipping live fleet `MESH_KEY`

@@ -30,7 +30,7 @@ following are proposed supported profiles subject to port/driver qualification.
 | Existing router + wired house | Ethernet WAN on one node | Dedicated Ethernet backhaul | 2.4 + 5 GHz on wired nodes | Preferred capacity; needs safe port separation |
 | Existing Wi-Fi + wired house | 5 GHz station on best placed node | Ethernet to switch and peers | Ingress: 2.4 GHz; other wired nodes: both | One Wi-Fi hop limits internet; local wired traffic avoids it |
 | Ethernet gateway + wireless satellites | Ethernet WAN | 5 GHz mesh | 2.4 GHz on mesh nodes | Matches current radio split; satellites consume shared airtime |
-| Wi-Fi ingress + fully wireless distribution | 5 GHz station, 2.4 GHz mesh on ingress | Compatible 2.4 GHz mesh across island | Ingress: none; satellites: 5 GHz | No 2.4 GHz client service on that island; throughput bottleneck |
+| Wi-Fi ingress + fully wireless distribution | 5 GHz station, 2.4 GHz mesh on ingress | Compatible 2.4 GHz mesh across the backhaul | Ingress: none; satellites: 5 GHz | No 2.4 GHz client service on that backhaul; throughput bottleneck |
 | Inverse fully wireless profile | 2.4 GHz station, 5 GHz mesh on ingress | 5 GHz mesh | Ingress: none; satellites: 2.4 GHz | Faster inter-node links possible, slower shared upstream |
 | Partial Ethernet | Ethernet or Wi-Fi ingress | Wired core + wireless branches | Wired-only nodes: both; branch anchors: spare band | Keep mesh on every anchor needed by a wireless branch |
 | Dedicated upstream receiver | Wi-Fi station on a separate box | Receiver Ethernet → gateway WAN, then mesh/wires | Main fleet keeps chosen profile | Useful staging topology; may add another NAT boundary |
@@ -117,7 +117,7 @@ candidate discovery; authorize exactly which candidates may test them.
 
 - Automatic: use an already-authorized healthy gateway; prefer a validated wired
   path; recover an existing link; retain local service through an internet outage.
-- Propose first: remove a client band, remove a relay, change a mesh island's
+- Propose first: remove a client band, remove a relay, change a mesh's
   channel, move upstream credentials to a new node, alter trust/segmentation,
   incur metered usage, or scan disruptively without prior policy authorization.
 - Never: claim an unknown node, join arbitrary open upstream Wi-Fi, infer internet
@@ -141,7 +141,7 @@ Releasing a mesh radio for clients removes immediate wireless fallback. Offer:
 Do not promise instantaneous self-healing on dual-band hardware. A fallback
 requiring other nodes to change channels or roles is a fleet plan with pre-staged
 recovery, not a local toggle. Wired+wireless simultaneous paths need tested loop
-prevention; the current 802.11s forwarding island makes naive bridging unsafe.
+prevention; the current 802.11s forwarding domain makes naive bridging unsafe.
 
 ### Internet health
 

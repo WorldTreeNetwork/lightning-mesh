@@ -3,7 +3,7 @@
 **Status:** Vision / public-facing | **Date:** 2026-07-02
 
 Lightning Mesh's core design decision is one sentence: **heterogeneous link
-islands stitched together by L3 routing.** This document states what falls out of
+networks stitched together by L3 routing.** This document states what falls out of
 that decision — not the mechanics (see
 [network-architecture](../network-coordination/network-architecture.md)) but the
 outcomes: what kind of network, and what kind of ownership, the architecture
@@ -28,7 +28,7 @@ magnitude, and it outlived every physical technology it launched on.
 Most mesh systems of the last twenty years bet the other way — make many radios
 look like one Ethernet — and the ones that grew large enough (Freifunk on
 batman-adv, most visibly) hit the flat-L2 broadcast wall and converged, under
-duress, on link islands stitched by L3. Guifi.net and NYC Mesh run BGP between
+duress, on local networks stitched by L3. Guifi.net and NYC Mesh run BGP between
 heterogeneous zones for the same reason. Lightning Mesh starts where the
 survivors arrived.
 
@@ -93,13 +93,13 @@ network *is*.
 ## 5. The network is a projection of a set of keys
 
 Every node's mesh address is derived from its cryptographic identity. cjdns and
-Yggdrasil pioneered this move and deserve the credit; they dissolved link
-islands entirely and paid in routing stretch and lost local L2 semantics.
+Yggdrasil pioneered this move and deserve the credit; they dissolved local
+link domains entirely and paid in routing stretch and lost local L2 semantics.
 Lightning Mesh keeps their deepest idea — addresses are identities — and marries
-it to the catenet: real islands, locally fast, stitched by ordinary routing.
+it to the catenet: real local networks, locally fast, stitched by ordinary routing.
 
 **The network becomes a projection of a set of keys.** The physical substrate —
-which island, which radio, which continent — is routing detail. As it should be.
+which link, which radio, which continent — is routing detail. As it should be.
 
 **Outcomes:**
 
@@ -141,8 +141,8 @@ packets to the nearest node. IPv4's scarcity stops mattering when nothing
 scarce is being asked of it.
 
 The deeper pattern: the narrow waist moved up. Cerf and Kahn unified
-heterogeneous links under IP; we unify heterogeneous *networks* — islands,
-sites, NATed households, cloud VMs — under cryptographic identity, and IP
+heterogeneous links under IP; we unify heterogeneous *networks* — radio
+meshes, sites, NATed households, cloud VMs — under cryptographic identity, and IP
 itself becomes one more link technology below the waist. What IPv6 tried to
 achieve by widening the number, the identity layer achieves by replacing the
 number with a key.
@@ -150,7 +150,7 @@ number with a key.
 **Outcome:** the mesh gets IPv6's endgame — every service stably addressable,
 no scarcity, no NAT authority — without the migration, the dual-stack tax, or
 the dependence on an allocation hierarchy. And it composes: if a giant
-physical island someday genuinely exhausts IPv4 space, IPv6 can still be
+physical mesh someday genuinely exhausts IPv4 space, IPv6 can still be
 adopted *as plumbing*, because nothing above it would need to change.
 
 ## 7. Reachability is not a subscription

@@ -3,7 +3,7 @@
 //! At boot and on every zero-neighbor rejoin, the daemon must pick a set of
 //! node ids to `join_peers` against. Sprint-0yb used ONLY the static
 //! roster/UCI peers, so a node whose configured peers are all down stayed a
-//! gossip island even when other live, dialable nodes were known — the
+//! gossip partition even when other live, dialable nodes were known — the
 //! addressing for those peers is already resolved (the daemon's `MemoryLookup`
 //! is seeded from the address book, claims, and derivation), so the only thing
 //! missing was *choosing to dial them*.
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn union_includes_addrbook_and_claim_owners_beyond_roster() {
-        // The island bug: roster peer "r" is down, but "ab" (addrbook) and "co"
+        // The partition bug: roster peer "r" is down, but "ab" (addrbook) and "co"
         // (claim owner) are live and dialable — the union must surface them.
         let got = rank_bootstrap_candidates(
             &s(&["r"]),

@@ -94,7 +94,7 @@ that address answers.
 
 **If not:** routers on different builds are the first suspect for any
 strange behaviour. Update them all to one build. A chain of single peers
-once split the fleet into two gossip islands; the inventory write replaces
+once split the fleet into two gossip partitions; the inventory write replaces
 the whole list, so do not add peers one id at a time over SSH.
 
 ## Step 4: Verify it joined

@@ -80,7 +80,7 @@ impl fmt::Display for ProfileId {
     }
 }
 
-/// `isolate` buys both client bands and becomes a silent island on unplug;
+/// `isolate` buys both client bands and becomes a silent node on unplug;
 /// `reserve-mesh` keeps one radio on mesh as fallback at the cost of a band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -272,12 +272,12 @@ pub enum ProfileRefusal {
     #[error("no {0} radio carries the mesh backhaul")]
     NoRadioForBand(Band),
     #[error(
-        "node mesh radio {radio} is {node}, the island is {island}; a backhaul band change is fleet-wide"
+        "node mesh radio {radio} is {node}, the backhaul is {backhaul}; a backhaul band change is fleet-wide"
     )]
-    IslandBandMismatch {
+    BackhaulBandMismatch {
         radio: String,
         node: Band,
-        island: Band,
+        backhaul: Band,
     },
     #[error("radio {0} may be a station only when add-wifi-internet-uplink assigns it")]
     StationNotOwned(String),
@@ -373,8 +373,8 @@ pub struct ProfileRequest {
     pub ports: Vec<(String, PortRole)>,
     /// Explicit radio roles. Unnamed radios take the profile's default role.
     pub radios: Vec<(String, RadioRole)>,
-    /// The island's backhaul band. Fleet-wide (`setup-wireless.sh BACKHAUL_BAND`).
-    pub island_band: Band,
+    /// The mesh backhaul band. Fleet-wide (`setup-wireless.sh BACKHAUL_BAND`).
+    pub backhaul_band: Band,
     /// The radio `add-wifi-internet-uplink` assigns as a station, if any.
     pub uplink_station_radio: Option<String>,
     /// Owner acknowledged that `isolate` strands wireless-only peers.
@@ -389,7 +389,7 @@ impl ProfileRequest {
             profile,
             ports: Vec::new(),
             radios: Vec::new(),
-            island_band: Band::FiveG,
+            backhaul_band: Band::FiveG,
             uplink_station_radio: None,
             acknowledge_stranded_peers: false,
             explicit_default_export_change: false,
@@ -492,21 +492,21 @@ pub fn decide(
         if roles.contains(&RadioRole::Station) && owned_station != Some(radio.as_str()) {
             return Err(ProfileRefusal::StationNotOwned(radio.clone()));
         }
-        // Advise N5: the backhaul band is island-wide, not a per-node choice.
+        // Advise N5: the backhaul band is mesh-wide, not a per-node choice.
         if roles.contains(&RadioRole::Mesh)
             && let Some(Some(band)) = bands.get(radio)
-            && *band != request.island_band
+            && *band != request.backhaul_band
         {
-            return Err(ProfileRefusal::IslandBandMismatch {
+            return Err(ProfileRefusal::BackhaulBandMismatch {
                 radio: radio.clone(),
                 node: *band,
-                island: request.island_band,
+                backhaul: request.backhaul_band,
             });
         }
     }
-    let island_radio = bands
+    let backhaul_radio = bands
         .iter()
-        .find(|(_, band)| **band == Some(request.island_band))
+        .find(|(_, band)| **band == Some(request.backhaul_band))
         .map(|(radio, _)| radio.clone());
 
     let profile = request.profile;
@@ -566,9 +566,9 @@ pub fn decide(
     let mesh_radio = match profile.cable_loss() {
         Some(CableLoss::Isolate) => None,
         None | Some(CableLoss::ReserveMesh) => Some(
-            island_radio
+            backhaul_radio
                 .clone()
-                .ok_or(ProfileRefusal::NoRadioForBand(request.island_band))?,
+                .ok_or(ProfileRefusal::NoRadioForBand(request.backhaul_band))?,
         ),
     };
     let mut radios = BTreeMap::new();
@@ -1730,7 +1730,7 @@ config zone
 
     #[test]
     fn default_onto_a_2g_backhaul_node_is_refused_as_a_fleet_change() {
-        // Advise N5: BACKHAUL_BAND is island-wide.
+        // Advise N5: BACKHAUL_BAND is mesh-wide.
         let mut node = gateway();
         let w = node.config.wireless.as_mut().unwrap();
         *w = w
@@ -1745,9 +1745,9 @@ config zone
         let error = decide(&ProfileRequest::new(ProfileId::DEFAULT), &node).unwrap_err();
         assert!(matches!(
             error,
-            ProfileRefusal::IslandBandMismatch {
+            ProfileRefusal::BackhaulBandMismatch {
                 node: Band::TwoG,
-                island: Band::FiveG,
+                backhaul: Band::FiveG,
                 ..
             }
         ));

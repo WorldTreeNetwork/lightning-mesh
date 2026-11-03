@@ -1,6 +1,12 @@
 # Auto-Island Formation
 
-**Status:** Design pass (2026-07-06) | Relates to epic `e21` (service-mesh / north-star roaming)
+**Status:** Retired (2026-11-03). Do not use "island" for a roam group or for the radio mesh.
+
+Fast roam is a property of the backhaul. Each node keeps its own client `/24`. A phone that moves keeps its address because the new node reads the synced lease and installs a mobility `/32`. Babel carries that host route across the whole backhaul. There is no smaller shared subnet to join.
+
+The rest of this file is the 2026-07 design for a shared client subnet and a shared client L2. It was not shipped. `roam::join_island` is that sketch and is not wired. `roam::islands` is a read-only broadcast-scope partition and does not decide roaming.
+
+**Date of the design below:** 2026-07-06 | Relates to epic `e21`
 
 ## Why this exists
 
@@ -264,18 +270,15 @@ here is an L3 problem, not a radio one — which is why item 1 of the near-term
 list above ("verify the shipped 802.11r path") is *not* the lowest-effort roaming
 win it was billed as.
 
-### Islands, after this
+### After the mobility routes
 
-With roaming solved at L3, an island stops being "the set of nodes sharing a
-subnet" and becomes **the scope broadcast and ARP propagate across** (Duke,
-2026-08). Roaming works mesh-wide via mobility routes regardless of island
-boundaries; the boundary then only decides where mDNS/discovery floods and how
-far proxy-ARP is willing to answer. That is a strictly smaller and safer thing to
-get wrong than subnet membership — a mis-drawn broadcast boundary degrades
-discovery, where a mis-drawn subnet boundary renumbers someone's phone.
+Roaming does not have a boundary inside the backhaul. The mobility `/32` follows
+the phone across every node babel can reach. A broadcast scope, if one is ever
+drawn, would only decide where discovery floods. It would not decide who can roam.
+`roam::islands` is that unused partition.
 
 `roam::islands` implements the partition (connected components over backhaul
-links at or above `weak_link_dbm`, forced to a single island below
+links at or above `weak_link_dbm`, forced to one partition below
 `min_split_nodes` — default 8 nodes / −75 dBm) as a **pure, deterministic,
 read-only** function. Nothing acts on it: acting needs the per-link signal view
 gossiped into the CRDT so all members agree on the partition, plus a split/merge

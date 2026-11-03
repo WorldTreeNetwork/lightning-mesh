@@ -482,7 +482,7 @@ impl GossipTransport for IrohGossipTransport {
                 // Only `Received` carries an application payload.
                 Some(Ok(Event::Received(msg))) => return Ok(msg.content),
                 // Track swarm membership: the count gates the first claim and
-                // wakes the rejoin loop when we drop to an island (eon).
+                // wakes the rejoin loop when we drop to zero neighbors (eon).
                 Some(Ok(Event::NeighborUp(id))) => {
                     self.neighbors_tx.send_modify(|c| *c += 1);
                     info!(peer = %id, count = *self.neighbors_tx.borrow(), "gossip: neighbor up");
@@ -512,7 +512,7 @@ const BOOTSTRAP_CANDIDATE_CAP: usize = 16;
 /// Keep this node in the gossip swarm (mjolnir-mesh-eon / f8b). iroh-gossip's
 /// bootstrap join is a one-shot dial: at boot the 802.11s radio and mDNS
 /// discovery usually aren't up yet, every bootstrap dial fails ("No
-/// addressing information available"), and the node stays a gossip island
+/// addressing information available"), and the node stays a gossip partition
 /// forever — its anti-entropy broadcasts reach nobody and it merges nobody's,
 /// so the claim-conflict machinery never fires. Meanwhile the tunnel data
 /// plane comes up fine because `connector_loop` redials with backoff. This is
@@ -526,7 +526,7 @@ const BOOTSTRAP_CANDIDATE_CAP: usize = 16;
 /// ([`rank_bootstrap_candidates`]). So a node whose configured peers are all
 /// down still rejoins via any other live node it has ever learned, and a peer
 /// learned mid-run gets used on the very next retry — self-healing joins, no
-/// more islands. The `MemoryLookup` (seeded from the same sources) already
+/// more partitions. The `MemoryLookup` (seeded from the same sources) already
 /// resolves these ids to addresses, so choosing to dial them is all that was
 /// missing.
 async fn gossip_rejoin_loop(

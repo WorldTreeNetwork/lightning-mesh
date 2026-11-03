@@ -13,7 +13,7 @@ architecture: docs/network-coordination/hello-mesh-service.md
 
 **Goal:** ship the DWeb-demo MVP of `hello.mesh` — a node-hosted front desk whose
 directory shows mesh-wide neighbors, identities, and services propagated across
-the **802.11s island**, with anonymous access and one-tap soft identity, fully
+the **802.11s backhaul**, with anonymous access and one-tap soft identity, fully
 offline. Cross-*site* over iroh is Growth, not a demo gate.
 
 Work items live in **beads** (epic `bc7`); this doc is the planning narrative
@@ -23,7 +23,7 @@ and readiness — it does not duplicate the PRD (`prd.md`) or the architecture
 
 ## Key decisions (ADR-lite)
 
-- **D1 [HIGH] Cross-mesh propagation is MVP, island-first.** A node-local
+- **D1 [HIGH] Cross-mesh propagation is MVP, backhaul-first.** A node-local
   directory is worthless; the product is the mesh making distant people/services
   present. Rides the field-validated gossip transport (subnet claims already
   converge mesh-wide). Cross-site over iroh is Growth (likely near-free).
@@ -104,7 +104,7 @@ concurrently. `gad`/frontend can develop against a mocked API until S3/S4 land.
 ## Readiness
 
 - **Gate:** the spike gate is cleared. Execution proceeds on user confirmation.
-  If daemon wiring hits trouble, the fallback remains: talk leads + island-local
+  If daemon wiring hits trouble, the fallback remains: talk leads + backhaul-local
   directory-only demo (drop S1/p6u/S2 from the demo path).
 - **FR coverage:** every MVP FR (FR1–22, FR28) maps to ≥1 story — see the
   traceability note on epic `bc7`.

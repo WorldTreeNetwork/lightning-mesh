@@ -58,7 +58,7 @@ Add a member line for the new box (`name|10.254.x.y|<64-hex-id>|model|notes`),
 then run `deploy/openwrt/update-fleet.sh` from a checkout that has that
 line. Install rewrites the whole peer list on each reachable router and
 starts `mjolnir-meshd`. Add **every** router to the file. A chain of single
-peers has split a fleet into two gossip islands.
+peers has split a fleet into two gossip partitions.
 
 Exact verify steps (station dump, babel routes, gossip, `/api/health`):
 [Join the mesh](../node/03-join-the-mesh.md).

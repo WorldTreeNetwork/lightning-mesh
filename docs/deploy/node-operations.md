@@ -49,7 +49,7 @@ Management/fleet inventory is a second consumer of that CRDT, alongside
 cross-site dialing.
 
 mDNS is explicitly **not** the answer for management discovery: it only
-floods the flat-L2 island, doesn't cross `br-lan`/`br-mesh` without
+floods one 802.11s broadcast domain, and does not cross `br-lan`/`br-mesh` without
 reflectors on every node, and dies entirely in the L3-routed future
 (`mesh_fwding=0`, `0yb`) and across sites. mDNS remains what it already is —
 a link-local bootstrap signal — nothing more.

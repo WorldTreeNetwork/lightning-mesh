@@ -8,13 +8,13 @@ the 802.11s backhaul SHALL NOT grant babel adjacency, production CRDT
 write access, subnet-claim merge, or overlay SSH. Possession of the
 Lightning Mesh binary SHALL NOT constitute membership.
 
-#### Scenario: Factory node hears an island
+#### Scenario: Factory node hears a backhaul
 
 - GIVEN a factory node with empty roster and empty addrbook
-- AND an existing island beaconing a compatible capability descriptor
+- AND an existing backhaul beaconing a compatible capability descriptor
 - WHEN the factory node is in RF range long enough to scan and associate
-- THEN it learns that a Lightning Mesh island is present
-- AND it does not announce babel routes to that island
+- THEN it learns that a Lightning Mesh backhaul is present
+- AND it does not announce babel routes into that backhaul
 - AND existing members do not accept its subnet claims
 
 #### Scenario: Running the firmware is not membership
@@ -55,10 +55,10 @@ SHALL NOT by itself lift quarantine.
 
 #### Scenario: Scan before merge
 
-- GIVEN an island advertising a signed descriptor
+- GIVEN a backhaul advertising a signed descriptor
 - WHEN a factory node scans
-- THEN it can classify the island as compatible or incompatible without
-  merging client L2
+- THEN it can classify that backhaul as compatible or incompatible without
+  announcing routes or writing the book
 
 #### Scenario: Replay is not a ticket
 

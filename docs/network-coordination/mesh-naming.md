@@ -136,7 +136,7 @@ without identity:
   the bare form.)
 - **Roaming, even within one house.** Each node owns a **routed /24** and we
   deliberately **do not bridge client L2 across nodes** (broadcast containment) —
-  there is no single L2 island spanning the mesh. So a device roaming between two
+  there is no single backhaul spanning the mesh. So a device roaming between two
   mesh nodes *in the same home* re-DHCPs onto a new /24: new IP, new owning node.
   Node-local or node-scoped names therefore aren't stable — they're a **de-dup
   handle, not a name**. Stability requires binding to the device's/owner's
@@ -186,7 +186,7 @@ cannot publish under a scope whose key you do not hold.
 A service record's A-answer is a mesh IP (typically the publishing node's client
 subnet or its `10.254.x` backhaul address). Reachability is not DNS's problem:
 
-- **Same island:** babel routes it over the 802.11s L2 backhaul.
+- **On this backhaul:** babel routes it over the 802.11s L2 backhaul.
 - **Cross-site / internet:** babel routes it into `mjolnir0`, the iroh QUIC
   overlay carries it, encrypted end-to-end between daemons.
 

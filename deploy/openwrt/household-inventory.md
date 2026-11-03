@@ -36,7 +36,7 @@ Also observed in `rple`:
   `192.168.1.1` on `m3000-b` was left untouched.
 - Recovery snapshot retained on the gateway at `/root/lightning-uplink-rple`
   (`backup/`, `result`, `apply.log`).
-- **No AP3000 was observed in this three-node island.** That is an absence of
+- **No AP3000 was observed in this three-node mesh.** That is an absence of
   observation, not evidence that no AP3000 exists in the household —
   `ap3000-outdoor` is still a fleet entry (§2) and was simply not seen here.
 
@@ -56,7 +56,7 @@ there is `false`.
 
 | Entry | Model | Overlay | Status |
 |---|---|---|---|
-| `ap3000-outdoor` | Cudy AP3000 Outdoor v1 | `10.254.166.226` | Former house gateway (`gateway=auto`, babel `0.0.0.0/0` metric 128) via Origami WAN `10.0.0.239`, **unreachable from the Pirate Radio vantage 2026-08-31**. Client BSSID `80:AF:CA:F2:20:F5`, mesh `82:AF:CA:F2:20:F6`, RF 49% on 2026-08-31. **Not observed in the 2026-09-14 pilot island**; its current whereabouts and power state are unknown. |
+| `ap3000-outdoor` | Cudy AP3000 Outdoor v1 | `10.254.166.226` | Former house gateway (`gateway=auto`, babel `0.0.0.0/0` metric 128) via Origami WAN `10.0.0.239`, **unreachable from the Pirate Radio vantage 2026-08-31**. Client BSSID `80:AF:CA:F2:20:F5`, mesh `82:AF:CA:F2:20:F6`, RF 49% on 2026-08-31. **Not observed in the 2026-09-14 pilot**; its current whereabouts and power state are unknown. |
 | `wr3000s-a` | Cudy WR3000S v1 | `10.254.242.84` | Provisioned 2026-07-01; has no WAN of its own (pkg-cache installs). **BSSID never confirmed** (2026-08-31). Inventory only. |
 | `unknown-close` | Cudy (OUI `80:AF:CA`) | — | Client BSSID `80:AF:CA:E7:BA:9C`, Pirate Radio lease `192.168.0.118`, RF 100% on 2026-08-31, all WAN TCP closed (22/80/8080), ping ok. Not bound to a node id. |
 | `unknown-d9` | Cudy | — | Client `80:AF:CA:D9:85:AE`, mesh `82:AF:CA:D9:85:AF`, RF 35% on 2026-08-31. Candidate `wr3000s-a` or `tr3000`; **do not add a fleet line until confirmed.** |
@@ -85,7 +85,7 @@ Role assignment is driven by `BACKHAUL_BAND`:
   in use here.
 - Whichever value is chosen is a **fleet-wide constant**: the same
   `BACKHAUL_BAND` *and* backhaul channel on every node, or they do not form
-  one island.
+  one backhaul.
 
 Other documented defaults: country `US`; client AP `encryption=none`; factory
 default client SSID `⚡`, live fleet override `Lightning Mesh` (open).
@@ -192,7 +192,7 @@ For a node to take the household uplink, the receiver must satisfy:
    not structurally excluded: `BACKHAUL_BAND=2g` moves the mesh to 2.4 GHz and
    frees the 5 GHz radio for a station. This is a supported script mode but has
    **not been qualified for an uplink role here**, costs backhaul throughput
-   (§3), and must be applied fleet-wide or the island splits. Treat it as a
+   (§3), and must be applied fleet-wide or the backhaul splits. Treat it as a
    pilot-able alternative, not a recommendation.
 3. **Wired backhaul frees radios.** If the backhaul between two nodes can be
    cabled, the radio that carried it becomes available for a station or AP on

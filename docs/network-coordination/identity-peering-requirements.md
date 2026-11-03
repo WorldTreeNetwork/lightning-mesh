@@ -5,7 +5,7 @@
 ## Purpose
 
 This document captures the concrete peering and security **needs** that surfaced while
-designing auto-island formation (see [island-formation](island-formation.md)), so the
+designing the retired shared-subnet sketch (see [island-formation](island-formation.md)), so the
 identity system can be designed against real requirements instead of in a vacuum. It
 states *what we need and why* — each requirement traces to a specific scenario we hit —
 and defers *how* to the identity design pass.
@@ -61,12 +61,14 @@ gate:
 - **R2b — Subnet / prefix claim (CRDT).** An untrusted peer can claim or poison client
   subnets in the subnet-claim CRDT. **Gate:** only authorized identities' claims are
   accepted / merged.
-- **R2c — Client-L2 / island VNI membership.** Joining an island's shared client L2
-  exposes client traffic and broadcast to the joiner. Membership must therefore be an
-  **authorized set**, not a physical fact (whoever is in RF range). **Why this matters:**
-  it is the hinge decision for the island data plane — it is exactly why we chose an
-  authorized-VNI overlay (VXLAN/EVPN-lite) over batman-adv, whose fabric membership is
-  unauthenticated and physical. See [island-formation](island-formation.md).
+- **R2c — Shared client L2 (retired).** The 2026-07 sketch wanted several nodes
+  to share one client subnet and one client broadcast domain, and to treat
+  membership in that domain as an authorized set rather than "whoever is in RF
+  range." That plane was not shipped. Each node keeps its own client `/24`. A
+  phone that moves keeps its address because the new node reads the synced lease
+  and installs a mobility `/32`. See the banner on
+  [island-formation](island-formation.md). What a radio neighbor may announce or
+  write is R2a, R2b, and R2d.
 - **R2d — CRDT lane writes generally.** Address book, `/services/`, `/dns/` names — all
   poisonable/squattable by an untrusted writer. **Gate:** per-identity write authorization,
   composing with the existing HLC first-writer-wins (identity-scoped FWW).
@@ -93,10 +95,11 @@ Manual authorization is acceptable as the interim; automated admission is a late
 ### R5 — Reputation / revocation hook
 
 Authorization is not static — bad actors must be **evictable**, and the eviction must
-propagate. **Why:** VNI/island membership and `.mesh` name ownership both need "you're out"
-to be enforceable after the fact. A **reputation layer** (planned, currently undocumented)
-is the intended automated mechanism — governing island membership eviction *and* DNS name
-ownership (relates to `e21.5` WoT name arbitration). Requirement on identity: revocation is
+propagate. **Why:** `.mesh` name ownership needs "you're out" to be enforceable
+after the fact. The retired shared-client-L2 sketch also wanted eviction from a
+VNI; that plane was not shipped. A **reputation layer** (planned, currently undocumented)
+is the intended automated mechanism — governing who may keep a name
+(relates to `e21.5` WoT name arbitration). Requirement on identity: revocation is
 a first-class, CRDT-propagated state, not just an allow-list add.
 
 ### R6 — Graceful degradation, not hard rejection

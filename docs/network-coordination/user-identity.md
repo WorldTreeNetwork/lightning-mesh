@@ -329,8 +329,8 @@ machinery as `met` §4, third direction.
 ## 5. What identity unlocks
 
 - **Named presence**: your entry in the gossip address book (`0yb`) carries
-  your identity, not just a lease — reachable by name across islands and
-  sites, and visible in every node's `hello.mesh` directory.
+  your identity, not just a lease — reachable by name across the mesh and
+  across sites, and visible in every node's `hello.mesh` directory.
 - **Service publishing** (`e21`): a `.mesh` name claim is a signature by an
   identity key; name ownership is key ownership. Publish rights on a node are
   a caps grant in the endorsement, evaluated by that node's local policy.
@@ -381,20 +381,20 @@ secure storage) as a dependency.
    token, carried in the return-URL fragment, verified offline. Wire format and
    RP verifier spec in [identity-assertion.md](identity-assertion.md).
 4. Lease↔identity binding lifetime and re-auth cadence; roaming a rung-1 key's
-   *session* across nodes within an island (the key itself already roams via
+   *session* from one access point to another on this backhaul (the key itself already roams via
    the stable origin; dovetails with the 802.11r/FT key-management spike).
 5. Guest access scoping vocabulary (time, bandwidth, service set) — surfaced
    through the front desk; optional scannable-badge add-on (§4.4a) only if an
    operator asks for it, not a default deliverable.
 6. Privacy: ephemeral identities must not be linkable across visits unless the
    user upgrades them deliberately. **Planned:** rung-1 ephemeral records are
-   island-local, never gossiped mesh-wide (bead `9b0`). **Today (2026-09-13)
+   backhaul-local, never gossiped mesh-wide (bead `9b0`). **Today (2026-09-13)
    that is not so:** the built `/users` lane (`crates/mjolnir-mesh/src/crdt/users.rs`)
    gossips every rung-1 record (name, public key, last seen) mesh-wide, and
    `GET /api/directory` returns them in `identities[]` to any origin
    (`Access-Control-Allow-Origin: *`). Keeping names queryable network-wide was
-   a deliberate call for the single-operator fleet; island scoping has to land
-   before multi-tenant or stranger islands.
+   a deliberate call for the single-operator fleet; backhaul-local scoping has to land
+   before multi-tenant or stranger meshes.
 7. RFC 8910/8908 client behavior survey: which OSes render the non-blocking
    affordance today, and how it degrades where unsupported (answer: signage
    and `hello.mesh` still work — the affordance is progressive enhancement).

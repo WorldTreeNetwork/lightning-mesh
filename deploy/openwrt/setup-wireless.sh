@@ -16,7 +16,7 @@
 #
 # TEMPLATE — run this ON a flashed node, then VERIFY, then we lock the real config
 # from the node's generated /etc/config/wireless. Same MESH_ID + MESH_KEY +
-# BACKHAUL_BAND + backhaul channel on EVERY node or they won't form one island.
+# BACKHAUL_BAND + backhaul channel on EVERY node or they won't form one backhaul.
 #
 # Decisions: 5 GHz backhaul is the default (mjolnir-mesh-wai — throughput, field-validated
 # 2026-07-06). BACKHAUL_BAND=2g is the range/foliage alternative (the original w1l forest
@@ -30,7 +30,7 @@ set -e
 MESH_ID="${MESH_ID:-mjolnir-mesh}"       # 802.11s backhaul id (beacons; not the client SSID)
 MESH_KEY="${MESH_KEY:-}"                 # empty => OPEN mesh (recommended for first bring-up); set => SAE
 # Which BAND plays the 802.11s backhaul role. FLEET-WIDE CONSTANT — every node must share
-# this value AND the resulting backhaul channel, or they won't form one island. Default 5g
+# this value AND the resulting backhaul channel, or they won't form one backhaul. Default 5g
 # (throughput, mjolnir-mesh-wai). 2g = range/foliage alternative (w1l forest choice).
 BACKHAUL_BAND="${BACKHAUL_BAND:-5g}"
 case "$BACKHAUL_BAND" in 2g|5g) ;; *) echo "FATAL: BACKHAUL_BAND must be 2g or 5g (got '$BACKHAUL_BAND')"; exit 1 ;; esac
@@ -125,8 +125,8 @@ uci set wireless.meshbh.mode='mesh'
 # and phones do not join it as Wi-Fi. SAE (MESH_KEY) is how you stop strangers.
 uci set wireless.meshbh.mesh_id="$MESH_ID"
 uci set wireless.meshbh.network='mesh'
-# mesh_fwding=1: 802.11s HWMP gives a flat L2 island (mDNS floods, babel sees one
-# wired segment). The L3-routed model (mesh_fwding=0, babel does every hop) is the
+# mesh_fwding=1: 802.11s HWMP keeps the backhaul one broadcast domain (mDNS floods,
+# babel sees one wired segment). The L3-routed model (mesh_fwding=0, babel does every hop) is the
 # spread-out / multi-hop-discovery future — mjolnir-mesh-0yb.
 uci set wireless.meshbh.mesh_fwding='1'
 if [ -n "$MESH_KEY" ]; then
@@ -277,7 +277,7 @@ fi
 cat <<EOF
 >> committed. Now:
      wifi reload                              # brings up mesh0; hotplug auto-disables power-save on it
-   Verify the island + bridge:
+   Verify the backhaul + bridge:
      iw dev                                  # find the mesh ifname (mode 'mesh point')
      iw dev <mesh-ifname> station dump       # peers appear once another node is up
      ip link show br-mesh                    # must be UP (if DOWN: ip link set br-mesh up)

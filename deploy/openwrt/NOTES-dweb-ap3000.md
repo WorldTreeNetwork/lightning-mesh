@@ -1,6 +1,6 @@
 # AP3000 Outdoor vs DWeb m3000 — config matching (next-agent handoff)
 
-Written / re-verified **2026-08-30**. This pair is the event two-node island.
+Written / re-verified **2026-08-30**. This pair is the event two-node mesh.
 Do **not** re-PSK the client AP, mix open + PSK on the same SSID, or change
 `MESH_ID` / backhaul channel unless asked. SSID stays `Lightning Mesh`.
 

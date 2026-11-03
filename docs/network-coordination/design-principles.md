@@ -16,7 +16,7 @@ most often and it has never been written down as a rule.
 
 ## Principle 1 — The L3 overlay is the invariant; links are plumbing
 
-Heterogeneous link islands stitched together by a common L3 routing layer. The overlay —
+Heterogeneous links stitched together by a common L3 routing layer. The overlay —
 identity, routing, shared state — is permanent; everything below it (802.11s, ethernet,
 60GHz, LTE, QUIC over any egress) is an interchangeable link with a metric. This is the
 Internet's founding bet (Cerf & Kahn's catenet), and it is the only network design that
@@ -76,23 +76,20 @@ This is the subtle half of the principle, and getting it wrong produces bad desi
 *look* principled.
 
 **Coordination replaces authority in the control plane** — allocation, membership,
-identity, who-owns-what. **The data plane uses the right primitive at each layer** — L2
-within a local island (so a client keeps its IP when it roams across the room), babel
-between islands, iroh across the internet.
+identity, who-owns-what. **The data plane uses the right primitive at each layer** —
+babel over the radio backhaul, so a client keeps its address as it moves between
+access points, and iroh across the internet.
 
-We do **not** force the coordination layer to *become* the data plane. The temptation is
-real: because every node already holds the full CRDT address book, it is tempting to make
-the CRDT carry, say, per-client roaming — re-issue a client its old IP on whatever node it
-lands on. That works on paper and fails in practice: it turns into per-host `/32` mobility
-routes flooding babel, a routing-convergence gap on every handoff, and gateway-proxy
-hacks. A lower layer (shared-L2 within an island) does the same job instantly and for
-free.
+We do **not** force the coordination layer to *become* the data plane. The lease
+record is control-plane state: the new access point offers the address the phone
+already has, and babel carries a host `/32` for that one client. Client broadcasts
+stay on the access point the phone is associated to. A shared client L2 is not
+required, and it is not how roaming works.
 
 The correct expression of "coordination tech buys no-config" is: **use the coordination
-layer to *scope and configure* the data plane, not to replace it.** Auto-island formation
-is the canonical example — the CRDT (control) decides the L2 boundary from observed
-proximity and roaming; L2 (data) does the fast forwarding inside it; babel routes between
-islands; iroh stitches sites. Each layer does what it is best at, and the coordination
+layer to *configure* the data plane, not to replace it.** A node that appears on the
+backhaul syncs leases and claims with the nodes already there. Babel routes across
+that backhaul. Iroh stitches sites the radio does not reach. The coordination
 layer's job is to wire them up without a human.
 
 ### What it buys (and what it costs)

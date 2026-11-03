@@ -42,9 +42,9 @@ move is automatic **discovery**, not automatic **trust**.
 
 ## User journey & surfaces
 
-A person powers a factory node in RF range of an existing island. The
+A person powers a factory node in RF range of an existing backhaul. The
 node finds Lightning Mesh from the capability beacon and shows as heard
-(hello / LED / log). Empty: no matching beacon, it stays a lone island
+(hello / LED / log). Empty: no matching beacon, it stays a lone backhaul
 with its own `10.42`. Failed: it associated but stays quarantined —
 babel has no adjacency, overlay SSH from the stranger fails, claims are
 ignored. Off: today's hand `list peer` on a trusted inventory install
@@ -62,7 +62,7 @@ already-designed `met` path.
 ## Out of scope
 
 - Local-EVM transit settlement (`mjolnir-mesh-9u5y`, parked)
-- VXLAN / EVPN-lite client islands (`3kd`) and trusted shared-L2 (`190`)
+- VXLAN / EVPN-lite shared client L2s (`3kd`) and trusted shared-L2 (`190`)
 - User IdentiKey (`rp9`)
 - Auto-ingest of 802.11s neighbors into `list peer` (forbidden by steer)
 - Changing the live fleet `MESH_KEY` / open client SSID in this change

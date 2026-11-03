@@ -12,7 +12,7 @@ override, not a speculative build.** Concretely:
 
 - **Local mesh stays relay-free, always.** In `--lan`/mesh mode the iroh endpoint
   is built with `RelayMode::Disabled` and mDNS-only discovery
-  (`build_endpoint`, meshd). Same-island 802.11s traffic never touches a relay.
+  (`build_endpoint`, meshd). On this backhaul, 802.11s traffic never touches a relay.
   This decision is *only* about the internet-hop / cross-site overlay.
 - **Cross-site default = `RelayMode::Staging`** (real n0 relays on
   `relay.iroh.network`). This is today's shipped default and it stays.

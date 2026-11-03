@@ -24,7 +24,7 @@ tradeoffs behind it, and the protocol work it implies. See beads
 - **New nodes: whole OpenWrt mt76 boards** (e.g. OpenWrt One / GL-MT3000 — USB-C,
   self-enclosed, ~$80–90) running **real 802.11s mesh** backhaul + a client AP +
   the overlay **natively**. Real mesh = multi-link, mobility/churn-robust, and a
-  flat L2 within the island (mDNS works there).
+  flat L2 on that backhaul (mDNS works there).
 - ~~**Existing MikroTiks: kept as an AP/STA segment.**~~ **RETIRED 2026-07-02:**
   AP/STA proved strictly worse than 802.11s and the segment (plus its interop
   gateway) was dropped; the fleet is all-802.11s.
@@ -36,7 +36,7 @@ tradeoffs behind it, and the protocol work it implies. See beads
   AP/STA — protocol symmetry is satisfiable there (per-link AP/STA is transport
   plumbing, like TCP `connect()`/`accept()`, not a hierarchy), but single-uplink
   AP/STA is fragile under mobility/churn. Moving new nodes to mt76/802.11s restores
-  multi-link robustness and a flat L2 within the open island, on open hardware.
+  multi-link robustness and a flat L2 on the open backhaul, on open hardware.
 
 ## Background: the two layers
 
@@ -168,7 +168,7 @@ separate through the service-mesh pass (`e21`):
    OpenThread-SRP precedent). Broadcast never crosses a segment; the directory
    does.
 3. **Cross-site: the sync layer is already transport-agnostic.** Gossip rides
-   iroh QUIC identically over the L2 island and the internet; `0yb` proved
+   iroh QUIC identically over the backhaul and the internet; `0yb` proved
    entries propagate regardless of transport. The cross-site design question in
    `e21` is therefore not how records travel but **whether the address a record
    answers with is reachable from the asker** — overlay-routed client subnets,
@@ -214,12 +214,12 @@ overlay runs **natively** on these (no container needed — they're real Linux);
 | 🥇 | TP-Link EAP610-Outdoor (~$60–80) | IPQ6018 / ath11k | 512 MB | Yes, 802.3at | partial | dual-radio (gateway-capable); OpenWrt merged — pin 24.10 stable; bench-validate mesh |
 | 🥈 | TP-Link EAP625-Outdoor HD (~$80–100) | IPQ6018 / ath11k | 512 MB | Yes, **IP67**, PoE+ | partial | detachable antennas (swap high-gain omni for forest NLOS); newer OpenWrt 25.12+ |
 | 🥉 | Banana Pi BPI-R3 (+ enclosure) | MT7986 / mt76 | **2 GB** | DIY | **full** | best driver + compute (runs containers); gateway/relay/compute node |
-| gw | GL.iNet GL-MT6000 (indoor) | MT7986 / mt76 | 512 MB | No | **full** | indoor bridgehead: 802.11s island ↔ MikroTik AP/STA fleet |
+| gw | GL.iNet GL-MT6000 (indoor) | MT7986 / mt76 | 512 MB | No | **full** | indoor bridgehead: 802.11s backhaul ↔ MikroTik AP/STA fleet |
 
 **Hybrid gateway pattern** (confirmed on both IPQ6018 and MT7986): one radio =
 802.11s mesh point (babeld), the other = AP or STA toward the MikroTik fleet.
 
-**Strategic upside:** a couple of these stand up a *real* 802.11s island bridged to
+**Strategic upside:** a couple of these stand up a *real* 802.11s backhaul bridged to
 the MikroTiks — demonstrating the protocol spanning open-mesh + closed-AP/STA
 hardware, which is the portability story for the talk. Full survey + sources in the
 `mjolnir-mesh-b1d` notes.

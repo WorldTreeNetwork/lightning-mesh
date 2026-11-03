@@ -20,11 +20,11 @@ sites connect via the iroh QUIC overlay — a single TUN `mjolnir0` multiplexing
 — and route IP traffic between their local subnets.
 
 The operational lesson from deployment: **local mesh traffic routes most efficiently
-over the 802.11s L2 island; the iroh L3 overlay is for internet hops and as a first-hop
+over the 802.11s backhaul; the iroh L3 overlay is for internet hops and as a first-hop
 security gateway.**
 
 ```
-Site A (802.11s island, babel-routed)      Site B (remote)
+Site A (802.11s backhaul, babel-routed)    Site B (remote)
  ┌──────────────────────────┐               ┌──────────────────┐
  │  Router-1  Router-2  ... │               │     Router-5     │
  │  10.42.1/24  10.42.2/24  │◄──Iroh QUIC──►│  10.42.5.0/24    │
@@ -36,16 +36,15 @@ Site A (802.11s island, babel-routed)      Site B (remote)
 
 ## Two Modes of Interconnection
 
-### Mode 1: Flat Local Island — FUTURE / OPTIONAL, NOT SHIPPED
+### Mode 1: Shared client subnet — RETIRED, NOT SHIPPED
 
-> **Status:** design for the North-Star roaming experience (same SSID everywhere,
-> devices roam seamlessly, `.mesh` services discoverable locally). It is **not** the
-> shipped default — every node runs its own routed `/24` even when co-located, and the
-> CRDT hostsfile that would make a shared subnet safe is not implemented (service-mesh
-> phase, bead `e21`). See "Why This Scales" for why the routed model is the default.
+> **Status:** an early sketch for keeping a client's address by putting every
+> co-located router on one subnet and one client L2. It was not shipped. Roaming
+> uses a mobility `/32` on the backhaul instead, and each node keeps its own `/24`.
+> See "Why This Scales" and the roaming section below.
 
-If a flat island mode is enabled in the future, co-located routers would share a single
-subnet:
+The sketch, kept so the rejection is visible, was: co-located routers would share a
+single subnet:
 
 - Routers detect each other via mDNS (`_mjolnir-mesh._tcp.local`) or Iroh connection latency
   below the local threshold (~5ms round-trip)
@@ -92,7 +91,7 @@ Alice (10.42.1.50, Router-1 at Site A) → Bob's server (10.42.2.30, Router-5 at
 ```
 
 In the shipped model the packet flow is the same shape, but step 2 resolves to either
-a next hop on `br-mesh` (same-island, pure L2 forwarding under babel) or to `mjolnir0`
+a next hop on `br-mesh` (on this backhaul, L2 forwarding under babel) or to `mjolnir0`
 (cross-site), and the daemon dispatches per-destination inside the single overlay TUN.
 
 What survives from the original design: forwarding decisions are made by the kernel
@@ -160,7 +159,7 @@ rare, and the CRDT resolves the uncommon case where two routers happen to prefer
 A router that determines it needs a new subnet waits before writing the claim to the
 CRDT (`claim_cooldown.rs`), giving gossip from existing claimants time to arrive so the
 node doesn't claim a /24 that is already taken. (The original rationale — abandoning
-the claim to join a shared subnet in Mode 1 — is future/flat-island only.)
+the claim to join a shared subnet in Mode 1 — belonged to that retired sketch.)
 
 If two routers at different sites claim overlapping subnets (rare — hash derivation across the
 slot count at the chosen prefix makes collision probability `~1/N` where N is the slot count):
@@ -173,12 +172,12 @@ slot count at the chosen prefix makes collision probability `~1/N` where N is th
   retries at smaller sizes (`alloc::pick_subnet_or_smaller`) before failing loud —
   see `collective-coordination-protocol.md`
 
-### Late Local Peer Discovery — FUTURE (flat-island mode only)
+### Late Local Peer Discovery
 
 In the shipped model a late-discovered co-located peer is a non-event: each node keeps
-its own /24 and babel routes between them. Only in a future flat-island mode would a
-router relinquish its claim (tombstone `/subnets/{cidr}`), drop its `redistribute` line
-(babeld restart), and re-point dnsmasq at the shared subnet.
+its own /24 and babel routes between them. The retired shared-subnet sketch would have
+had a router relinquish its claim and re-point dnsmasq at one shared subnet. That does
+not happen.
 
 ---
 
@@ -190,7 +189,7 @@ router relinquish its claim (tombstone `/subnets/{cidr}`), drop its `redistribut
 > address is computable from its node id (`10.254.<blake3(node_id)>`), and the gossip
 > address book (bead `0yb`) carries the rest. mDNS is link-local bootstrap only.
 
-The original design, kept for the flat-island future: a router entering a venue
+The original design, kept with the retired shared-subnet sketch: a router entering a venue
 determines whether it is joining an existing local cluster or starting a new remote
 site, using multiple signals in parallel:
 
@@ -216,10 +215,9 @@ When a local peer is confirmed:
 
 In the shipped model each node's client AP fronts its own routed `/24`; client L2
 segments are **never bridged across nodes** (see "Why This Scales"). Nodes may share an
-SSID — clients then re-associate to the nearest AP and re-DHCP onto that node's /24
-(an L3 roam; sessions break). The North-Star seamless-roaming experience (same SSID,
-same IP across APs) belongs to the future flat-island mode / `/32` host-route work
-described under Roaming below.
+SSID — clients re-associate to the nearest AP. A phone that already has a mesh
+address keeps it: the new node offers that lease and babel follows the phone with
+a host `/32`. See Roaming below.
 
 ---
 
@@ -276,48 +274,18 @@ seamless roaming becomes an L3 problem (see below) rather than a free L2 propert
 
 ---
 
-## Roaming Across Sites
+## Roaming
 
-What ships today: a device moving between nodes re-associates and re-DHCPs onto the new
-node's `/24` — TCP sessions break, new sessions work immediately. No lease/DNS CRDT is
-consulted (that lane is the `e21` service-mesh phase). The design below is the roadmap:
+A device that moves to another access point on this backhaul keeps its address.
+The new node reads the synced lease, offers that address, and installs a mobility
+`/32` (proto 158) on the client bridge, with `proxy_arp` so the phone still finds
+its gateway. Babel carries the host route. The phone's own `/24` stays aggregated;
+only a client that is away from the node that leased it costs a host route.
 
-```
-1. Device disconnects from Site A's WiFi (Router-1)
-2. Device connects to Site B's WiFi (Router-5)
-3. [Future] Router-5's dnsmasq checks the CRDT hostsfile
-4a. Device's MAC has a binding at 10.42.1.x — offer a new IP from Site B's range (10.42.2.x)
-    DNS entry updated via CRDT. TCP sessions break; new sessions work immediately.
-4b. Offer the same IP (10.42.1.50) — Router-5 redistributes a /32 host route
-    via babeld, Router-1 withdraws its /32 advertisement. TCP sessions survive.
-```
-
-Option (b) enables seamless cross-site roaming by letting Babel carry per-device /32
-routes — natively supported by babeld but deferred for operational simplicity.
-
-### Fast roaming (802.11r) and the L2/L3 split
-
-802.11r (Fast BSS Transition) is **orthogonal** to the subnet design: it speeds up the *radio
-re-association* — pre-computing the keys so a client re-associates to the next AP in
-milliseconds instead of running a full 4-way / EAP handshake — which is what makes handoff fast
-enough for latency-sensitive traffic like VoIP. It works on both bands and with SAE (FT-SAE) and
-WPA2-PSK (FT-PSK). So **yes, 802.11r still works** — but *what* it buys depends on the mode:
-
-- **Flat-L2 island (future mode: one SSID, one subnet, `mesh_fwding=1`):** 802.11r gives
-  **fully seamless roaming** — a fast L2 handoff *and* the client keeps its IP, because every AP
-  shares the subnet. Nothing else is needed. This is the right mode for dense client roaming
-  (events), and the reason a flat island remains attractive for that use case.
-- **L3-per-hop / cross-site (per-node `/24`, `mesh_fwding=0`, or separate sites):** 802.11r
-  still makes the *radio* handoff fast, but it is **necessary, not sufficient** — the client
-  lands on a different subnet, so its IP would change and active sessions break unless the IP is
-  made portable. That is the job of the `/32`-host-route-over-Babel + CRDT-lease mechanism
-  (Option b above): the new node already holds the client's `MAC→IP` reservation from the
-  gossiped lease, offers the *same* IP, and advertises a `/32` so traffic follows the device.
-
-So **802.11r and the `/32`/CRDT roaming are complementary layers, not alternatives**: 802.11r for
-a fast radio handoff, the `/32` route + CRDT lease for IP continuity. In the flat-island default,
-802.11r alone is enough; in the L3 mode it remains available and useful, paired with per-device
-`/32` roaming to preserve the address.
+A site reached only over the internet is a different link. The phone is not on
+that radio. 802.11r speeds the radio handshake once the SSID is encrypted. On an
+open SSID there is no handshake for it to shorten. It does not define a smaller
+roam group.
 
 ---
 

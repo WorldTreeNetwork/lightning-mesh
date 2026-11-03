@@ -1,7 +1,7 @@
 # Why Decentralized Mesh Networking
 
 > Companion doc: [Philosophical outcomes of the architecture](philosophical-outcomes.md)
-> — what the "heterogeneous link islands stitched by L3 routing" design buys, and how
+> — what the "heterogeneous local networks stitched by L3 routing" design buys, and how
 > it places Lightning Mesh in the lineage of Cerf & Kahn.
 
 ## The Problem
@@ -165,7 +165,7 @@ The mesh layer means VMs can be spawned on any node and be instantly reachable b
 
 *Updated 2026-07-02.* The CRDT data plane is shipped and field-validated on a real four-router OpenWrt fleet. `mjolnir-meshd` (`crates/mjolnir-mesh`) runs natively on each router: 802.11s radio backhaul (`br-mesh`), a routed client `/24` per node claimed out of `10.42.0.0/16` via CRDT (first-writer-wins, gossip-converged over Iroh), supervised babel routing between nodes, a derived `10.254.<blake3(node_id)>/16` backhaul-and-management overlay, and a single overlay TUN carrying cross-site Iroh traffic. Client traffic is validated to the internet and cross-LAN. Deploys are in-band with health gates and automatic rollback.
 
-One lesson from the field is worth recording: a local mesh routes most efficiently over its own L2 island. The Iroh L3 overlay is for internet hops and as a first-hop security gateway — not the local fast path.
+One lesson from the field is worth recording: a local mesh routes most efficiently over its own backhaul. The Iroh L3 overlay is for internet hops and as a first-hop security gateway — not the local fast path.
 
 This is a deliberate stepping stone, not the end state. Next: the gossip address book and multi-hop discovery (bead `0yb`), the service-mesh architecture pass — broadcast peer/service discovery and conflict resolution (bead `e21`), and the IPv6-vs-IPv4 addressing decision, since IPv4 `/24` claims hand out a limited resource (bead `bsa`).
 

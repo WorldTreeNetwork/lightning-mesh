@@ -57,7 +57,7 @@ added record may not be visible on all nodes immediately (eventual consistency).
 
 Subnet ownership is CRDT-synced (`/subnets/{cidr}` claim ledger). Each router
 redistributes its own subnet via Babel (`babeld`), which computes loop-free routes
-directly over the 802.11s L2 backhaul for same-island peers and over the `mjolnir0`
+directly over the 802.11s L2 backhaul for on this backhaul peers and over the `mjolnir0`
 iroh overlay for cross-site peers. A node going offline causes Babel to withdraw its
 routes within seconds; other subnets are unaffected. See `babel-routing.md`.
 

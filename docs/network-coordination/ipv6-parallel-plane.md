@@ -137,7 +137,7 @@ selection (LAN DIRECT, hole-punch, relay) — not babel, not “which
 `/24` is this MAC in.”
 
 **No hop through a mesh router to reach another iroh endpoint.** Two
-apps on the same island dial DIRECT. Two apps at different sites dial
+apps on the same backhaul dial DIRECT. Two apps at different sites dial
 over iroh the same way the routers already do. The phone path is
 always `phone → AP → babel [→ mjolnir0] → dest`. The app path does not
 borrow a lease, does not wait for a `/32` to follow it, and does not
