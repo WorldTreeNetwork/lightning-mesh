@@ -112,28 +112,33 @@ What happens:
 3. **Health gate.** On a router that's already meshed, the overlay address and
    a neighbour must come back within 120 s, or it rolls back. A brand-new
    router has no baseline, so the gate is skipped.
+4. **Peers and start.** It rewrites `list peer` from `fleet-nodes.conf` (every
+   other member) and starts `mjolnir-meshd`. The cache is pruned to current
+   apk files on the way.
 
-**Expect:** the script prints `>> OK: applied …` and then the "Next (fresh
-node only)" hints.
+**Expect:** the script prints `>> OK: applied …` and `>> done on`. The daemon
+is running.
 
 **If not:** the router restored its previous config. Read the log:
 ```sh
 ssh root@192.168.1.1 'cat /root/mjolnir-stage/apply.log'
 ```
 
-The installer's closing hint says to keep `backhaul_iface 'br-mesh'`, the
-template default. `br-lan` is only for a wired test bench.
+`backhaul_iface` stays `br-mesh`, the template default. `br-lan` is only for
+a wired test bench.
 
 ## Step 6: Check the install
 
 **Do:**
 ```sh
-ssh root@192.168.1.1 'cat /root/mjolnir-stage/result; sha256sum /usr/bin/mjolnir-meshd'
+ssh root@192.168.1.1 'cat /root/mjolnir-stage/result; sha256sum /usr/bin/mjolnir-meshd; uci show mjolnir.meshd.peer'
 sha256sum deploy/openwrt/mjolnir-meshd-aarch64
 ```
 
-**Expect:** the result file starts with `OK`, and both hashes match.
+**Expect:** the result file starts with `OK`, both hashes match, `mjolnir-meshd`
+is running, and `list peer` is the other ids from `fleet-nodes.conf`.
 
-The daemon isn't started yet on a fresh router. You'll give it peers first.
+If this router's id is not in that file yet, add the member line the installer
+printed, then run `update-fleet.sh` so the routers already listed learn it.
 
 Next: [Join the mesh](03-join-the-mesh.md).

@@ -15,7 +15,7 @@ Verified against commit 2f6dc6b (2026-09-24), docs rewrite vs current hello.mesh
 - [How it works](house/03-how-it-works.md): client AP vs 802.11s; addresses; roaming (DHCP keep-IP, sessions can drop); directory
 - [Administer](house/04-administer.md): overlay SSH; WPS WAN window; Lightning Admin = client SSID only; gateway auto/never
 - [Share a service](house/05-services.md): Apps vs Services; `mjolnir-meshd publish`; `app=v1` for the shelf
-- [Add another router](house/06-add-router.md): PARTIAL — matching wireless.env + **manual peer ids on both boxes**; roam after join
+- [Add another router](house/06-add-router.md): PARTIAL — matching wireless.env + a `fleet-nodes.conf` member line, then install; roam after join
 
 ## Join with a phone or laptop (read in order)
 
@@ -31,7 +31,7 @@ Verified against commit 2f6dc6b (2026-09-24), docs rewrite vs current hello.mesh
 
 - [Choose a router and flash OpenWrt](node/01-hardware-and-flash.md): skip if already pre-flashed; Cudy MT7981 fleet; LFS intermediates; USB RT5370 for client AP on single-radio
 - [Install](node/02-install.md): build.sh, build-hello.sh, wireless.env, install-node.sh
-- [Join the mesh](node/03-join-the-mesh.md): `uci add_list mjolnir.meshd.peer` both ways; no membership gate
+- [Join the mesh](node/03-join-the-mesh.md): inventory member line, then `update-fleet.sh` rewrites peers and starts meshd; no membership gate
 - [Operate](node/04-operate.md): 10.254 overlay; WPS WAN SSH; names; gateway auto/never
 
 ## Publish a service (operators and developers)

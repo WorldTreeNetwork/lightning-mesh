@@ -103,7 +103,7 @@ mic will often stay blocked until trusted HTTPS names exist.
 
 Routers running older software, or ones that don't answer at their LAN
 address, drop out of the map. Everything else still works. Two boxes that
-never exchanged **peer ids** will not show as one mesh — see
+were never both listed in the fleet inventory will not show as one mesh — see
 [Add another router](../house/06-add-router.md).
 
 ## Moving between rooms dropped my call or download

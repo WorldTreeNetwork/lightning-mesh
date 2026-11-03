@@ -3,11 +3,10 @@
 # Config lives in /etc/config/mjolnir (UCI). See deploy/openwrt/README.md and
 # beads mjolnir-mesh-0xu / mjolnir-mesh-w1l (Cudy MT7981 fleet).
 #
-# Install:
-#   scp this file -> /etc/init.d/mjolnir-meshd ; chmod +x ; /etc/init.d/mjolnir-meshd enable
-#   scp the static binary -> /usr/bin/mjolnir-meshd
-#   opkg install babeld kmod-tun
-#   edit /etc/config/mjolnir (peers + backhaul_iface), then: service mjolnir-meshd start
+# Install is deploy/openwrt/install-node.sh. It copies this script, writes
+# `list peer` from the fleet inventory, enables the service, and starts it.
+# Peers are read at start (config_list_foreach below). A UCI commit by itself
+# does not change the running process.
 
 USE_PROCD=1
 # Start late so the backhaul L2 (br-mesh / 802.11s, or the wired bridge) exists.

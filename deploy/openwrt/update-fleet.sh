@@ -23,7 +23,14 @@
 # - Reaching 10.254.x from the workstation needs the jump-host ssh config from
 #   the README ("Fleet rollout" section); unreachable nodes are skipped and
 #   reported, not fatal — power-cycled/absent nodes are normal.
+# - After each apply, rewrites `list peer` from this inventory and restarts
+#   mjolnir-meshd so the running process has that list.
 set -euo pipefail
+
+# install-node.sh writes the inventory peers and, on a direct run, starts
+# meshd. During a rollout it leaves the start to the rewrite below so each
+# node is restarted once, with the member id from this file.
+export MJOLNIR_FLEET_ROLLOUT=1
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=fleet-file.sh
@@ -98,8 +105,10 @@ while IFS='|' read -r -u3 name addr node_id model notes; do
 	fi
 
 	if [ "$STAGE_ONLY" = 0 ]; then
-		echo ">> $name: rendering full inventory peer set"
+		echo ">> $name: rendering full inventory peer set and starting meshd"
 		fleet_render_peers "$CONF" "$node_id" "root@$addr"
+		ssh -o BatchMode=yes -o ConnectTimeout=8 "root@$addr" \
+			'/etc/init.d/mjolnir-meshd enable; /etc/init.d/mjolnir-meshd restart'
 	fi
 
 	# Post-check beyond the node's own health gate: it still routes the mesh.

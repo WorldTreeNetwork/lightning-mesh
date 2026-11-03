@@ -9,7 +9,8 @@
 # under setsid: your SSH session dying during the wifi bounce doesn't matter.
 # The applier health-checks the mesh afterwards and rolls back to the previous
 # config/binary/wpad if it doesn't come back; this script polls for the result.
-# Ethernet at 192.168.1.1 is the recovery of last resort, not a requirement.
+# On OK it rewrites `list peer` from the fleet inventory and starts
+# mjolnir-meshd. Ethernet at 192.168.1.1 is the recovery of last resort.
 #
 # Usage:  deploy/openwrt/install-node.sh [options] root@<node-ip>
 #   --wireless FILE      also run setup-wireless.sh under the applier, with FILE
@@ -21,6 +22,116 @@
 #                        Filled from any node that can reach the feeds; pushed
 #                        to nodes that can't (e.g. a fresh box with no WAN).
 set -euo pipefail
+
+# Drop package files the fleet no longer installs.
+# *.ipk is the OpenWrt 24.10 opkg set. kernel and kmod-* filenames embed the
+# kernel release; only the newest release stays, so an older kmod cannot sort
+# ahead of the one apk will accept. Distinct vermagic builds of that release
+# (kernel-<rel>~<hash>-r1.apk) all stay — kmod filenames do not carry the hash.
+# Every other package keeps the highest version (sort -V).
+pkg_cache_prune() {
+	local dir="$1"
+	[ -d "$dir" ] || return 0
+	local f base name ver rel maxrel top old
+	local -a apks keep
+	local -A best_ver
+	local nullglob_was=0
+	shopt -q nullglob && nullglob_was=1
+	shopt -s nullglob
+	for f in "$dir"/*.ipk; do
+		echo "   cache drop $(basename "$f")"
+		rm -f -- "$f"
+	done
+	apks=("$dir"/*.apk)
+	[ "$nullglob_was" = 1 ] || shopt -u nullglob
+	[ "${#apks[@]}" -gt 0 ] || return 0
+
+	maxrel=""
+	for f in "${apks[@]}"; do
+		base=$(basename "$f" .apk)
+		[[ "$base" =~ ^(.+)-([0-9].*)$ ]] || continue
+		name="${BASH_REMATCH[1]}"
+		ver="${BASH_REMATCH[2]}"
+		case "$name" in
+			kernel|kmod-*) ;;
+			*) continue ;;
+		esac
+		[[ "$ver" =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]] || continue
+		rel="${BASH_REMATCH[1]}"
+		if [ -z "$maxrel" ] || [ "$(printf '%s\n%s\n' "$rel" "$maxrel" | sort -V | tail -n 1)" = "$rel" ]; then
+			maxrel="$rel"
+		fi
+	done
+
+	keep=()
+	for f in "${apks[@]}"; do
+		base=$(basename "$f" .apk)
+		if [[ "$base" =~ ^(.+)-([0-9].*)$ ]]; then
+			name="${BASH_REMATCH[1]}"
+			ver="${BASH_REMATCH[2]}"
+		else
+			keep+=("$f")
+			continue
+		fi
+		case "$name" in
+			kernel|kmod-*)
+				rel=""
+				[[ "$ver" =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]] && rel="${BASH_REMATCH[1]}"
+				if [ -n "$maxrel" ] && [ "$rel" != "$maxrel" ]; then
+					echo "   cache drop $(basename "$f")"
+					rm -f -- "$f"
+					continue
+				fi
+				;;
+		esac
+		keep+=("$f")
+	done
+
+	for f in "${keep[@]}"; do
+		[ -f "$f" ] || continue
+		base=$(basename "$f" .apk)
+		[[ "$base" =~ ^(.+)-([0-9].*)$ ]] || continue
+		name="${BASH_REMATCH[1]}"
+		ver="${BASH_REMATCH[2]}"
+		# Same kernel release, different vermagic hash: keep each file.
+		[ "$name" = kernel ] && continue
+		if [ -z "${best_ver[$name]+x}" ]; then
+			best_ver[$name]="$ver"
+			continue
+		fi
+		top="$(printf '%s\n%s\n' "$ver" "${best_ver[$name]}" | sort -V | tail -n 1)"
+		if [ "$top" = "$ver" ] && [ "$ver" != "${best_ver[$name]}" ]; then
+			for old in "$dir/$name-${best_ver[$name]}.apk"; do
+				[ -f "$old" ] || continue
+				echo "   cache drop $(basename "$old")"
+				rm -f -- "$old"
+			done
+			best_ver[$name]="$ver"
+		elif [ "$ver" != "${best_ver[$name]}" ]; then
+			echo "   cache drop $(basename "$f")"
+			rm -f -- "$f"
+		fi
+	done
+}
+
+# After a prune, drop staged package files the cache no longer keeps so the
+# next pull does not put them back.
+pkg_cache_trim_stage() {
+	local dir="$1" host="$2" stage="$3"
+	[ -d "$dir" ] || return 0
+	find "$dir" -maxdepth 1 -type f -name '*.apk' -printf '%f\n' \
+		| ssh -o BatchMode=yes -o ConnectTimeout=6 "$host" "cat > /tmp/mjolnir-cache-keep
+cd '$stage/pkgs' 2>/dev/null || exit 0
+for f in *; do
+  [ -f \"\$f\" ] || continue
+  case \"\$f\" in
+    *.apk|*.ipk) ;;
+    *) continue ;;
+  esac
+  grep -qxF \"\$f\" /tmp/mjolnir-cache-keep || rm -f \"\$f\"
+done
+rm -f /tmp/mjolnir-cache-keep"
+}
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=fleet-file.sh
@@ -102,6 +213,11 @@ if [ -n "$WIRELESS_ENV" ]; then
 	RUN_WIRELESS=1
 fi
 
+# ---- package cache: keep only files a current node can install ---------------
+mkdir -p "$PKG_CACHE"
+echo ">> pruning $PKG_CACHE"
+pkg_cache_prune "$PKG_CACHE"
+
 # ---- prefetch packages on the node while connectivity is still good ----------
 # The apply may bounce the radio that IS this node's egress (mesh-fed nodes),
 # so packages must be local files before anything disruptive starts. apk names
@@ -160,9 +276,17 @@ if [ -n "${MISSING// /}" ]; then
 	done
 fi
 
-# Pull whatever the node has back into the cache, so the NEXT no-WAN box works.
+# Pull whatever the node has back into the cache, so the NEXT no-WAN box works,
+# then drop anything the prune rule rejects (an old stage would refill it).
+# A failed pull leaves the node's stage alone: trimming against a cache that
+# missed this fetch would delete the only local copy of a package.
 mkdir -p "$PKG_CACHE"
-scp -O "$HOST:$STAGE/pkgs/*" "$PKG_CACHE/" 2>/dev/null || true
+if scp -O "$HOST:$STAGE/pkgs/*" "$PKG_CACHE/" 2>/dev/null; then
+	pkg_cache_prune "$PKG_CACHE"
+	pkg_cache_trim_stage "$PKG_CACHE" "$HOST" "$STAGE"
+else
+	echo ">> package pull-back failed; node's stage left as staged"
+fi
 
 # ---- applier parameters -------------------------------------------------------
 ssh "$HOST" "cat > $STAGE/apply.env" <<EOF
@@ -246,22 +370,35 @@ case "$RES" in
 		# `status` prints the id from the secret. `mjolnir-meshd id` opens an
 		# endpoint and exits until a house /128 is usable on br-mesh, so a
 		# fresh node with no /etc/mjolnir/house-guild-id would skip peers.
+		rendered=0
+		node_id=""
 		if node_id=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "$HOST" \
 			'mjolnir-meshd status --secret-file /etc/mjolnir/secret' \
 			| sed -n 's/^  node id:  \([0-9a-fA-F]\{64\}\)$/\1/p') \
 			&& fleet_valid_node_id "$node_id"; then
 			echo ">> rendering inventory peers on $HOST"
 			fleet_render_peers "$CONF" "$node_id" "$HOST"
+			rendered=1
 		else
-			echo ">> peer render skipped on $HOST: node id command failed or returned no valid id"
+			echo ">> peer render skipped on $HOST: status did not print a node id"
+			node_id=""
+		fi
+		# update-fleet.sh rewrites this same list and starts meshd once.
+		# A direct install starts it here, including when no peers were written.
+		if [ "${MJOLNIR_FLEET_ROLLOUT:-0}" = 1 ] && [ "$rendered" = 1 ]; then
+			echo ">> mjolnir-meshd start is the next step in update-fleet.sh"
+		else
+			echo ">> starting mjolnir-meshd on $HOST"
+			ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" \
+				'/etc/init.d/mjolnir-meshd enable; /etc/init.d/mjolnir-meshd restart'
 		fi
 		cat <<EOF
->> done on $HOST. Next (fresh node only):
-   1. record this node's id in $CONF, then run update-fleet.sh so existing
-      members receive the new id in their peer lists
-   2. keep backhaul_iface 'br-mesh' (the fleet default; pass --wireless <env-file>
-      or run /root/setup-wireless.sh to build it). 'br-lan' is wired-bench only
-   3. ssh $HOST 'service mjolnir-meshd start && logread -e mjolnir_meshd'
+>> done on $HOST.
+   Peers are the other members of $CONF. The daemon is started with that list.
+   This node's id: ${node_id:-<not read>}
+   If that id is not a member line in the inventory yet, add it and run
+   update-fleet.sh so the routers already in the file learn it.
+   backhaul_iface stays 'br-mesh' (pass --wireless, or /root/setup-wireless.sh).
 EOF
 		;;
 	*)

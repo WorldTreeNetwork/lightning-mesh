@@ -77,7 +77,7 @@ administration is SSH or Lightning Admin, covered in
 | `http://hello.mesh` | Front desk loads |
 | A website on the public internet | Loads if **any** mesh router has a working WAN; otherwise only local mesh works |
 | Apps / Services | Empty until someone publishes. That is normal on a new house |
-| A second pre-flashed box, powered nearby, same client SSID | Radios are up; they are **not** one mesh until you exchange peer ids — [Add another router](06-add-router.md) |
+| A second pre-flashed box, powered nearby, same client SSID | Radios are up; they are **not** one mesh until the fleet inventory lists both and install has run — [Add another router](06-add-router.md) |
 
 Internet sharing is automatic (`gateway=auto`). If this box is on a
 metered or captive network, do not share: see

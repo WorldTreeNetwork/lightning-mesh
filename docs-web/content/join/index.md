@@ -36,7 +36,7 @@ after two minutes, it was not pre-flashed. Use the flash path, not Unbox.
 3. [How it works](house/03-how-it-works.md): client Wi-Fi vs backhaul, addresses, roaming, directory.
 4. [Administer](house/04-administer.md): names, internet sharing, SSH, Lightning Admin.
 5. [Share a service](house/05-services.md): `.mesh` names and the Apps shelf.
-6. [Add another router](house/06-add-router.md): second box — **SSH peer exchange is still required**.
+6. [Add another router](house/06-add-router.md): second box — add it to the fleet inventory, then install. Powering it on does not join it.
 
 ## The path for a new person
 
@@ -67,7 +67,7 @@ promise that every box in a mixed fleet has been updated.
 | Sign-in from another tab (`/assert`) **and** from an Apps card | Reviewing or revoking remembered app approvals (clear site data) |
 | `.mesh` names, operator publish, key-owned name API | Claiming a pretty name from the hello.mesh UI |
 | **Apps shelf** on hello.mesh (`app=v1` + manifest) | Key-qualified trusted HTTPS names; fleet deployment is not established. Walk-up stays `http://hello.mesh` |
-| Adding routers, automatic internet sharing | A membership gate; **automatic** peering (you still paste node ids) |
+| Adding routers, automatic internet sharing | A membership gate; a second box joining with no inventory line |
 
 ## Reading this guide as an agent
 

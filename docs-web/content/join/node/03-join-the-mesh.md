@@ -1,7 +1,7 @@
 ---
 id: node.join
 title: Join the mesh
-description: Give the new router its peers, start the daemon, and verify it is routing with the rest of the mesh.
+description: Record the new router in the fleet inventory and verify it is routing with the rest of the mesh.
 path: node
 order: 3
 audience: [operator, agent]
@@ -14,14 +14,18 @@ verified_against: 2f6dc6b (2026-09-24)
 
 # Join the mesh
 
-A new router joins by knowing at least one other router's **node id**, and
-by being known in return. After that, everything else is automatic:
+Install already started `mjolnir-meshd` and wrote `list peer` from
+`fleet-nodes.conf`: every other member, not a list typed on the router.
+A new router joins once that file has its id and the routers already in the
+file have been installed again so they learn it. After that, the rest is
+automatic:
 - a `10.254.x.y` overlay address derived from its identity
 - a `/24` of client addresses claimed without a coordinator
 - routes learned by babel
 
-> **Status: built**, with one manual chore: peer lists are edited by hand on
-> each node. Identity-peering / zero-touch join is designed, not shipped.
+> **Status: built.** Peer lists come from the fleet inventory at install.
+> A box that is only powered on, with no inventory line, does not join.
+> Identity-peering / zero-touch join is designed, not shipped.
 
 ## How joining works
 
@@ -54,47 +58,46 @@ ssh root@192.168.1.1 'mjolnir-meshd status --secret-file /etc/mjolnir/secret'
 a router has only after it is in a house. `service mjolnir-meshd diag` prints
 the same status.
 
-## Step 2: Tell the new router about its peers
+## Step 2: Put this router in the inventory
 
-**Do:** on the new router, add one `list peer` line per other router, and
-give it a name:
-```sh
-ssh root@192.168.1.1 "uci add_list mjolnir.meshd.peer='<node-id-of-router-A>'; \
-  uci add_list mjolnir.meshd.peer='<node-id-of-router-B>'; \
-  uci set mjolnir.meshd.name='kitchen'; uci commit mjolnir"
+**Do:** append a member line to
+[`deploy/openwrt/fleet-nodes.conf`](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/deploy/openwrt/fleet-nodes.conf):
+
+```text
+name|10.254.x.y|<node-id>|model|notes
 ```
 
-Maintainers of the live fleet keep ids in
-[`deploy/openwrt/fleet-nodes.conf`](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/deploy/openwrt/fleet-nodes.conf).
-Add **every** other router, not just one. A chain of single peers once split
-the fleet into two gossip islands.
+The id is the one from step 1. The address is the `10.254.x.y` column
+`mjolnir-meshd status` prints. Place the line in leaf-first order, above
+the jump node.
 
-**Expect:** `uci show mjolnir.meshd.peer` lists the ids.
+**Expect:** the line has a name, a `10.254` address, and 64 hex characters.
+A line with `-` in the address or the id is recorded hardware, not a peer.
 
-## Step 3: Tell the existing routers about the new one
+## Step 3: Let the existing routers learn it
 
-**Do:** on each existing router (reach them at their `10.254.x.y` address):
+**Do:** from a checkout that has the new line:
 ```sh
-ssh root@10.254.x.y "uci add_list mjolnir.meshd.peer='<new-router-node-id>'; uci commit mjolnir; service mjolnir-meshd restart"
+deploy/openwrt/update-fleet.sh
 ```
 
-If you maintain an inventory, append a line to `fleet-nodes.conf` in the
-form `name|10.254.x.y|node_id|model|notes`.
+That re-runs install on each reachable member, rewrites `list peer` to the
+full inventory (every other member, not a chain of one), and restarts
+`mjolnir-meshd`. This router's own install already peered whoever was in the
+file at that time. The rollout is what teaches the existing routers the new
+id. Rollout SSH uses the `10.254` column, so this router is included once
+that address answers.
 
-## Step 4: Start the daemon
-
-**Do:**
-```sh
-ssh root@192.168.1.1 'service mjolnir-meshd start && logread -e "mjolnir-meshd starting"'
-```
-
-**Expect:** a startup line with `version=` and `build=`. The `build=` short
-SHA must be the same on every router in the mesh.
+**Expect:** `uci show mjolnir.meshd.peer` on each router lists the other ids.
+`logread -e "mjolnir-meshd starting"` shows `version=` and `build=`. The
+`build=` short SHA must be the same on every router in the mesh.
 
 **If not:** routers on different builds are the first suspect for any
-strange behaviour. Update them all to one build.
+strange behaviour. Update them all to one build. A chain of single peers
+once split the fleet into two gossip islands; the inventory write replaces
+the whole list, so do not add peers one id at a time over SSH.
 
-## Step 5: Verify it joined
+## Step 4: Verify it joined
 
 Run these on the new router (`ssh root@192.168.1.1 '…'`):
 
@@ -117,7 +120,7 @@ peers, routes to the other subnets, and a working front desk.
 - No radio peers: `MESH_ID`, `MESH_KEY`, band, channel or country don't match.
 - Radio peers but no routes: check `backhaul_iface` is `br-mesh`, then
   `service mjolnir-meshd diag`.
-- Routes but no gossip lines: peer ids are missing on one side (steps 2–3).
+- Routes but no gossip lines: this id is missing from `fleet-nodes.conf`, or `update-fleet.sh` has not run since it was added (steps 2–3).
 
 Next: [Operate your node](04-operate.md). Or, to use the mesh from a phone:
 [Connect to the Wi-Fi](../person/01-connect.md).

@@ -17,9 +17,9 @@ verified_against: 2f6dc6b (2026-09-24)
 One box is a house Wi-Fi with a local front desk. A second box is a mesh:
 walk between rooms, share one WAN, see both under Routers.
 
-> **Status: partial.** Radios and routing work. **Peering is still
-> manual.** Powering a second pre-flashed box does **not** join it to the
-> first. You paste 64-character node ids over SSH on both boxes.
+> **Status: partial.** Radios and routing work. Powering a second box does
+> **not** join it. Install writes `list peer` from `fleet-nodes.conf` and
+> starts the daemon. A box with no member line in that file is not a peer.
 > Automatic discovery (without treating association as trust) is in
 > progress, not on the box.
 
@@ -42,31 +42,23 @@ on either radio. They are **not** yet exchanging routes or directory.
 **If not:** they were flashed with different `wireless.env`. Re-flash or
 re-apply wireless from [Install](../node/02-install.md).
 
-### Step 2: Exchange node ids (required)
+### Step 2: One inventory line, then install
 
-There is no membership gate and no zero-touch join yet. Each daemon must
-list the other as a peer.
+There is no membership gate and no zero-touch join yet. Each daemon peers
+the other members of `fleet-nodes.conf`.
 
-**Do:** on each box (recovery ethernet `root@192.168.1.1` or overlay SSH):
+**Do:** read the id (`status` reads the secret; `mjolnir-meshd id` exits
+until a house `/128` is usable on `br-mesh`):
 
 ```sh
 mjolnir-meshd status --secret-file /etc/mjolnir/secret
 ```
 
-(`status` reads the secret. `mjolnir-meshd id` exits until a house `/128`
-is usable on `br-mesh`. `service mjolnir-meshd diag` prints the same
-status.)
-
-Then on box A, add B's id; on box B, add A's id:
-
-```sh
-uci add_list mjolnir.meshd.peer='<64-hex-id>'
-uci commit mjolnir
-service mjolnir-meshd restart
-```
-
-Add **every** other router, not just one. A chain of single peers has
-split a fleet into two gossip islands.
+Add a member line for the new box (`name|10.254.x.y|<64-hex-id>|model|notes`),
+then run `deploy/openwrt/update-fleet.sh` from a checkout that has that
+line. Install rewrites the whole peer list on each reachable router and
+starts `mjolnir-meshd`. Add **every** router to the file. A chain of single
+peers has split a fleet into two gossip islands.
 
 Exact verify steps (station dump, babel routes, gossip, `/api/health`):
 [Join the mesh](../node/03-join-the-mesh.md).

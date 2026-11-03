@@ -113,7 +113,7 @@ names you opened from hello.mesh. Details:
 | Private resident Wi-Fi by default | Open client SSID unless you set a password at flash time |
 | Membership gate for adding routers | Matching radio settings is enough to join the backhaul |
 | Seamless roam while on a call | Same SSID; IP often kept; sessions can still drop |
-| Automatic peering of a second box | You still paste node ids over SSH |
+| A second box joining with no inventory line | Install writes peers from `fleet-nodes.conf` and starts the daemon |
 | Trusted HTTPS for `.mesh` | Certificate warning; GPS on hello.mesh often blocked |
 
 Treat those as design, not as knobs on the box you just plugged in.

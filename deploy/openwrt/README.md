@@ -49,7 +49,10 @@ scripts, `setup-wireless.sh`, and the applier to `/root/mjolnir-stage`, and
 prefetches the packages (`babeld`, `kmod-tun`, both `wpad` variants) as local
 files — via the node's feeds when it has internet, else from the local
 `deploy/openwrt/pkg-cache/` (auto-filled from any node that *can* fetch; a
-fresh box with no WAN installs entirely from the cache). **Apply** (detached):
+fresh box with no WAN installs entirely from the cache). Each run prunes that
+cache: opkg `*.ipk` files go, kernel and `kmod-*` files keep only the newest
+kernel release in the cache, and every other package keeps its newest
+version. **Apply** (detached):
 `mjolnir-apply` runs on the node under `setsid`, so the SSH session dying
 mid-wifi-bounce doesn't matter. It snapshots configs/binary/wpad, applies
 idempotently (the `wpad-basic`→`wpad-mesh` swap is **skipped once done** — 
@@ -63,10 +66,13 @@ comes back up on the old config. `install-node.sh` polls
 without applying.
 
 On a **fresh** node it also drops the UCI config template; on an existing node
-it leaves `/etc/config/mjolnir` untouched (your peers survive). It does **not**
-start meshd — you set peers first. Fresh nodes have no health baseline (no
-peers, no `10.254.x` neighbours), so the gate is skipped — there is nothing to
-regress.
+it leaves the rest of `/etc/config/mjolnir` untouched. After a successful
+apply it rewrites `list peer` from the selected fleet inventory (every other
+member's node id) and starts `mjolnir-meshd`, so the running process is using
+that list. A router that is not in the inventory yet is not peered by anyone
+else: add its member line, then `update-fleet.sh`. Fresh nodes have no health
+baseline (no `10.254.x` neighbours), so the gate is skipped — there is nothing
+to regress.
 
 `kmod-tun` is **required** whenever per-peer iroh tunnels run (`lan_tunnels=1` or
 `mode internet`): without it `/dev/net/tun` is absent and a tunnel fails to come
@@ -298,19 +304,18 @@ currently triggers a daemon hang shortly after a tunnel forms
 
 ## Configure & run
 
-Edit `/etc/config/mjolnir`, then start the service:
+`install-node.sh` writes peers from the fleet inventory and starts the daemon.
+What is left on the node is the options in `/etc/config/mjolnir` that are not
+the peer list (name, gateway, mode). The id is stable, from the persistent secret:
 
 ```sh
-# this node's id (stable, derived from the persistent secret):
 ssh root@<node> 'mjolnir-meshd status --secret-file /etc/mjolnir/secret'
-
-# add the OTHER nodes' ids to /etc/config/mjolnir   (list peer '<64-hex-id>')
-# run /root/setup-wireless.sh and set backhaul_iface: 'br-mesh' for the
-#   802.11s backhaul (backhaul_iface: 'br-lan' is bench-only, superseded —
-#   the fleet runs 802.11s 'br-mesh').
-
-ssh root@<node> 'service mjolnir-meshd start && logread -e mjolnir_meshd'
+ssh root@<node> 'service mjolnir-meshd diag'
 ```
+
+`backhaul_iface` stays `br-mesh` (the 802.11s bridge from `setup-wireless.sh`).
+`br-lan` is a wired bench only. `mjolnir-meshd id` exits until a house `/128`
+is usable on `br-mesh`; `status` does not.
 
 The daemon defaults to `--lan` (offline, no relay). meshd self-assigns its
 `10.254.0.0/16` backhaul address on `backhaul_iface` and pins iroh's socket to

@@ -68,7 +68,9 @@ deploy/openwrt/update-fleet.sh --wireless deploy/openwrt/fleet-secrets/wireless.
 deploy/openwrt/validate-fleet.sh               # read-only sweep afterwards
 ```
 It halts on the first failure (that router has already rolled itself back),
-and skips unreachable routers. Unchanged binaries aren't restarted.
+and skips unreachable routers. An unchanged binary does not bounce Wi-Fi.
+The installer still restarts `mjolnir-meshd` after it writes the inventory
+peer list, so the running process matches that list.
 
 ## Rename routers and the network
 
