@@ -50,11 +50,12 @@ list the other as a peer.
 **Do:** on each box (recovery ethernet `root@192.168.1.1` or overlay SSH):
 
 ```sh
-mjolnir-meshd id --secret-file /etc/mjolnir/secret
+mjolnir-meshd status --secret-file /etc/mjolnir/secret
 ```
 
-(`id` briefly starts a network endpoint. On a **live** node prefer
-`service mjolnir-meshd diag` and read the id from there.)
+(`status` reads the secret. `mjolnir-meshd id` exits until a house `/128`
+is usable on `br-mesh`. `service mjolnir-meshd diag` prints the same
+status.)
 
 Then on box A, add B's id; on box B, add A's id:
 

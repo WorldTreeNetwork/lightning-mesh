@@ -243,8 +243,12 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" "tail -25 $STAGE/apply.log" 2>/
 
 case "$RES" in
 	OK*)
+		# `status` prints the id from the secret. `mjolnir-meshd id` opens an
+		# endpoint and exits until a house /128 is usable on br-mesh, so a
+		# fresh node with no /etc/mjolnir/house-guild-id would skip peers.
 		if node_id=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "$HOST" \
-			'mjolnir-meshd id --secret-file /etc/mjolnir/secret' | sed -n 's/^node id: //p') \
+			'mjolnir-meshd status --secret-file /etc/mjolnir/secret' \
+			| sed -n 's/^  node id:  \([0-9a-fA-F]\{64\}\)$/\1/p') \
 			&& fleet_valid_node_id "$node_id"; then
 			echo ">> rendering inventory peers on $HOST"
 			fleet_render_peers "$CONF" "$node_id" "$HOST"

@@ -44,14 +44,15 @@ by being known in return. After that, everything else is automatic:
 
 **Do:**
 ```sh
-ssh root@192.168.1.1 'mjolnir-meshd id --secret-file /etc/mjolnir/secret'
+ssh root@192.168.1.1 'mjolnir-meshd status --secret-file /etc/mjolnir/secret'
 ```
 
-**Expect:** a 64-character hex node id.
+**Expect:** a line `node id:` followed by 64 hex characters.
 
-`mjolnir-meshd id` briefly starts a network endpoint. Run it on a router
-whose daemon isn't running yet (true at this point), not on a busy live
-node. For live nodes use `service mjolnir-meshd diag`, which is read-only.
+`mjolnir-meshd status` reads the secret and does not open an endpoint.
+`mjolnir-meshd id` exits until a house `/128` is usable on `br-mesh`, which
+a router has only after it is in a house. `service mjolnir-meshd diag` prints
+the same status.
 
 ## Step 2: Tell the new router about its peers
 

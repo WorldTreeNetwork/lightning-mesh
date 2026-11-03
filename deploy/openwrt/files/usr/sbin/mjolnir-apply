@@ -96,27 +96,58 @@ pkg_file_deps() {
 		d { exit }'
 }
 
-# The staged-file dependency CLOSURE of package $1 (mjolnir-mesh-9dj):
+# Staged apk/ipk files for package $1, one path per line.
+# A kmod filename embeds the kernel release (`kmod-tun-6.12.94-r1.apk`). The
+# cache often also holds an older kernel's file, and that name sorts first
+# (`6.12.87` before `6.12.94`), so the first glob match is the one apk will
+# reject. Files for `uname -r` come first; the rest follow as fallbacks.
+pkg_candidates() {
+	local name="$1" rel f seen
+	rel=$(uname -r 2>/dev/null) || rel=""
+	seen=" "
+	if [ -n "$rel" ]; then
+		for f in "$STAGE/pkgs/$name-$rel"-*.apk "$STAGE/pkgs/$name"_"$rel"*.ipk; do
+			[ -f "$f" ] || continue
+			case " $seen " in *" $f "*) continue ;; esac
+			seen="$seen $f "
+			printf '%s\n' "$f"
+		done
+	fi
+	for f in "$STAGE/pkgs/$name"-[0-9]*.apk "$STAGE/pkgs/$name"_*.ipk; do
+		[ -f "$f" ] || continue
+		case " $seen " in *" $f "*) continue ;; esac
+		seen="$seen $f "
+		printf '%s\n' "$f"
+	done
+}
+
+pkg_best_file() {
+	pkg_candidates "$1" | head -n 1
+}
+
+# The staged-file dependency CLOSURE of root package FILE $1 (mjolnir-mesh-9dj):
 # `apk add --no-network` resolves deps only among the files it is HANDED, so a
 # lone kmod file fails when its dep chain isn't installed. Walk depends:
 # breadth-first over stage/pkgs, skipping deps that are already installed, and
 # echo every file apk needs to see in one `add`.
 pkg_closure_files() {
-	local queue="$1" seen=" $1 " files="" name f dep
+	local rootf="$1" queue="" seen=" " files="" name f dep
+	[ -f "$rootf" ] || return 1
+	files="$rootf"
+	queue=$(pkg_file_deps "$rootf" | awk 'NF { printf "%s ", $0 }')
 	while [ -n "$queue" ]; do
-		name="${queue%% *}"
-		[ "$name" = "$queue" ] && queue="" || queue="${queue#* }"
-		for f in "$STAGE/pkgs/$name"-[0-9]*.apk; do
-			[ -f "$f" ] || continue
-			files="$files $f"
-			for dep in $(pkg_file_deps "$f"); do
-				case "$seen" in *" $dep "*) continue ;; esac
-				seen="$seen$dep "
-				pm_installed "$dep" && continue
-				# no staged file for it? apk will name it in its error — queue anyway
-				queue="${queue:+$queue }$dep"
-			done
-			break
+		name=${queue%% *}
+		if [ "$name" = "$queue" ]; then queue=""; else queue=${queue#* }; fi
+		[ -n "$name" ] || continue
+		case " $seen " in *" $name "*) continue ;; esac
+		seen="$seen $name "
+		pm_installed "$name" && continue
+		f=$(pkg_best_file "$name") || continue
+		[ -n "$f" ] || continue
+		files="$files $f"
+		for dep in $(pkg_file_deps "$f"); do
+			case " $seen " in *" $dep "*) continue ;; esac
+			queue="${queue:+$queue }$dep"
 		done
 	done
 	echo "$files"
@@ -124,19 +155,22 @@ pkg_closure_files() {
 
 pkg_local_install() {
 	local f files
-	for f in "$STAGE/pkgs/$1"-[0-9]*.apk "$STAGE/pkgs/$1"_*.ipk; do
-		[ -f "$f" ] || continue
-		if command -v apk >/dev/null 2>&1; then
-			files=$(pkg_closure_files "$1")
+	if command -v apk >/dev/null 2>&1; then
+		for f in $(pkg_candidates "$1"); do
+			files=$(pkg_closure_files "$f") || continue
 			log "installing $1 from prefetched:$files"
 			# shellcheck disable=SC2086 -- the file list is intentionally word-split
 			apk add --no-network --allow-untrusted $files && return 0
-		else
-			# opkg resolves deps against its own feeds only; single-file install
-			# covers the no-extra-deps cases (babeld/wpad on an otherwise-stock node)
-			log "installing $1 from prefetched $f"
-			opkg install "$f" && return 0
-		fi
+			log "staged $(basename "$f") rejected; trying the next candidate"
+		done
+		log "no prefetched file for $1 (or local install failed)"
+		return 1
+	fi
+	# opkg resolves deps against its own feeds only; single-file install
+	# covers the no-extra-deps cases (babeld/wpad on an otherwise-stock node)
+	for f in $(pkg_candidates "$1"); do
+		log "installing $1 from prefetched $f"
+		opkg install "$f" && return 0
 	done
 	log "no prefetched file for $1 (or local install failed)"
 	return 1

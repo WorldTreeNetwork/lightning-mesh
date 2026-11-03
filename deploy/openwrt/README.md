@@ -203,9 +203,10 @@ New box? Stock Cudy only takes a signed image. Cudy-signed intermediates live
 in [`vendor-firmware/`](vendor-firmware/) (Git LFS — `git lfs pull` after
 clone). Flash the matching board bin from the stock web UI, then official
 OpenWrt sysupgrade, then provision over ethernet (`install-node.sh
-root@192.168.1.1`, then `--wireless`), get its id (`mjolnir-meshd id`), and
+root@192.168.1.1`, then `--wireless`), get its id (`mjolnir-meshd status`), and
 add its line to the installation file (`fleet-nodes.conf` for the current
-one). Design rationale:
+one). `mjolnir-meshd id` will not print an id until a house `/128` is usable
+on `br-mesh`. Design rationale:
 `docs/deploy/node-operations.md`. Wrong intermediate (indoor vs Outdoor vs
 Wall) bricks the box.
 
@@ -301,7 +302,7 @@ Edit `/etc/config/mjolnir`, then start the service:
 
 ```sh
 # this node's id (stable, derived from the persistent secret):
-ssh root@<node> 'mjolnir-meshd id --secret-file /etc/mjolnir/secret'
+ssh root@<node> 'mjolnir-meshd status --secret-file /etc/mjolnir/secret'
 
 # add the OTHER nodes' ids to /etc/config/mjolnir   (list peer '<64-hex-id>')
 # run /root/setup-wireless.sh and set backhaul_iface: 'br-mesh' for the
