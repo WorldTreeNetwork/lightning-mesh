@@ -171,7 +171,8 @@ stock `babeld` service so the two don't both run. Note babeld 1.13 exits on
 
 The current installation is `fleet-nodes.conf` (name, fallback SSH address,
 node id, model, notes, group; leaf-first order, wired jump node last).
-Peers are the other members of the same group (`house` or `bench`). Another
+Peers are the other members of the same group (`house`, `bench`, or `away`
+for a kept id that is not on this backhaul). Another
 installation is a separate file: `LIGHTNING_FLEET_FILE=/path/to.conf`, or
 `LIGHTNING_FLEET=<name>` for gitignored `fleet.d/<name>.conf` (template
 `fleet.d/installation.conf.example`). `deploy/openwrt/fleet-file.sh` resolves that.

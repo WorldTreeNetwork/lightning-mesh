@@ -17,6 +17,7 @@
 # `name|-|-|model|notes` records hardware with no node id yet. Rollout skips it.
 # `group` defaults to `house` when the column is empty. Gossip peers are the
 # other members of the same group. `bench` is a cabled unit, not a house peer.
+# `away` keeps a node id that is not on this backhaul and is not a house peer.
 # ssh_addr is the fallback dial address. fleet_dial_addr prefers the scan.
 #
 # Source this file. `fleet_conf <deploy/openwrt dir>` prints the path.
