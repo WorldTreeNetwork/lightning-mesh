@@ -3,6 +3,8 @@
 	import '../app.css';
 	import { applyAppearance, readAppearance } from '$lib/theme';
 
+	import AppShell from '$lib/shell/AppShell.svelte';
+
 	let { children } = $props();
 
 	onMount(() => {
@@ -17,4 +19,6 @@
 	});
 </script>
 
-{@render children()}
+<AppShell>
+	{@render children()}
+</AppShell>
