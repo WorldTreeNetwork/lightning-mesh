@@ -1,8 +1,9 @@
 # Work tracking
 
-Authoritative owed work is bead mjolnir-mesh-ai0.3. It remains open until independent
-review, resolution of blocking findings, and contract acceptance are recorded.
-No duplicate markdown task list is maintained under this project's beads policy.
-Absence of checkboxes is not completion evidence and does not authorize folding.
+`mjolnir-mesh-ai0.3` is closed. Opus r2 accepted the trust contract, including
+delegated timing and physical recovery policy. That close is the contract,
+not a runtime fold. Do not archive these SHALLs as shipped behavior.
 
-Downstream implementation is tracked by bf7.1, ai0.1, ai0.9 and b6j.2.
+Downstream runtime remains `mjolnir-mesh-ai0.1` and `mjolnir-mesh-b6j.2`.
+Owner claim (`mjolnir-mesh-bf7.1`) and record checks (`mjolnir-mesh-ai0.9`)
+have folded into their own living specs.

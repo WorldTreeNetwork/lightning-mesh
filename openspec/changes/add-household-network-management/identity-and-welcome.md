@@ -2,7 +2,8 @@
 
 > 2026-09-14 refinement. User decision: one initial owner delegates to admins,
 > members, and guests. Everyone connecting should be invited to discover the hub
-> and optionally create an identity. Implementation remains PENDING.
+> and optionally create an identity. The welcome shipped in
+> `house-hub-welcome`. Delegated grant runtime remains open on `mjolnir-mesh-ai0.1`.
 
 ## Evidence after pulling latest
 

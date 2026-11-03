@@ -1,7 +1,7 @@
 # Household configuration model and hardware inputs
 
-> Proposed design, 2026-09-14; `add-household-network-management` is PENDING.
-> This is not a live inventory or a claim that these modes are implemented.
+> Proposed design, 2026-09-14. Folded slices are listed in `tasks.md`.
+> The rest of this model is still proposed. This is not a live inventory.
 
 ## 1. Current evidence
 

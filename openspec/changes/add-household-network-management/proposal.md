@@ -14,7 +14,13 @@ identity do not provide secure fleet commissioning or topology policy.
 Implement the configuration model, capability-gated topology choices, ownership
 and recovery, and shared web/desktop workflows through the `mjolnir-mesh-ai0`
 dependency graph. Activation is authorization to build, not evidence that a
-capability has shipped. Living specs remain unchanged until verified work folds.
+capability has shipped. Living specs change only when a child change folds.
+
+Reconciled 2026-11-03. Folded slices are listed in [tasks.md](tasks.md):
+welcome, owner claim, durable apply, wired profiles, private Wi-Fi plan,
+uplink plan, and admin record checks. Still owed: grant engine (`ai0.1`),
+signed control (`b6j.2`), visible shared admin (`bf7.7`), link policy
+(`ai0.8`), hardware qualification (`lpv`), and observed use (`isnx`).
 
 Design: [technical model and hardware inputs](design.md).
 Experience: [brief](../../../.design/household-network/DESIGN_BRIEF.md) and
@@ -23,10 +29,9 @@ Requirements: [draft delta](specs/household-network-management/spec.md).
 
 ## Relationship to existing work
 
-- `mjolnir-mesh-bf7`: earlier fleet admin epic. Retain symmetric target-node
-  authorization, fleet navigation, and reversible uplink configuration. Propose
-  replacing hidden entry with the user-confirmed visible authenticated entry;
-  raw owner-list mutation is addressed by the delegated authority proposal.
+- `mjolnir-mesh-bf7`: earlier fleet admin epic. Its six children are closed.
+  Secret-knock entry is superseded. Owner claim and Wi-Fi uplink folded under
+  `ai0`. The visible authenticated entry remains `mjolnir-mesh-bf7.7`.
 - `mjolnir-mesh-b6j.2`: reuse the proposed signed control envelope, installed signer,
   physical pairing, destination verification, and receipts. The newer
   [secure-context proposal](../../../docs/network-coordination/secure-context-and-control-plane.md)

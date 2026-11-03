@@ -1,38 +1,30 @@
 # household-network-management
 
-> Proposed requirements. PENDING; no claim of current implementation.
+> Reconciled 2026-11-03. Folded slices live in `openspec/specs/`. The
+> requirements below are still proposed. They are not a claim that the
+> folded slices are unimplemented.
+
+## Landed elsewhere
+
+- One client SSID, member and unidentified flows, published names, management plane closed, builder does not touch the live radio: `private-household-wifi`. Live radio apply remains `mjolnir-mesh-lpv`.
+- hello.mesh without forced identity: `house-hub-welcome`.
+- Owner ceremony and two-factor recovery: `household-owner-claim`.
+- Durable plans, receipts, and recovery: `network-change-transactions`.
+- Port roles and wired-core separation: `node-connection-profiles`.
+- Station uplink, lease is not internet, restore on failure: `wifi-internet-uplink`.
+- Consumers verify owner-signed admin records: `admin-record-integrity`.
+
+The accepted trust contract is bead `mjolnir-mesh-ai0.3`. It does not ship the grant engine.
 
 ## ADDED Requirements
-
-### Requirement: One client SSID and three classes
-
-The household setup profile SHALL use one client SSID. It SHALL NOT offer a
-second SSID for visitors or for a QoS class. Client flows SHALL be a published
-service, a member, or unidentified. When the link is busy, verified member
-flows SHALL be scheduled ahead of unidentified flows, with no rate cap. A
-published `.mesh` name SHALL stay reachable from every client on the SSID.
-Creating an identity SHALL NOT be required for internet access or for those
-names. SSID association SHALL NOT count as membership.
-
-#### Scenario: Owner sets up household Wi-Fi
-
-- GIVEN a new household setup
-- WHEN the owner reviews the default Wi-Fi profile
-- THEN there is one client SSID and no guest SSID
-- AND a verified member is scheduled ahead of an unidentified client when the link is busy
-- AND neither internet access nor anonymous hub browsing requires identity creation
-
-#### Scenario: Existing open deployment is reviewed
-
-- GIVEN deployed nodes currently broadcast an open SSID
-- WHEN this design decision is recorded or displayed
-- THEN no live radio settings change without an explicit reviewed apply
 
 ### Requirement: Visible authenticated administration entry
 
 The public hub SHALL provide a visible “Manage network” entry. Privileged actions
 SHALL require authentication and scoped destination authorization. Claiming a new
 node SHALL require physical proof; discovering the entry SHALL NOT grant access.
+
+Owed by `mjolnir-mesh-bf7.7` and `mjolnir-mesh-b6j.2`. Secret-knock entry is superseded.
 
 #### Scenario: Visitor opens Manage network
 
@@ -48,6 +40,9 @@ as scoped grants. Agency SHALL use the IdentiKey Biscuit format with a defined
 mesh profile, destination verification, and no authority inferred from membership.
 A second owner SHALL NOT be required for setup. Recovery SHALL be explicit.
 
+The ceremony is `household-owner-claim`. Issuance and destination checks remain
+`mjolnir-mesh-ai0.1`. Signed transport remains `mjolnir-mesh-b6j.2`.
+
 #### Scenario: Admin exceeds a delegated node scope
 
 - GIVEN an admin grant permits Wi-Fi changes on Hall only
@@ -61,39 +56,14 @@ A second owner SHALL NOT be required for setup. Recovery SHALL be explicit.
 - THEN the system does not treat Alice's check as removed
 - AND a new recipient requires authorized scoped issuance within the parent ceiling
 
-### Requirement: Connecting visitors can discover the hub without signing up
-
-The experience SHALL invite visitors to hello.mesh and optional identity creation,
-with anonymous exploration, consent before public announcement, a dismissal path,
-and manual/QR discovery independent of automatic portal presentation. Browser-only
-passkeys SHALL NOT be a prerequisite for this welcome experience.
-
-#### Scenario: Visitor declines identity
-
-- GIVEN a visitor sees the welcome invitation
-- WHEN they explore anonymously or choose “Just the internet, please”
-- THEN no identity, membership, or capability is created
-- AND hello.mesh remains discoverable and internet access follows network policy
-
-#### Scenario: No internet and no portal sheet
-
-- GIVEN local networking works but upstream internet and automatic portal presentation do not
-- WHEN a visitor opens the advertised local hub URL
-- THEN the hub offers local information/services and optional identity
-- AND does not claim that dismissing the invitation restores internet
-
-#### Scenario: A portal browser cannot retain the identity
-
-- GIVEN identity storage continuity to the regular browser is unverified
-- WHEN the visitor chooses identity creation
-- THEN the flow offers a regular-browser path with clear persistence limits
-- AND never transports the private key through a URL or requests an existing owner seed
-
 ### Requirement: Separate intent, capability, and observed state
 
 The system SHALL represent internet connections, node connections, client Wi-Fi,
 and administrative ownership separately. It SHALL expose house policy, node
 overrides, actual state, and observation age without equating discovery to trust.
+
+Port roles are `node-connection-profiles`. This requirement is the remaining
+observation and adoption behavior. Qualification is `mjolnir-mesh-lpv`.
 
 #### Scenario: A wired node has two available client radios
 
@@ -108,86 +78,14 @@ overrides, actual state, and observation age without equating discovery to trust
 - WHEN discovery finds it
 - THEN the system does not adopt it, send secrets, or authorize configuration
 
-### Requirement: Capability-gated Wi-Fi internet
-
-The system SHALL offer upstream Wi-Fi only on eligible nodes with a surviving
-downstream path. Candidate ranking SHALL distinguish scan estimates from dated
-end-to-end tests and disclose client/relay service lost by the assignment.
-
-#### Scenario: Both radios would be consumed
-
-- GIVEN a dual-radio node needing one station radio and one mesh radio
-- WHEN the admin reviews it as an upstream receiver
-- THEN the preview states that this node has no client radio in that profile
-- AND checks that peer mesh bands/channels are compatible before applying
-
-#### Scenario: Signal winner would isolate a branch
-
-- GIVEN the strongest upstream signal is on the sole relay for a branch
-- WHEN its proposed role would remove that branch's only path
-- THEN it is excluded unless a validated replacement path is included in the plan
-
-### Requirement: Internet success requires relevant evidence
-
-The system SHALL distinguish association, addressing, DNS, verified internet,
-sign-in required, intentional local-only, and unknown states. Commissioning SHALL
-verify traffic through the chosen uplink and a downstream client path.
-
-#### Scenario: DHCP succeeds but upstream has no internet
-
-- GIVEN a candidate obtains a lease but internet verification fails
-- WHEN setup reports the result
-- THEN it does not report “Internet connected” and identifies the failed stage
-
-#### Scenario: Another gateway could mask candidate failure
-
-- GIVEN an existing working gateway and a new candidate
-- WHEN testing the candidate
-- THEN probes are constrained to that candidate rather than the existing default route
-
-### Requirement: Wired topology preserves trust and routing boundaries
-
-The system SHALL validate port roles and loop safety before accepting Ethernet
-as a node path. It SHALL preserve routed per-node client networks unless a
-separately approved architectural change defines another mode.
-
-#### Scenario: Ambiguous switch attachment
-
-- GIVEN Ethernet carrier without proof whether the segment is WAN, node link, or client LAN
-- WHEN the cable is detected
-- THEN the UI requests intended role before a disruptive reassignment
-- AND does not merge client bridges or enable competing DHCP servers
-
-### Requirement: Changes have durable outcomes and recovery
-
-All disruptive configuration SHALL use revision-checked plans through
-`mjolnir-apply`, with persisted recovery, deadlines, target authorization, and
-per-node receipts. Fleet plans SHALL account for dependencies and partitions.
-
-#### Scenario: Browser closes during apply
-
-- GIVEN targets have prepared a disruptive plan
-- WHEN the browser disconnects or closes
-- THEN target recovery continues independently
-- AND a later session can retrieve committed, restored, partial, or unknown outcomes
-
-#### Scenario: Concurrent editors
-
-- GIVEN a plan was drafted against an old configuration revision
-- WHEN another administrator commits a change first
-- THEN the stale plan is rejected for review rather than overwriting it
-
-#### Scenario: Mesh channel migration has an unprepared node
-
-- GIVEN an affected node cannot prepare recovery and coordinated activation
-- WHEN a channel migration is requested
-- THEN the migration is declined before isolating the node and offers a maintenance path
-
 ### Requirement: Authorization is verified at the destination
 
 The destination SHALL verify scoped signed operations, authority revision,
 freshness, replay protection, and target binding. Discovery, public identity,
 SSID knowledge, and unsigned replicated owner lists SHALL NOT confer authority.
+
+Record verification is `admin-record-integrity`. The signed operation and receipt
+path remains `mjolnir-mesh-b6j.2`.
 
 #### Scenario: Public identity attempts router control
 
@@ -201,17 +99,14 @@ SSID knowledge, and unsigned replicated owner lists SHALL NOT confer authority.
 - WHEN an intermediary changes it or replays it outside permitted idempotent handling
 - THEN the target rejects it without executing a second mutation
 
-### Requirement: Claiming and recovery do not depend on installer SSH keys
+### Requirement: Revocation stays honest across a partition
 
-Shipped nodes SHALL use unique device bootstrap material and physical proof for
-claiming. They SHALL contain no developer owner or SSH backdoor. Owner credentials
-SHALL use trusted custody, with a verified recovery/transfer path.
+Removing the last owner SHALL wait for a verified replacement or recovery
+authority. A node that missed a revocation SHALL show enforcement as pending
+and SHALL NOT accept a fresh grant from expired authority. Reconnect SHALL
+reconcile revocations before accepting fresh grants.
 
-#### Scenario: Nearby attacker races initial setup
-
-- GIVEN the purchaser opens a physical pairing window
-- WHEN an observer without per-device proof submits a claim
-- THEN the claim is rejected even if it arrives first
+This is not the owner ceremony. It remains with `mjolnir-mesh-ai0.1`.
 
 #### Scenario: Last owner would be removed
 
@@ -233,29 +128,11 @@ Both surfaces SHALL use the same plan, role, validation, and receipt contracts.
 Platform custody and discovery limitations SHALL be explicit. Plain HTTP public
 identity storage SHALL NOT be treated as owner credential custody.
 
+Owed by `mjolnir-mesh-bf7.7`.
+
 #### Scenario: Browser lacks trusted owner signing
 
 - GIVEN the local web interface is reached over an untrusted HTTP origin
 - WHEN owner setup or a privileged mutation is requested
 - THEN it offers the supported trusted-signer path
 - AND does not request or import an owner private seed into that page
-
-### Requirement: Network access and identity have distinct scopes
-
-Internet access SHALL follow network policy without mandatory community identity.
-A published `.mesh` name SHALL be reachable from unidentified clients. The
-management plane SHALL stay closed to client traffic. The plan SHALL NOT label
-a second SSID as isolated, because this profile has no second SSID.
-
-#### Scenario: Unidentified client opens a published service
-
-- GIVEN a published `.mesh` name and an unidentified client on the one SSID
-- WHEN the client opens that name
-- THEN the plan allows it
-- AND the management plane stays closed
-
-#### Scenario: Upstream disappears
-
-- GIVEN local services and node links remain healthy
-- WHEN internet verification fails
-- THEN local management/services remain available and the UI reports the upstream failure separately
