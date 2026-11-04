@@ -18,6 +18,10 @@ The library tests cover the acceptance contrast:
 - A diagnostics-only token may omit `expires_at`. Authority older than the
   profile stale window still refuses it.
 
+Holder binding follows identikey-capability-v1 §7.1: the authority block
+checks the fingerprint, and the verifier injects `holder(<hex>)`. It does
+not assert a holder fact.
+
 `mjolnir-mesh-b6j.2` reserves the replay obligation and carries the request.
 Live radio apply stays `mjolnir-mesh-lpv`. This change stays open: the library
 tests are not a fold.

@@ -268,6 +268,8 @@ pub enum AuthzError {
     TargetMismatch,
     #[error("holder does not match the grant")]
     HolderMismatch,
+    #[error("token asserts a holder fact; the verifier injects holder(fingerprint)")]
+    HolderFact,
     #[error("token right {0} is not in the v1 profile")]
     UnknownRight(String),
     #[error("operation is not allowed by this grant class")]
@@ -329,6 +331,11 @@ pub fn authorize(
         return Err(AuthzError::ThirdPartyBlock);
     }
     reject_reserved_facts(&token)?;
+    reject_asserted_holder(&token)?;
+    // The authority block pins the holder. The verifier injects the fingerprint
+    // of the key that signed this request. identikey-capability-v1 §7.1.
+    authority_pins_holder(&token)?;
+    let fp = holder_fingerprint_hex(holder)?;
 
     let rights = token_rights(&token)?;
     let classes = classes_of(&rights)?;
@@ -397,11 +404,10 @@ pub fn authorize(
     builder = builder
         .code(format!(
             r#"
-            check if holder("{}");
+            holder("{fp}");
             allow if right($op), operation($op);
             deny if true;
             "#,
-            hex32(holder.key_bytes())
         ))
         .map_err(token_err)?;
 
@@ -442,12 +448,46 @@ fn reject_reserved_facts(token: &Biscuit) -> Result<(), AuthzError> {
     let mut authorizer = token.authorizer().map_err(token_err)?;
     for reserved in RESERVED_FACTS {
         let rule = format!("data($x) <- {reserved}($x)");
-        let hits: Vec<(i64,)> = authorizer.query(rule.as_str()).unwrap_or_default();
+        let hits: Vec<(i64,)> = authorizer
+            .query_all(rule.as_str())
+            .unwrap_or_default();
         if !hits.is_empty() {
             return Err(AuthzError::ReservedSymbol(reserved));
         }
     }
     Ok(())
+}
+
+/// Lowercase hex of the auth-challenge §5 fingerprint. This is the datalog
+/// atom. Base58 remains the display form.
+fn holder_fingerprint_hex(holder: &HolderKey) -> Result<String, AuthzError> {
+    Ok(hex32(holder.fingerprint()?.as_bytes()))
+}
+
+/// `query_all` sees every block and does not treat a check as a fact.
+fn reject_asserted_holder(token: &Biscuit) -> Result<(), AuthzError> {
+    let mut authorizer = token.authorizer().map_err(token_err)?;
+    let hits: Vec<(String,)> = authorizer
+        .query_all("data($h) <- holder($h)")
+        .map_err(token_err)?;
+    if hits.is_empty() {
+        Ok(())
+    } else {
+        Err(AuthzError::HolderFact)
+    }
+}
+
+/// The issuer pins the holder in the authority block. A later block cannot
+/// add that pin: checks accumulate, and only block 0 is the ceiling.
+fn authority_pins_holder(token: &Biscuit) -> Result<(), AuthzError> {
+    let src = token.print_block_source(0).map_err(token_err)?;
+    if src
+        .lines()
+        .any(|line| line.trim().starts_with("check if holder("))
+    {
+        return Ok(());
+    }
+    Err(AuthzError::HolderMismatch)
 }
 
 /// v1 right atoms. A later wire operation is not required for a right to

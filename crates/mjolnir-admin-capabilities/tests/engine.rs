@@ -21,8 +21,14 @@ fn holder() -> (SigningKey, HolderKey) {
     (sk, hk)
 }
 
-fn hex_key(hk: &HolderKey) -> String {
-    hk.key_bytes().iter().map(|b| format!("{b:02x}")).collect()
+/// Lowercase hex of the §5 fingerprint. This is the datalog holder atom.
+fn fp_hex(hk: &HolderKey) -> String {
+    hk.fingerprint()
+        .expect("fingerprint")
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn mint(
@@ -32,11 +38,11 @@ fn mint(
     issued_at: i64,
     expires_at: i64,
 ) -> Vec<u8> {
-    let h = hex_key(holder);
+    let h = fp_hex(holder);
     let token = biscuit!(
         r#"
         right({right});
-        holder({h});
+        check if holder($fp), $fp == {h};
         issued_at({issued_at});
         expires_at({expires_at});
         "#
@@ -313,11 +319,11 @@ fn unlimited_diagnostic_used_for_apply_refuses() {
 fn token_asserted_time_fact_refuses() {
     let root = KeyPair::new();
     let (sk, hk) = holder();
-    let h = hex_key(&hk);
+    let h = fp_hex(&hk);
     let token = biscuit!(
         r#"
         right("diagnostics_status");
-        holder({h});
+        check if holder($fp), $fp == {h};
         issued_at(1000);
         expires_at(100000);
         time(1);
@@ -429,11 +435,11 @@ fn fd_positive_accepts_inside_stale_window() {
 fn missing_time_facts_refuse() {
     let root = KeyPair::new();
     let (sk, hk) = holder();
-    let h = hex_key(&hk);
+    let h = fp_hex(&hk);
     let token = biscuit!(
         r#"
         right("diagnostics_status");
-        holder({h});
+        check if holder($fp), $fp == {h};
         "#
     )
     .build(&root)
@@ -574,11 +580,11 @@ fn relaxed_firewall_and_guest_claim_caps_at_twenty_four_hours() {
         r#"
         right("apply_network_plan");
         right("guest_wifi");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at({issued});
         expires_at({exp});
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
         exp = issued + 30 * day,
     );
     let raw = mint_code(&root, &source);
@@ -614,11 +620,11 @@ fn relaxed_network_authority_older_than_twenty_four_hours_is_stale() {
     let source = format!(
         r#"
         right("apply_network_plan");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at({issued});
         expires_at({exp});
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
         exp = issued + 30 * 24 * 3600,
     );
     let raw = mint_code(&root, &source);
@@ -659,11 +665,11 @@ fn attenuation_allows_diagnostics_and_refuses_configuration() {
         r#"
         right("apply_network_plan");
         right("diagnostics_status");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at({issued});
         expires_at({exp});
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
         exp = issued + 30 * 24 * 3600,
     );
     let raw = attenuate_to_diagnostics(&mint_code(&root, &source), root.public());
@@ -689,11 +695,11 @@ fn attenuated_grant_refuses_a_different_node() {
         r#"
         right("apply_network_plan");
         right("diagnostics_status");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at(1000);
         expires_at(1000000);
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
     );
     let raw = attenuate_to_diagnostics(&mint_code(&root, &source), root.public());
     let (_, proof) = proof_on(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1, b32(0x99));
@@ -716,11 +722,11 @@ fn ownership_right_caps_a_mixed_token_at_five_minutes() {
         r#"
         right("diagnostics_status");
         right("ownership_change");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at({issued});
         expires_at({exp});
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
         exp = issued + 7 * 24 * 3600,
     );
     let raw = mint_code(&root, &source);
@@ -762,11 +768,11 @@ fn firmware_right_caps_a_mixed_token_at_fifteen_minutes() {
         r#"
         right("diagnostics_status");
         right("firmware_install");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at({issued});
         expires_at({exp});
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
         exp = issued + 7 * 24 * 3600,
     );
     let raw = mint_code(&root, &source);
@@ -806,10 +812,10 @@ fn diagnostics_without_expiry_succeeds_inside_the_stale_window() {
     let source = format!(
         r#"
         right("diagnostics_status");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at(1000);
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
     );
     let raw = mint_code(&root, &source);
     let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
@@ -840,10 +846,10 @@ fn configuration_grant_without_expiry_is_refused() {
     let source = format!(
         r#"
         right("apply_network_plan");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at(1000);
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
     );
     let raw = mint_code(&root, &source);
     let (_, proof) = proof_for(apply_op(), &raw, &sk, &hk, 1);
@@ -864,11 +870,11 @@ fn appended_right_does_not_authorize_apply() {
     let source = format!(
         r#"
         right("diagnostics_status");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at(1000);
         expires_at(1000000);
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
     );
     let token = Biscuit::from(mint_code(&root, &source), root.public()).unwrap();
     let block = BlockBuilder::new()
@@ -894,11 +900,11 @@ fn appended_expiry_does_not_extend_the_authority_block() {
     let source = format!(
         r#"
         right("apply_network_plan");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at({issued});
         expires_at({exp});
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
         exp = issued + 3600,
     );
     let token = Biscuit::from(mint_code(&root, &source), root.public()).unwrap();
@@ -933,11 +939,11 @@ fn unknown_right_is_refused() {
         r#"
         right("diagnostics_status");
         right("become_root");
-        holder("{h}");
+        check if holder($fp), $fp == "{h}";
         issued_at(1000);
         expires_at(100000);
         "#,
-        h = hex_key(&hk),
+        h = fp_hex(&hk),
     );
     let raw = mint_code(&root, &source);
     let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
@@ -949,4 +955,78 @@ fn unknown_right_is_refused() {
     let mut floor = HighWaterFloor::default();
     let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
     assert!(matches!(err, AuthzError::UnknownRight(_)));
+}
+
+#[test]
+fn asserted_holder_fact_is_refused() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        holder("aa");
+        check if holder($fp), $fp == "{h}";
+        issued_at(1000);
+        expires_at(100000);
+        "#,
+        h = fp_hex(&hk),
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::HolderFact);
+}
+
+#[test]
+fn note_mentioning_holder_is_not_a_holder_fact() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        note("see holder(x)");
+        check if holder($fp), $fp == "{h}";
+        issued_at(1000);
+        expires_at(100000);
+        "#,
+        h = fp_hex(&hk),
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap();
+}
+
+#[test]
+fn authority_block_without_holder_check_is_refused() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        issued_at(1000);
+        expires_at(100000);
+        "#,
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::HolderMismatch);
 }

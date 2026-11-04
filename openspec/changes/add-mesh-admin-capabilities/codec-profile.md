@@ -118,8 +118,13 @@ provide verified parsing and block inspection. Never use deprecated unsafe parsi
 Reject all third-party blocks in v1 (any external key). Maximum 16 blocks including
 authority, 64 KiB serialized token. Reject reserved verifier-fact assertions in
 any block, including rule heads that could derive them; inspect parsed structures,
-not substring matching. Root holder check is mandatory. Facts cannot manufacture
-current authority, holder, time, request or operation context.
+not substring matching. The authority block carries `check if holder($fp), $fp == "<hex>"`, where
+`<hex>` is the lowercase hex of the auth-challenge §5 fingerprint. The
+verifier injects `holder("<hex>")` for the key that signed the request and
+rejects any block that asserts a `holder` fact (`identikey-capability-v1`
+§7.1). Base58 remains the display form and is not the datalog atom. Facts
+cannot manufacture current authority, holder, time, request or operation
+context.
 
 Use explicit authority-only rights policy plus trusted authorizer context;
 appended blocks may restrict through checks, never contribute rights. No external
