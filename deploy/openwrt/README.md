@@ -39,7 +39,16 @@ build:embed`, then the same cross-build approach as `build.sh`); set
 One command — idempotent, safe to re-run, and safe to run **in-band** (over the
 802.11s mesh or the very wifi being reconfigured — mjolnir-mesh-6e5):
 
+A box that is still stock OpenWrt (SSH at `root@192.168.1.1` after the
+Cudy intermediate and the official sysupgrade) goes through
+`deploy/openwrt/provision/provision-node.sh`. That is the command Lightning
+Admin runs. It preflights the binary and the offline package cache, calls
+`install-node.sh --wireless`, appends the inventory line, renders that
+group's peers, and prints a lamp reading. `--check` is read-only.
+
 ```sh
+deploy/openwrt/provision/provision-node.sh --name tr3000-b --group bench root@192.168.1.1
+deploy/openwrt/provision/provision-node.sh --check root@192.168.1.1
 deploy/openwrt/install-node.sh root@<node-ip>                      # binary/deps only
 deploy/openwrt/install-node.sh --wireless node.env root@<node-ip>  # + (re)run setup-wireless.sh
 ```

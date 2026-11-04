@@ -18,6 +18,7 @@ use commands::claim::{claim_owner_key, claim_prove, claim_request};
 use commands::discovery::scan_link_local;
 use commands::guild::{guild_admit, guild_assign, guild_rename, guild_snapshot, sign_guild_op};
 use commands::network_name::apply_network_name;
+use commands::provision::{provision_node_health, provision_stock_node};
 use stdout::fill_canvas_source;
 
 fn init_logging() {
@@ -54,6 +55,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_link_local,
             apply_network_name,
+            provision_stock_node,
+            provision_node_health,
             sign_guild_op,
             guild_snapshot,
             guild_rename,

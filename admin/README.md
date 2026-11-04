@@ -67,7 +67,11 @@ signs the ceremony (`.grok/skills/guild-ceremony`). The op order is
 `scripts/guild/ceremony.rhai`. The human id is base58 of the keyspace hash.
 
 The frontend talks to Rust through `invoke('scan_link_local')`,
-`invoke('apply_network_name')`, and `invoke('sign_guild_op')`.
+`invoke('apply_network_name')`, `invoke('sign_guild_op')`,
+`invoke('provision_stock_node')`, and `invoke('provision_node_health')`.
+The provision commands run `deploy/openwrt/provision/provision-node.sh`
+(stock OpenWrt install, inventory line, peer render, lamp reading).
+Health is the same script with `--check` and does not change the router.
 
 **Become the admin** (`/become`) is the first-owner claim client. The
 card secret and the owner seed stay in the window. The node is asked

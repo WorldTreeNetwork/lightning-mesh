@@ -5,3 +5,4 @@ pub mod claim;
 pub mod discovery;
 pub mod guild;
 pub mod network_name;
+pub mod provision;

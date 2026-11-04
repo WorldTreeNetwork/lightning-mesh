@@ -148,7 +148,10 @@ HELLO_BIN="${MJOLNIR_HELLO_BIN:-$DIR/mjolnir-hello-aarch64}"
 # setup-wireless.stock.sh so the wrapper can exec it. Metal default is stock.
 SETUP_WIRELESS="${SETUP_WIRELESS:-$DIR/setup-wireless.sh}"
 STAGE=/root/mjolnir-stage
-PKGS="babeld kmod-tun wpad-mesh-mbedtls wpad-basic-mbedtls iperf3"  # basic variant = rollback fuel for the wpad swap; iperf3 = always-on measurement service (81n)
+# wpad-basic is rollback fuel. hostapd-common is the exact revision wpad-mesh
+# pins (a stock 25.12 image ships an older one). libatomic1 is the offline
+# dep of libiperf3 that the target index does not always locate.
+PKGS="babeld kmod-tun wpad-mesh-mbedtls wpad-basic-mbedtls hostapd-common libatomic1 iperf3"
 # Drivers for every supported USB dongle ride along on every node (fleet
 # plug-and-play: a dongle plugged in the FIELD needs no download). The table
 # in files/usr/sbin/mjolnir-dongle is the single source of truth.
@@ -369,20 +372,35 @@ ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" "tail -25 $STAGE/apply.log" 2>/
 case "$RES" in
 	OK*)
 		# `status` prints the id from the secret. `mjolnir-meshd id` opens an
-		# endpoint and exits until a house /128 is usable on br-mesh, so a
-		# fresh node with no /etc/mjolnir/house-guild-id would skip peers.
+		# endpoint and exits until a house /128 is usable on br-mesh. The
+		# secret is written on first start, which is after this apply on a
+		# fresh box, so start once and poll. A node id that is not in the
+		# inventory yet must not be rendered: an empty peer script would
+		# delete whatever list is already there.
+		echo ">> reading node id from mjolnir-meshd status"
+		ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" \
+			'/etc/init.d/mjolnir-meshd enable; /etc/init.d/mjolnir-meshd start' || true
 		rendered=0
 		node_id=""
-		if node_id=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "$HOST" \
-			'mjolnir-meshd status --secret-file /etc/mjolnir/secret' \
-			| sed -n 's/^  node id:  \([0-9a-fA-F]\{64\}\)$/\1/p') \
-			&& fleet_valid_node_id "$node_id"; then
+		attempt=0
+		while [ "$attempt" -lt 8 ]; do
+			attempt=$((attempt + 1))
+			node_id=$(ssh -o BatchMode=yes -o ConnectTimeout=6 "$HOST" \
+				'mjolnir-meshd status --secret-file /etc/mjolnir/secret' \
+				| sed -n 's/^  node id:  \([0-9a-fA-F]\{64\}\)$/\1/p' || true)
+			fleet_valid_node_id "$node_id" && break
+			node_id=""
+			sleep 2
+		done
+		if fleet_valid_node_id "$node_id" && fleet_member_group "$CONF" "$node_id" >/dev/null; then
 			echo ">> rendering inventory peers on $HOST"
 			fleet_render_peers "$CONF" "$node_id" "$HOST"
 			rendered=1
+		elif fleet_valid_node_id "$node_id"; then
+			echo ">> peer render skipped on $HOST: $node_id is not in $CONF yet"
+			echo ">> enroll it with deploy/openwrt/provision/enroll.sh, which renders peers"
 		else
 			echo ">> peer render skipped on $HOST: status did not print a node id"
-			node_id=""
 		fi
 		# update-fleet.sh rewrites this same list and starts meshd once.
 		# A direct install starts it here, including when no peers were written.

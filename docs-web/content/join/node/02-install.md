@@ -99,6 +99,16 @@ the lines you don't want.
 
 **Do:**
 ```sh
+deploy/openwrt/provision/provision-node.sh --name <inventory-name> --group bench root@192.168.1.1
+```
+
+That is the stock-OpenWrt entry point (the same command Lightning Admin runs).
+It checks the local binary and package cache, runs the installer below, adds
+the inventory line, and prints whether the status lamp is flashing red.
+`--check` only reads the router.
+
+The installer by itself, when the line is already in the inventory:
+```sh
 deploy/openwrt/install-node.sh --wireless deploy/openwrt/fleet-secrets/wireless.env root@192.168.1.1
 ```
 
