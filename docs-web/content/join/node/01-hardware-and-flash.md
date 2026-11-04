@@ -83,6 +83,8 @@ Stock Cudy firmware only accepts signed images.
    |---|---|
    | `ap3000-v1/` | AP3000 / AP3000 V1.1 (indoor) |
    | `ap3000-outdoor-v1/` | AP3000 Outdoor v1 |
+   | `tr3000-v1/` | TR3000 v1, 128 MB (not the 256 MB flash SKU) |
+   | `wr3000s-v1/` | WR3000S v1 |
 
    For any other Cudy model, use the matching zip from
    [Cudy's OpenWrt download page](https://www.cudy.com/blogs/faq/openwrt-software-download).
