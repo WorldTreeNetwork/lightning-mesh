@@ -22,6 +22,45 @@ pub fn usable_binding(
     super::house_addr_usable(kernel, iface, addr).then_some((addr, index))
 }
 
+/// Backhaul bind. The identity ULA is enough: no house guild, and a guild
+/// that is not this peer's guild, still produce the same address.
+pub fn usable_backhaul_binding(
+    node: &str,
+    kernel: &str,
+    iface: &str,
+    index: Option<u32>,
+) -> Option<(Ipv6Addr, u32)> {
+    let addr = super::ula_addr(node);
+    let index = index.filter(|i| *i != 0)?;
+    let usable = super::parse_if_inet6(kernel).into_iter().any(|row| {
+        row.iface == iface
+            && row.addr == addr
+            && (row.prefix_len == 64 || row.prefix_len == 128)
+            && row.flags & super::IFA_F_TENTATIVE == 0
+            && row.flags & super::IFA_F_DADFAILED == 0
+    });
+    usable.then_some((addr, index))
+}
+
+/// The outer table's copy of the identity `/64` on the mesh bridge. A Babel
+/// host route is not required. `unreachable` does not count.
+pub fn on_link_backhaul_route(text: &str, peer: Ipv6Addr, iface: &str) -> bool {
+    text.lines().any(|line| {
+        let t: Vec<_> = line.split_whitespace().collect();
+        if t.iter().any(|w| *w == "unreachable") {
+            return false;
+        }
+        let field = |k| {
+            t.iter()
+                .position(|s| *s == k)
+                .and_then(|i| t.get(i + 1))
+                .copied()
+        };
+        let prefix = t.first().and_then(|s| s.parse::<ipnet::Ipv6Net>().ok());
+        prefix.is_some_and(|n| n.contains(&peer)) && field("dev") == Some(iface)
+    })
+}
+
 /// A direct dial needs an exact physical Babel host route, not a covering
 /// prefix, an overlay route, or a host route installed by an operator.
 pub fn physical_peer_route(text: &str, peer: Ipv6Addr, iface: &str) -> bool {
@@ -139,6 +178,55 @@ mod tests {
             Some((next, 2))
         );
         assert_ne!(observe(&new_row, Some(&next_guild), Some(2)), bound);
+    }
+
+    #[test]
+    fn backhaul_binding_ignores_guild_and_rejects_dad() {
+        let addr = super::super::ula_addr("node-example");
+        let row = format!("{:032x} 00000002 40 00 00 br-mesh", u128::from(addr));
+        let bound = usable_backhaul_binding("node-example", &row, "br-mesh", Some(2));
+        assert_eq!(bound, Some((addr, 2)));
+        assert_eq!(
+            usable_backhaul_binding(
+                "node-example",
+                &row.replace("40 00 00", "40 00 40"),
+                "br-mesh",
+                Some(2)
+            ),
+            None
+        );
+        assert_eq!(
+            usable_backhaul_binding(
+                "node-example",
+                &row.replace("40 00 00", "40 00 08"),
+                "br-mesh",
+                Some(2)
+            ),
+            None
+        );
+        assert_eq!(
+            usable_backhaul_binding("node-example", &row, "br-lan", Some(2)),
+            None
+        );
+        assert_eq!(
+            usable_backhaul_binding("node-example", &row, "br-mesh", None),
+            None
+        );
+        assert_ne!(
+            usable_backhaul_binding("node-example", &row, "br-mesh", Some(3)),
+            bound
+        );
+        let prefix = super::super::ula_link_prefix();
+        let peer = super::super::ula_addr("peer-example");
+        assert!(prefix.contains(&addr) && prefix.contains(&peer));
+        let on_link = format!("{prefix} dev br-mesh metric 256");
+        assert!(on_link_backhaul_route(&on_link, peer, "br-mesh"));
+        assert!(!on_link_backhaul_route(
+            "unreachable fc00::/7 metric 42760",
+            peer,
+            "br-mesh"
+        ));
+        assert!(!on_link_backhaul_route(&on_link, peer, "mjolnir0"));
     }
 
     #[test]

@@ -36,7 +36,8 @@ pub const BACKHAUL_PREFIX_LEN: u8 = 16;
 pub const ULA_ID_INPUT: &[u8] = b"mjolnir/mesh/ula/v0";
 
 /// Prefix length of the identity-derived ULA on `br-mesh`. Every node's
-/// `/128` sits in this one `/64` (subnet id 0) so peers are on-link.
+/// address sits in this one `/64` (subnet id 0) so peers are on-link.
+/// The backhaul endpoint binds this address. A house guild is not required.
 pub const ULA_PREFIX_LEN: u8 = 64;
 
 /// RFC 4193 ULA `/48` for this software mesh: `fd` + first 40 bits of
@@ -70,6 +71,12 @@ pub fn ula_addr(node_id: &str) -> Ipv6Addr {
         0xfd, pb[0], pb[1], pb[2], pb[3], pb[4], 0, 0, idb[0], idb[1], idb[2], idb[3], idb[4],
         idb[5], idb[6], idb[7],
     ])
+}
+
+/// On-link prefix that contains every [`ula_addr`]. Copied into the outer
+/// transport table so a dial does not need a per-peer host route or a guild.
+pub fn ula_link_prefix() -> ipnet::Ipv6Net {
+    ipnet::Ipv6Net::new(ula_prefix().addr(), ULA_PREFIX_LEN).expect("ula /64")
 }
 
 /// True when `ip` is Unique Local (`fc00::/7`). Used to refuse iroh candidates.
@@ -528,7 +535,10 @@ mod tests {
         let text = guild_text(0x11);
         let reference = house_ula_reference(Some(&text), "node-example").unwrap();
         assert_eq!(reference, "fd81:2b22:8aca:0:ddcd:86a6:64e9:f2df");
-        assert_eq!(reference, router_ula(&guild(0x11), "node-example").to_string());
+        assert_eq!(
+            reference,
+            router_ula(&guild(0x11), "node-example").to_string()
+        );
     }
 
     #[test]

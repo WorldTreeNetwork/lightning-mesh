@@ -62,17 +62,18 @@ done
 echo "mesh_plinks: $estab"
 
 overlay=0
-ip -4 addr show dev br-mesh 2>/dev/null | grep -q 'inet 10\.254\.' && overlay=1
+ip -6 addr show dev br-mesh 2>/dev/null | grep -q 'inet6 fd' && overlay=1
 oper=$(cat /sys/class/net/br-mesh/operstate 2>/dev/null || echo down)
-echo "br_mesh: $oper overlay_10_254=$overlay"
+echo "br_mesh: $oper backhaul_ula=$overlay"
 
-# meshd LedTone: missing legacy 10.254 while the mesh port is up → flash red.
+# The lamp follows the identity ULA. 10.254 is not assigned. A missing house
+# guild is not overlay-sick once that ULA is on br-mesh.
 if [ "$overlay" = 0 ] && { [ "$estab" -gt 0 ] || [ "$oper" = up ]; }; then
 	echo "lamp: flashing-red"
-	echo "lamp_reason: mesh L2 is up and 10.254 is not on br-mesh. This meshd does not assign that legacy address (the house /128 is the transport identity). The lamp still treats the absence as overlay-sick, so a joined radio flashes red until a build stops checking 10.254."
+	echo "lamp_reason: mesh L2 is up and the identity ULA is not on br-mesh. The backhaul endpoint binds that address and does not need a house guild."
 elif [ "$estab" -gt 0 ]; then
 	echo "lamp: mesh"
-	echo "lamp_reason: at least one 802.11s peer is established and 10.254 is present."
+	echo "lamp_reason: at least one 802.11s peer is established and the identity ULA is on br-mesh."
 elif [ "$oper" != up ]; then
 	echo "lamp: radios-down"
 	echo "lamp_reason: br-mesh is $oper. If wpad is stopped, wifi-scripts waits on ubus wpa_supplicant and the radios never leave pending."

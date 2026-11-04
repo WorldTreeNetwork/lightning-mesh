@@ -63,7 +63,7 @@ use tracing_subscriber::EnvFilter;
 
 #[path = "meshd/transport.rs"]
 mod mesh_transport;
-use mesh_transport::{SessionTasks, HouseDialGate, peer_house_router, supervised_mesh};
+use mesh_transport::{SessionTasks, HouseDialGate, peer_backhaul_addr, supervised_mesh};
 
 /// ALPN for the P0 mesh connectivity probe. Bumped per protocol revision.
 const MESH_ALPN: &[u8] = b"mjolnir/mesh/v0";
@@ -1035,15 +1035,14 @@ async fn run_mesh(
         .map(|a| a.id)
         .filter(|id| *id != self_id)
         .collect();
-    // Seed the lookup with house hosts; all protocols share the physical-route
-    // gate, including gossip's independently initiated dials.
+    // Seed the lookup with identity ULAs. A guild file is not required.
+    // All protocols share the on-link gate, including gossip's dials.
     let addr_lookup: Option<MemoryLookup> = match endpoint.address_lookup() {
         Ok(services) => {
             let lookup = MemoryLookup::with_provenance("mjolnir_addrbook");
             for id in &bootstrap {
-                if let Some(ip) = peer_house_router(&id.to_string()) {
-                    lookup.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT)));
-                }
+                let ip = peer_backhaul_addr(&id.to_string());
+                lookup.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT)));
             }
             // Also seed from the restored address book (0yb): a rebooting node
             // can dial peers it learned last run before gossip re-announces them.
@@ -1654,10 +1653,12 @@ async fn run_mesh(
             if peer == self_id {
                 continue; // our own id appears in the roster — skip
             }
-            // Derive the peer host from our guild and its authenticated node id.
-            let addr = if let Some(ip) = peer_house_router(&peer.to_string()) {
-                addr.with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT))
-            } else { addr };
+            // Identity ULA of the peer endpoint id. Same address with no guild
+            // and with a guild that is not ours.
+            let addr = addr.with_ip_addr(SocketAddr::new(
+                IpAddr::V6(peer_backhaul_addr(&peer.to_string())),
+                MESH_IROH_PORT,
+            ));
             if self_id_str < peer.to_string() {
                 let ep = endpoint.clone();
                 let label = entry.label.clone();
@@ -7064,7 +7065,7 @@ async fn reconcile_dnsmasq_uci() {}
 
 /// Connectivity LEDs. Hardware row from [`mjolnir_mesh::led::HARDWARE`].
 #[cfg(target_os = "linux")]
-async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
+async fn led_status_loop(backhaul_iface: String, backhaul: Ipv6Addr) {
     use mjolnir_mesh::led::{
         APPLY_LOCK, IDENTIFY_FRESH_SECS, IDENTIFY_PATH, LedAction, LedFacts, classify,
         default_via_mesh, detect_hardware, is_local_egress, mesh_has_estab, parse_mesh_ifaces,
@@ -7119,7 +7120,7 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
                 let iface = iface.clone();
                 move || {
                     std::process::Command::new("ip")
-                        .args(["-4", "-o", "addr", "show", "dev", &iface])
+                        .args(["-6", "-o", "addr", "show", "dev", &iface])
                         .output()
                         .ok()
                         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -7173,7 +7174,7 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
                 identify,
                 apply_in_progress: Path::new(APPLY_LOCK).exists()
                     || Path::new("/tmp/sysupgrade").exists(),
-                overlay_addr_present: mjolnir_mesh::heal::iface_has_ipv4(&addr_show, overlay),
+                overlay_addr_present: mjolnir_mesh::heal::iface_has_ipv6(&addr_show, backhaul),
                 mesh_estab: estab,
                 mesh_l2_up: oper.trim() == "up" || !mesh_ifaces.is_empty(),
                 local_egress: is_local_egress(&routes),
@@ -7199,7 +7200,7 @@ async fn led_status_loop(backhaul_iface: String, overlay: Ipv4Addr) {
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn led_status_loop(_backhaul_iface: String, _overlay: Ipv4Addr) {}
+async fn led_status_loop(_backhaul_iface: String, _backhaul: Ipv6Addr) {}
 
 /// Keep the legacy /64 and current house /128 present when netifd recreates or flushes
 /// the L2 device during a wifi reload. The interface name is stable across that
@@ -8370,7 +8371,7 @@ async fn build_endpoint_with_gate(
     relays: &[String],
     gate: HouseDialGate,
 ) -> Result<Endpoint> {
-    let addr = bind.context("no usable house /128 or explicit --bind")?;
+    let addr = bind.context("no usable backhaul address or explicit --bind")?;
     anyhow::ensure!(!addr.ip().is_unspecified(), "wildcard --bind is forbidden");
     if lan {
         return Endpoint::builder(presets::Minimal)

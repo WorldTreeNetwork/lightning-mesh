@@ -1,6 +1,10 @@
-//! House-only endpoint lifetime and an independent physical Babel underlay.
+//! Backhaul endpoint lifetime and an independent physical Babel underlay.
+//! The endpoint binds the identity ULA. A house guild is not required, and a
+//! peer in another guild is dialed at `ula_addr` of its endpoint id.
 use super::*;
-use mjolnir_mesh::tun::underlay::{OUTER_MARK, OUTER_TABLE, physical_peer_route, relay_routes};
+use mjolnir_mesh::tun::underlay::{
+    OUTER_MARK, OUTER_TABLE, on_link_backhaul_route, physical_peer_route, relay_routes,
+};
 
 /// Tokio handles detach on drop. Keep explicit cancellation ownership for every
 /// task in one endpoint session, including tasks started before an early error.
@@ -25,9 +29,9 @@ impl Drop for SessionTasks {
     }
 }
 
-pub(super) fn peer_house_router(peer: &str) -> Option<Ipv6Addr> {
-    let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
-    mjolnir_mesh::tun::desired_router_ula(guild.as_deref(), peer)
+/// Dial address for a peer. Computed from the endpoint id alone.
+pub(super) fn peer_backhaul_addr(peer: &str) -> Ipv6Addr {
+    mjolnir_mesh::tun::ula_addr(peer)
 }
 
 #[derive(Debug)]
@@ -57,33 +61,38 @@ impl iroh::endpoint::EndpointHooks for HouseDialGate {
         _alpn: &[u8],
     ) -> iroh::endpoint::BeforeConnectOutcome {
         use iroh::endpoint::BeforeConnectOutcome::{Accept, Reject};
-        let Some(guild) = self.guild else {
-            return Reject;
-        };
-        let peer = mjolnir_mesh::tun::router_ula(&guild, &remote.id.to_string());
+        // Relays are the off-link path. A missing guild must not refuse them.
+        if !self.no_relay {
+            return Accept;
+        }
+        let id = remote.id.to_string();
+        let backhaul = mjolnir_mesh::tun::ula_addr(&id);
+        let house = self
+            .guild
+            .map(|guild| mjolnir_mesh::tun::router_ula(&guild, &id));
         let routes = tokio::process::Command::new("ip")
             .args(["-6", "route", "show", "table", &self.table])
             .output()
             .await;
-        if routes.is_ok_and(|out| {
-            out.status.success()
-                && physical_peer_route(&String::from_utf8_lossy(&out.stdout), peer, &self.iface)
-        }) || !self.no_relay
-        {
-            Accept
-        } else {
-            Reject
-        }
+        let reachable = routes.is_ok_and(|out| {
+            if !out.status.success() {
+                return false;
+            }
+            let text = String::from_utf8_lossy(&out.stdout);
+            on_link_backhaul_route(&text, backhaul, &self.iface)
+                || physical_peer_route(&text, backhaul, &self.iface)
+                || house.is_some_and(|peer| physical_peer_route(&text, peer, &self.iface))
+        });
+        if reachable { Accept } else { Reject }
     }
 }
 
 fn binding_witness(node: &str) -> Option<(Ipv6Addr, u32)> {
-    let guild = std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH).ok();
     let kernel = std::fs::read_to_string("/proc/net/if_inet6").ok()?;
     let index = std::fs::read_to_string(format!("/sys/class/net/{MESH_BRIDGE}/ifindex"))
         .ok()
         .and_then(|s| s.trim().parse().ok());
-    mjolnir_mesh::tun::underlay::usable_binding(node, guild.as_deref(), &kernel, MESH_BRIDGE, index)
+    mjolnir_mesh::tun::underlay::usable_backhaul_binding(node, &kernel, MESH_BRIDGE, index)
 }
 
 pub(super) async fn supervised_mesh(cli: Cli, secret: SecretKey) -> Result<()> {
@@ -124,7 +133,10 @@ pub(super) async fn supervised_mesh(cli: Cli, secret: SecretKey) -> Result<()> {
         mjolnir_mesh::tun::ula_addr(&node),
         node.clone(),
     ));
-    tasks.spawn(led_status_loop(MESH_BRIDGE.to_owned(), legacy_column));
+    tasks.spawn(led_status_loop(
+        MESH_BRIDGE.to_owned(),
+        mjolnir_mesh::tun::ula_addr(&node),
+    ));
     // Starts before any endpoint/dial, and remains running while the house
     // address is absent. Its peer routes are learned, never synthesized.
     tasks.spawn(physical_babel(
@@ -394,6 +406,7 @@ impl OuterGuard {
             ])
             .await?;
         }
+        guard.ensure_on_link().await?;
         guard.refresh().await?;
         for family in ["-4", "-6"] {
             // Remove only our exact rule, including leftovers from a crash.
@@ -520,7 +533,29 @@ impl OuterGuard {
             }
             self.routes[slot] = next;
         }
+        self.ensure_on_link().await?;
         Ok(())
+    }
+
+    /// Identity `/64` on `br-mesh` beats `unreachable fc00::/7`. Peers are
+    /// on-link. This is not a per-peer static host route.
+    async fn ensure_on_link(&self) -> Result<()> {
+        let prefix = mjolnir_mesh::tun::ula_link_prefix().to_string();
+        ip(&[
+            "-6",
+            "route",
+            "replace",
+            &prefix,
+            "dev",
+            MESH_BRIDGE,
+            "scope",
+            "link",
+            "table",
+            OUTER_TABLE,
+            "metric",
+            "256",
+        ])
+        .await
     }
 }
 impl Drop for OuterGuard {

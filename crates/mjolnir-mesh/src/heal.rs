@@ -14,7 +14,7 @@
 //! puts foreign `10.42.y.1` on `br-lan` as an ARP neighbor. That is forbidden
 //! (one routed `/24` per node). The dataplane loop then detaches copper.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use ipnet::Ipv4Net;
 
@@ -43,6 +43,24 @@ pub fn iface_has_ipv4(addr_show: &str, want: Ipv4Addr) -> bool {
         let mut toks = line.split_whitespace();
         while let Some(t) = toks.next() {
             if t != "inet" {
+                continue;
+            }
+            let Some(addr) = toks.next() else {
+                return false;
+            };
+            return addr.split('/').next() == Some(want.as_str());
+        }
+        false
+    })
+}
+
+/// True when `ip -6 addr show` lists `want` as an `inet6` address.
+pub fn iface_has_ipv6(addr_show: &str, want: Ipv6Addr) -> bool {
+    let want = want.to_string();
+    addr_show.lines().any(|line| {
+        let mut toks = line.split_whitespace();
+        while let Some(t) = toks.next() {
+            if t != "inet6" {
                 continue;
             }
             let Some(addr) = toks.next() else {
@@ -186,6 +204,12 @@ default via 192.168.0.1 dev eth0  src 192.168.0.25
 
         let oneline = "4: br-lan    inet 10.42.242.1/24 brd 10.42.242.255 scope global br-lan";
         assert!(iface_has_ipv4(oneline, "10.42.242.1".parse().unwrap()));
+        let v6 = "8: br-mesh    inet6 fd53:6213:4797:0:9555:e627:2c48:25f5/64 scope global";
+        assert!(iface_has_ipv6(
+            v6,
+            "fd53:6213:4797:0:9555:e627:2c48:25f5".parse().unwrap()
+        ));
+        assert!(!iface_has_ipv6(v6, "fd53:6213:4797::1".parse().unwrap()));
     }
 
     #[test]

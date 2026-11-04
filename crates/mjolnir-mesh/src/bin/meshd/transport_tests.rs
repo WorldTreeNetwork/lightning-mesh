@@ -47,17 +47,27 @@ async fn cancelling_a_session_aborts_its_tasks() {
 }
 
 #[tokio::test]
-async fn no_guild_does_not_admit_a_dial_even_with_relays() {
+async fn no_guild_admits_a_relay_dial_and_refuses_a_direct_dial_with_no_route() {
     use iroh::endpoint::{BeforeConnectOutcome, EndpointHooks};
-    let gate = HouseDialGate {
+    let remote = EndpointAddr::new(SecretKey::from_bytes(&[0x41; 32]).public());
+    let open = HouseDialGate {
         no_relay: false,
         guild: None,
         table: mjolnir_mesh::tun::underlay::OUTER_TABLE.into(),
         iface: MESH_BRIDGE.into(),
     };
-    let remote = EndpointAddr::new(SecretKey::from_bytes(&[0x41; 32]).public());
     assert!(matches!(
-        gate.before_connect(&remote, TUN_ALPN).await,
+        open.before_connect(&remote, TUN_ALPN).await,
+        BeforeConnectOutcome::Accept
+    ));
+    let direct = HouseDialGate {
+        no_relay: true,
+        guild: None,
+        table: "42881".into(),
+        iface: MESH_BRIDGE.into(),
+    };
+    assert!(matches!(
+        direct.before_connect(&remote, TUN_ALPN).await,
         BeforeConnectOutcome::Reject
     ));
 }

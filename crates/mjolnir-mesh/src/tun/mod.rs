@@ -21,7 +21,7 @@ pub use link::{
     backhaul_addr_missing, backhaul_addr_salted, desired_router_ula, host_route_usable,
     house_addr_usable, house_after, house_intent, house_ula_prefix, in_backhaul_block,
     is_unique_local, parse_house_guild_id, parse_house_state, parse_if_inet6, pick_link_31,
-    published_house_ula, router_ula, ula_addr, ula_prefix,
+    published_house_ula, router_ula, ula_addr, ula_link_prefix, ula_prefix,
 };
 pub use mcast::{BABEL_MCAST, BABEL_PORT, OverlayDest, classify, is_babel_multicast};
 pub use overlay::{OverlayHandles, UnicastRouter, spawn_overlay, spawn_overlay_routed};
