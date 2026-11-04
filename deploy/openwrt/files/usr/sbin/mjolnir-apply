@@ -85,14 +85,24 @@ pm_installed() { if command -v apk >/dev/null 2>&1; then apk info -e "$1" >/dev/
 # package is always "UNTRUSTED signature" — even an authentic one (verified
 # on 25.12.4 hardware). Integrity comes from the staging chain instead:
 # HTTPS from downloads.openwrt.org into pkg-cache, authenticated SSH to here.
-# Dependency names a package FILE declares (apk v3 `adbdump` 'depends:' block).
-# Version constraints are stripped; negative deps (!conflict) and so:/cmd:
-# pseudo-deps are skipped. Empty output (adbdump absent/old apk) just degrades
-# to the old single-file install.
-pkg_file_deps() {
+# Dependency specs a package FILE declares (apk v3 `adbdump` 'depends:' block).
+# One token per line: "name", or "name=version" when the apk pins an exact
+# revision. wpad-mesh-mbedtls breaks unless hostapd-common matches that
+# revision; handing only the new wpad file leaves the stock revision in place
+# because `apk add` will not upgrade a package it was not given. Negative deps
+# (!conflict) and so:/cmd: pseudo-deps are skipped. Empty output (adbdump
+# absent/old apk) just degrades to the old single-file install.
+pkg_file_dep_specs() {
 	apk adbdump "$1" 2>/dev/null | awk '
 		/^  depends:/ { d=1; next }
-		d && /^    - / { sub(/^    - /,""); sub(/[=<>~].*/,""); if ($0 !~ /^!/ && $0 !~ /:/) print; next }
+		d && /^    - / {
+			line=$0
+			sub(/^    - /,"",line)
+			if (line ~ /^!/ || line ~ /:/) next
+			if (line ~ /=/) print line
+			else { sub(/[<>~].*/,"",line); print line }
+			next
+		}
 		d { exit }'
 }
 
@@ -129,28 +139,58 @@ pkg_best_file() {
 # `apk add --no-network` resolves deps only among the files it is HANDED, so a
 # lone kmod file fails when its dep chain isn't installed. Walk depends:
 # breadth-first over stage/pkgs, skipping deps that are already installed, and
-# echo every file apk needs to see in one `add`.
+# echo every file apk needs to see in one `add`. An exact `name=version` pin
+# is handed even when that name is already installed, so apk can upgrade it
+# in the same transaction (hostapd-common under wpad-mesh).
 pkg_closure_files() {
-	local rootf="$1" queue="" seen=" " files="" name f dep
+	local rootf="$1" queue="" seen=" " files="" spec name ver f dep depname
 	[ -f "$rootf" ] || return 1
 	files="$rootf"
-	queue=$(pkg_file_deps "$rootf" | awk 'NF { printf "%s ", $0 }')
+	queue=$(pkg_file_dep_specs "$rootf" | awk 'NF { printf "%s ", $0 }')
 	while [ -n "$queue" ]; do
-		name=${queue%% *}
-		if [ "$name" = "$queue" ]; then queue=""; else queue=${queue#* }; fi
-		[ -n "$name" ] || continue
+		spec=${queue%% *}
+		if [ "$spec" = "$queue" ]; then queue=""; else queue=${queue#* }; fi
+		[ -n "$spec" ] || continue
+		case "$spec" in
+			*=*)
+				name=${spec%%=*}
+				ver=${spec#*=}
+				;;
+			*)
+				name=$spec
+				ver=""
+				;;
+		esac
 		case " $seen " in *" $name "*) continue ;; esac
 		seen="$seen $name "
-		pm_installed "$name" && continue
-		f=$(pkg_best_file "$name") || continue
-		[ -n "$f" ] || continue
+		f=""
+		if [ -n "$ver" ] && [ -f "$STAGE/pkgs/${name}-${ver}.apk" ]; then
+			f="$STAGE/pkgs/${name}-${ver}.apk"
+		elif [ -z "$ver" ] && pm_installed "$name"; then
+			continue
+		else
+			f=$(pkg_best_file "$name") || continue
+		fi
+		[ -n "$f" ] && [ -f "$f" ] || continue
 		files="$files $f"
-		for dep in $(pkg_file_deps "$f"); do
-			case " $seen " in *" $dep "*) continue ;; esac
+		for dep in $(pkg_file_dep_specs "$f"); do
+			depname=${dep%%=*}
+			case " $seen " in *" $depname "*) continue ;; esac
 			queue="${queue:+$queue }$dep"
 		done
 	done
 	echo "$files"
+}
+
+# wifi-scripts blocks on `ubus wait_for wpa_supplicant`. Removing wpad-basic
+# stops that daemon, and a later apk add does not start it again. A reload
+# while it is down retries for ~30s and then leaves the radios pending.
+wpad_ensure_running() {
+	[ -x /etc/init.d/wpad ] || return 0
+	/etc/init.d/wpad running && return 0
+	log "wpad is not running; starting it before wifi reload"
+	/etc/init.d/wpad enable || true
+	/etc/init.d/wpad start || log "WARN: wpad did not start; wifi-scripts will wait on ubus wpa_supplicant"
 }
 
 pkg_local_install() {
@@ -256,7 +296,10 @@ rollback() {
 		pm_remove wpad-mesh-mbedtls
 		[ "$WPAD_PREV" != none ] && pkg_ensure "$WPAD_PREV"
 	fi
-	[ "$WIFI_TOUCHED" = 1 ] && wifi reload
+	if [ "$WIFI_TOUCHED" = 1 ]; then
+		wpad_ensure_running
+		wifi reload
+	fi
 	[ "$MESHD_WAS_RUNNING" = 1 ] && /etc/init.d/mjolnir-meshd restart
 	write_result "ROLLED_BACK: $1 (previous config restored — see $STAGE/apply.log)"
 	exit 1
@@ -548,6 +591,7 @@ fi
 #    addresses and meshd doesn't re-assert its 10.254.x yet (mjolnir-mesh-bov)
 #    — without the restart the health gate below would fail a GOOD apply.
 if [ "$WIFI_TOUCHED" = 1 ]; then
+	wpad_ensure_running
 	log "wifi reload"
 	wifi reload
 fi

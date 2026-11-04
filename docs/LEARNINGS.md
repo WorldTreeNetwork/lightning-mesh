@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-11-04 — A fresh OpenWrt 25.12.5 image pins `hostapd-common` r1 while the cached `wpad-mesh-mbedtls` breaks unless that package is exactly r6. `pkg_closure` used to skip an already-installed name, so the swap removed `wpad-basic` and then rolled back with no wpad left. The same gap leaves `wpad` stopped; `wifi reload` then waits on `ubus wpa_supplicant` and the radios stay down. (`deploy/openwrt/files/usr/sbin/mjolnir-apply`)
 - 2026-11-03 — "Island" is not a roam group and not the name of the radio mesh. Fast roam is the whole backhaul: the synced DHCP lease, a mobility `/32` (proto 158), and `proxy_arp`. Each node keeps its own client `/24`. `roam::join_island` is the unwired 2026-07 shared-subnet sketch. `roam::islands` only describes broadcast scope, and the daemon does not call it. The 2026-09-16 line below records the sketch that was rejected. (`crates/mjolnir-mesh/src/roam.rs`, `docs/network-coordination/island-formation.md`)
 - 2026-10-22 — The five-failed-proof close was in the owner-claim design and tests, and missing from the spec delta. The living spec states it. A sniffed proof does not replay: each attempt has a fresh nonce. (`openspec/specs/household-owner-claim/spec.md`, `crates/mjolnir-mesh/src/owner_claim.rs`)
 - 2026-10-22 — An AP3000 seen with `eth0` as WAN and no client Ethernet on `br-lan` is an observation, not a qualified wired-core map. (`openspec/specs/node-connection-profiles/spec.md`)

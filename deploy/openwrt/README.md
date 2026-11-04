@@ -56,7 +56,12 @@ version. **Apply** (detached):
 `mjolnir-apply` runs on the node under `setsid`, so the SSH session dying
 mid-wifi-bounce doesn't matter. It snapshots configs/binary/wpad, applies
 idempotently (the `wpad-basic`→`wpad-mesh` swap is **skipped once done** — 
-re-runs never bounce wifi), then health-gates: if the apply touched wifi or
+re-runs never bounce wifi). The swap hands `hostapd-common` at the exact
+revision `wpad-mesh` pins, in the same offline `apk add`, because a stock
+25.12.5 image ships an older `hostapd-common` and apk will not upgrade a
+package it is not given. It also starts `wpad` before `wifi reload` if the
+swap stopped the daemon: wifi-scripts waits on the `wpa_supplicant` ubus
+object and leaves the radios down when that process is absent. Then it health-gates: if the apply touched wifi or
 restarted a live meshd, a mesh peer or a pre-apply `10.254.x` neighbour must
 answer within `--health-timeout` (default 120 s) or **everything rolls back**
 (configs, previous binary, previous wpad from the prefetched package) and wifi
