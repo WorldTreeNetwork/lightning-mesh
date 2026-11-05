@@ -504,9 +504,11 @@ impl OuterGuard {
         if self.binding == Some(bind) {
             return Ok(());
         }
-        if let Some(old) = self.binding {
+        if let Some(old) = self.binding.filter(|old| *old != bind) {
             self.delete_bind_rule(old, self.precise_rule).await;
         }
+        // A killed process does not run Drop, so the rule can already be there.
+        self.delete_bind_rule(bind, false).await;
         let precise = bind.port() != 0 && self.add_bind_rule(bind, true).await.is_ok();
         if !precise {
             self.add_bind_rule(bind, false)
@@ -522,7 +524,11 @@ impl OuterGuard {
     async fn add_bind_rule(&self, bind: SocketAddr, precise: bool) -> Result<()> {
         let args = bind_rule_args(bind, "add", precise);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        ip(&args).await
+        match ip(&args).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.to_string().contains("File exists") => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     async fn delete_bind_rule(&self, bind: SocketAddr, precise: bool) {
