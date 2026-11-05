@@ -29,3 +29,8 @@ state: [CURRENT]
 
 - Addressing, merge rules, the LAN-mode default, owner-claim HMAC, babel interface types, and hello.mesh embed rules now match the tree.
 - `mjolnir-meshd` does not start ACME. The Reticulum crypto and packet catalogs moved to `wiki/claysaurus/`.
+
+## 2026-11-05 — Rayfish notes
+
+- Added the Rayfish overview, identity model, grounding notes, five interop pages, and `mesh-vs-rayfish`.
+- These pages describe another codebase. They do not change Lightning Mesh.
