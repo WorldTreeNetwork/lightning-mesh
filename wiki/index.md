@@ -26,6 +26,22 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 - [[overlay-tun]] — Per-peer /31 tunnels and the `mjolnir0` overlay
 - [[owner-claim]] — Device proof, card HMAC, and the button window
 
+## Interoperability
+
+### Reticulum
+
+- [[reticulum-codebase-grounding]] — Notes from the Reticulum sources
+- [[interop-gossip-transport]] — A Reticulum channel as a future `GossipTransport`
+- [[interop-identity-sharing]] — The two identity blobs, and a derivation that is not built
+- [[interop-name-translation]] — `.mesh` names and Reticulum destinations
+- [[interop-carrier-extension]] — Carrier ideas. meshd does not spawn Reticulum interfaces
+- [[interop-bulk-sync]] — Resource sync for CRDT reconciliation
+- [[interop-protocol-bridge]] — A gateway, marked future
+
+## Comparisons
+
+- [[mesh-vs-reticulum]] — Ed25519 iroh mesh beside Reticulum's 64-byte identity
+
 ## Appendix
 
 - [[crypto-primitives]] — Mesh Ed25519 identity and blake3 addresses
