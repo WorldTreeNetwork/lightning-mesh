@@ -13,6 +13,7 @@
 //!   id        print this node's EndpointId and address blob
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -24,6 +25,7 @@ use clap::{Parser, Subcommand};
 use data_encoding::HEXLOWER;
 use futures_lite::StreamExt;
 use iroh::endpoint::presets;
+use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointId, RelayMode, RelayUrl, SecretKey};
 use iroh_gossip::api::{Event, GossipReceiver, GossipSender};
 use iroh_gossip::Gossip;
@@ -453,7 +455,26 @@ fn load_or_create_secret(path: Option<&Path>) -> Result<SecretKey> {
         }
         let key = SecretKey::generate();
         let hex = HEXLOWER.encode(&key.to_bytes());
-        std::fs::write(path, &hex).context("write secret file")?;
+        // Write with 0o600 permissions (owner read/write only) to protect
+        // the raw Ed25519 seed. Use OpenOptions to set mode explicitly.
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(path)
+                .context("open secret file")?;
+            f.write_all(hex.as_bytes())
+                .context("write secret file")?;
+            drop(f);
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(path, &hex).context("write secret file")?;
+        }
         info!(path = %path.display(), "generated new node identity");
         Ok(key)
     }
@@ -471,8 +492,9 @@ async fn build_endpoint(
 ) -> Result<Endpoint> {
     if lan {
         // LAN mode: no relay, mDNS for peer discovery
+        // Use default wildcard sockets (0.0.0.0/[::]) — do NOT clear IP transports
+        // without a bind_addr, as that removes all UDP/TCP listeners.
         Endpoint::builder(presets::Minimal)
-            .clear_ip_transports()
             .relay_mode(RelayMode::Disabled)
             .secret_key(secret)
             .address_lookup(MdnsAddressLookup::builder())
@@ -490,13 +512,15 @@ async fn build_endpoint(
                 .context("invalid --relay URL")?;
             RelayMode::custom(urls)
         } else {
-            // Staging uses real n0 relays on relay.iroh.network.
-            // Never use Default — it points at the flaky canary network.
+            // Staging uses n0 staging relays (use1-1.staging-relay.n0.iroh.link,
+            // euc1-1.staging-relay.n0.iroh.link). Never use Default — it points
+            // at the flaky canary network.
             RelayMode::Staging
         };
 
+        // Use default wildcard sockets — do NOT clear IP transports without
+        // a bind_addr, as that removes all UDP/TCP listeners.
         Endpoint::builder(presets::N0)
-            .clear_ip_transports()
             .secret_key(secret)
             .address_lookup(MdnsAddressLookup::builder())
             .relay_mode(relay_mode)
@@ -872,8 +896,14 @@ async fn run_listen(
     let peer_ids = resolve_peers(roster_path, peer_args);
     info!(peers = peer_ids.len(), "resolved peer list");
 
-    // Create gossip instance
+    // Create gossip instance and accept inbound connections on GOSSIP_ALPN.
+    // Gossip::builder().spawn creates the actor, but the caller must accept
+    // iroh_gossip::ALPN and pass the connection to the gossip handler.
+    // Without this, a second mjolnir-node cannot connect to this one.
     let gossip = Gossip::builder().spawn(endpoint.clone());
+    let _router = Router::builder(endpoint.clone())
+        .accept(iroh_gossip::ALPN, gossip.clone())
+        .spawn();
 
     // Parse peer EndpointIds for bootstrap
     let bootstrap: Vec<EndpointId> = peer_ids

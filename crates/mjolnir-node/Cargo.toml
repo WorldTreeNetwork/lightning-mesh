@@ -31,9 +31,6 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 data-encoding = { workspace = true }
-rand = { workspace = true }
-ed25519-dalek = "2.2.0"
-thiserror = { workspace = true }
 futures-lite = { workspace = true }
 async-trait = "0.1"
 dirs = "6"
