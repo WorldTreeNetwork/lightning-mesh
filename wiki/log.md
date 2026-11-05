@@ -29,3 +29,9 @@ state: [CURRENT]
 
 - Added the Reticulum grounding notes, six interop pages, and `mesh-vs-reticulum`.
 - Identity sharing stays a proposal. The mesh key is an Ed25519 `iroh::SecretKey`. A Reticulum identity is 64 bytes.
+
+## 2026-11-05 — radio research
+
+- Added four carrier notes: SDR survey, SoapySDR, LimeSDR/bladeRF, and Baofeng/KISS.
+- The seam is `GossipTransport::broadcast` / `recv`. The only production impl is `IrohGossipTransport`.
+- `radio.rs` is `iw` telemetry. `tun/underlay.rs` is table 210, not a second gossip transport.

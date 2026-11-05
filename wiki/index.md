@@ -54,6 +54,11 @@ Specified behavior is in `openspec/specs/`. Design is in `docs/`. This index lis
 
 ## Research
 
+- [[sdr-radio-integration]] — `GossipTransport` as the seam for a second carrier. `radio.rs` is telemetry
+- [[sdr-generic-soapysdr]] — One proposed SoapySDR transport for many devices
+- [[limesdr-bladerf-carrier-mvp]] — LimeSDR and bladeRF as a point-to-point carrier
+- [[baofeng-tnc-aprs-reticulum]] — Baofeng, DireWolf KISS, and a proposed `broadcast` / `recv` impl
+
 ## Appendix
 
 - [[crypto-primitives]] — Mesh Ed25519 identity, and Reticulum's separate key blob
