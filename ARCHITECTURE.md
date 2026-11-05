@@ -15,8 +15,10 @@ the daemon does not assign that address. First contact on the LAN/SSID
 is this node's link-local (`fe80` on `br-lan` / `br-mesh`), published
 on hello `/api/node` (`link_local_lan` / `link_local_mesh`). Nodes also
 have an identity-derived legacy ULA (`blake3(b"mjolnir/mesh/ula/v0")`
-`/48` + `blake3(node_id)` IID) on `br-mesh`. Iroh binds the usable house
-router `/128`. The open connection key is the peer house router `/128`
+`/48` + `blake3(node_id)` IID) on `br-mesh`. Iroh binds that ULA. When a
+house `/128` is usable it binds that too. `id`, `listen`, and `connect`
+use the same bind, so a missing guild file does not refuse them. The
+open connection key is the peer house router `/128`
 (`router_ula` of the local guild and the authenticated endpoint id).
 Overlay link-local on `mjolnir0` is that blake3 interface id, not the
 last 16 bits of `10.254`. The earlier pin bound Iroh on `10.254` and

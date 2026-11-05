@@ -73,6 +73,24 @@ async fn no_guild_admits_a_relay_dial_and_refuses_a_direct_dial_with_no_route() 
 }
 
 #[test]
+fn oneshot_bind_uses_the_identity_ula_without_a_guild() {
+    let node = "node-example";
+    let ula = mjolnir_mesh::tun::ula_addr(node);
+    let row = format!("{:032x} 00000002 40 00 00 br-mesh", u128::from(ula));
+    let bound = oneshot_bind(node, None, &row, "br-mesh", Some(2)).unwrap();
+    assert_eq!(bound, SocketAddr::new(IpAddr::V6(ula), MESH_IROH_PORT));
+    assert!(oneshot_bind(node, None, &row, "br-mesh", None).is_err());
+    assert!(oneshot_bind(node, None, "", "br-mesh", Some(2)).is_err());
+    let explicit: SocketAddr = "[::1]:9".parse().unwrap();
+    assert_eq!(
+        oneshot_bind(node, Some(explicit), "", "br-mesh", None).unwrap(),
+        explicit
+    );
+    let wild: SocketAddr = "[::]:0".parse().unwrap();
+    assert!(oneshot_bind(node, Some(wild), &row, "br-mesh", Some(2)).is_err());
+}
+
+#[test]
 fn attempt_list_always_includes_the_identity_ula() {
     let peer = "peer-endpoint";
     let identity = mjolnir_mesh::tun::ula_addr(peer);

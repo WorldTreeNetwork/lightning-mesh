@@ -45,6 +45,26 @@ pub(super) fn learned_guild_ids() -> Vec<[u8; 32]> {
         .collect()
 }
 
+/// Bind for `id`, `listen`, `connect`, and the tun one-shots. The identity
+/// ULA is enough. A house `/128` is added later by [`bind_plan`] when the
+/// passed address is that ULA and the house address is usable. An explicit
+/// `--bind` replaces this choice. A wildcard is rejected.
+pub(super) fn oneshot_bind(
+    node: &str,
+    explicit: Option<SocketAddr>,
+    kernel: &str,
+    iface: &str,
+    index: Option<u32>,
+) -> Result<SocketAddr> {
+    if let Some(addr) = explicit {
+        anyhow::ensure!(!addr.ip().is_unspecified(), "wildcard --bind is forbidden");
+        return Ok(addr);
+    }
+    let (addr, _) = mjolnir_mesh::tun::underlay::usable_backhaul_binding(node, kernel, iface, index)
+        .context("identity ULA is not usable on br-mesh")?;
+    Ok(SocketAddr::new(IpAddr::V6(addr), MESH_IROH_PORT))
+}
+
 /// Addresses to try for one peer. The identity ULA is always first. Each
 /// learned guild then adds that guild's house `/128` for the same endpoint
 /// id, including a guild that is not the peer's. Order is stable. Duplicates

@@ -47,8 +47,8 @@ re-apply wireless from [Install](../node/02-install.md).
 There is no membership gate and no zero-touch join yet. Each daemon peers
 the other members of `fleet-nodes.conf`.
 
-**Do:** read the id (`status` reads the secret; `mjolnir-meshd id` exits
-until a house `/128` is usable on `br-mesh`):
+**Do:** read the id (`status` reads the secret; `mjolnir-meshd id` binds
+the identity ULA on `br-mesh` and does not need a house guild):
 
 ```sh
 mjolnir-meshd status --secret-file /etc/mjolnir/secret

@@ -54,9 +54,8 @@ ssh root@192.168.1.1 'mjolnir-meshd status --secret-file /etc/mjolnir/secret'
 **Expect:** a line `node id:` followed by 64 hex characters.
 
 `mjolnir-meshd status` reads the secret and does not open an endpoint.
-`mjolnir-meshd id` exits until a house `/128` is usable on `br-mesh`, which
-a router has only after it is in a house. `service mjolnir-meshd diag` prints
-the same status.
+`mjolnir-meshd id` binds the identity ULA on `br-mesh`. A missing house guild
+does not make it exit. `service mjolnir-meshd diag` prints the same status.
 
 ## Step 2: Put this router in the inventory
 

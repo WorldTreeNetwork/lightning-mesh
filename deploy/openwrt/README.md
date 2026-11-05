@@ -243,8 +243,7 @@ clone). Flash the matching board bin from the stock web UI, then official
 OpenWrt sysupgrade, then provision over ethernet (`install-node.sh
 root@192.168.1.1`, then `--wireless`), get its id (`mjolnir-meshd status`), and
 add its line to the installation file (`fleet-nodes.conf` for the current
-one). `mjolnir-meshd id` will not print an id until a house `/128` is usable
-on `br-mesh`. Design rationale:
+one). `mjolnir-meshd id` binds the identity ULA on `br-mesh` and does not need a house `/128`. `status` prints the id with no socket. Design rationale:
 `docs/deploy/node-operations.md`. Wrong intermediate (indoor vs Outdoor vs
 Wall) bricks the box.
 
@@ -294,8 +293,8 @@ node that has not claimed (the bench WR3000S still answers there).
   is reached through a wired peer with SSH `ProxyJump`, at that node's client
   gateway `10.42.x.1` (SSH is allowed because the mesh iface sits in the `lan`
   zone). Current meshd does not assign `10.254`. The node id is the `node id`
-  line of `mjolnir-meshd status`; `mjolnir-meshd id` waits until a house `/128`
-  is on `br-mesh`. Example `~/.ssh/config`:
+  line of `mjolnir-meshd status`. `mjolnir-meshd id` binds the identity ULA and
+  does not wait for a house `/128`. Example `~/.ssh/config`:
   ```
   Host gw            # the wired peer, after it has claimed
       HostName 10.42.x.1
@@ -351,8 +350,8 @@ ssh root@<node> 'service mjolnir-meshd diag'
 ```
 
 `backhaul_iface` stays `br-mesh` (the 802.11s bridge from `setup-wireless.sh`).
-`br-lan` is a wired bench only. `mjolnir-meshd id` exits until a house `/128`
-is usable on `br-mesh`; `status` does not.
+`br-lan` is a wired bench only. `mjolnir-meshd id` binds the identity ULA on
+`br-mesh` and does not require a house `/128`. `status` does not open a socket.
 
 The daemon defaults to `--lan` (offline, no relay). meshd self-assigns its
 `10.254.0.0/16` backhaul address on `backhaul_iface` and pins iroh's socket to

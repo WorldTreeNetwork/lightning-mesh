@@ -110,7 +110,7 @@ struct Cli {
     no_relay: bool,
 
     /// Bind to a specific socket address (e.g. 127.0.0.1:0 for a loopback-only
-    /// test). Replaces the usable house /128 bind; wildcards are rejected.
+    /// test). Replaces the identity ULA bind; wildcards are rejected.
     #[arg(long, global = true)]
     bind: Option<SocketAddr>,
 
@@ -389,13 +389,13 @@ async fn main() -> Result<()> {
         return supervised_mesh(cli, secret).await;
     }
     let no_relay = cli.no_relay || cli.lan;
-    let house = known_house_router(&secret.public().to_string())
-        .context("house /128 is not usable on br-mesh")?;
-    let bind = Some(
-        cli.bind
-            .unwrap_or(SocketAddr::new(IpAddr::V6(house), MESH_IROH_PORT)),
-    );
-    let endpoint = build_endpoint(secret, no_relay, bind, cli.lan, &cli.relay).await?;
+    let node = secret.public().to_string();
+    let kernel = std::fs::read_to_string("/proc/net/if_inet6").unwrap_or_default();
+    let index = std::fs::read_to_string(format!("/sys/class/net/{MESH_BRIDGE}/ifindex"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+    let bind = mesh_transport::oneshot_bind(&node, cli.bind, &kernel, MESH_BRIDGE, index)?;
+    let endpoint = build_endpoint(secret, no_relay, Some(bind), cli.lan, &cli.relay).await?;
 
     match cli.command {
         Command::Id => {
