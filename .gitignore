@@ -106,3 +106,6 @@ deploy/openwrt/fleet.d/*
 .worktrees/
 .spawns/
 groups/*/inventory.json
+
+# mjolnir-node identity
+.mjolnir-node-secret

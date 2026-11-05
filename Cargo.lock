@@ -2539,6 +2539,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-node"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "bytes",
+ "clap",
+ "data-encoding",
+ "ed25519-dalek 2.2.0",
+ "futures-lite",
+ "iroh",
+ "iroh-gossip",
+ "iroh-mdns-address-lookup",
+ "mjolnir-mesh",
+ "postcard",
+ "rand 0.9.2",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
