@@ -54,6 +54,7 @@ state: [CURRENT]
 
 - [[sdr-radio-integration]] — SDR/Radio integration: RTL-SDR, HackRF, LoRa, SoapySDR, SDR-over-IP
 - [[baofeng-tnc-aprs-reticulum]] — Baofeng VHF/UHF radio + DireWolf TNC + APRS/AX.25 + Reticulum integration
+- [[limesdr-bladerf-carrier-mvp]] — LimeSDR/bladeRF as mesh carrier links: GFSK modem, SdrGossipTransport, two-node MVP plan
 
 ## Appendix
 

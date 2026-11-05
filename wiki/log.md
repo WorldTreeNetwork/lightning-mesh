@@ -58,6 +58,21 @@ state: [CURRENT]
 - Updated interop-carrier-extension.md with full interface table
 - Total: 1 new file, ~350 lines; 6 files patched
 
+## 2026-11-05 (LimeSDR/bladeRF Carrier MVP)
+
+- Added 1 research page: limesdr-bladerf-carrier-mvp (~17K lines)
+- Analyzed actual mesh carrier architecture: GossipTransport trait (crdt/sync.rs) is the integration point, NOT radio.rs (which is telemetry-only)
+- Verified meshd.rs: IrohGossipTransport wraps iroh-gossip GossipSender/GossipReceiver, feeds GossipSync dispatcher, neighbor tracking via watch channel
+- Verified OuterGuard pattern: cgroup v2 + nft socket matching + ip rule/fwmark for underlay route isolation
+- Verified underlay.rs: Babeld instance on br-mesh, physical peer routes via ip route show table 210, HouseDialGate rejects relay dials without physical path
+- Verified radio.rs: Pure iw telemetry parser — reads iw dev/station/mpath output, produces radio.json — NOT a carrier abstraction
+- Proposed GFSK at 9600 baud in 200 kHz channel as MVP modulation (simple, proven, works on any SDR, no FPGA changes)
+- Proposed SdrGossipTransport as new GossipTransport impl: TX = bytes→FCS→GFSK IQ→liblimesuite; RX = liblimesuite IQ→GFSK demod→FCS→bytes
+- Proposed MVP architecture: SDR as second gossip channel alongside iroh-gossip (not replacement), both feed same CRDT state
+- Two-node MVP plan: 3 weeks, laptops first then OpenWrt, ~$400 hardware
+- LimeSDR-USB recommended over bladeRF: user-replaceable FPGA, higher sample rate, larger community
+- Updated index.md with new research page
+
 ## 2026-11-05 (Rayfish Codebase Grounding)
 
 - Added 2 new Rayfish pages: rayfish-codebase-grounding (451 lines), rayfish-identity-model (4,554 bytes)
