@@ -24,3 +24,8 @@ state: [CURRENT]
 
 - Added the Rayfish overview, identity model, grounding notes, five interop pages, and `mesh-vs-rayfish`.
 - These pages describe another codebase. They do not change Lightning Mesh.
+
+## 2026-11-05 — Reticulum interop
+
+- Added the Reticulum grounding notes, six interop pages, and `mesh-vs-reticulum`.
+- Identity sharing stays a proposal. The mesh key is an Ed25519 `iroh::SecretKey`. A Reticulum identity is 64 bytes.

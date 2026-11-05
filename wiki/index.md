@@ -37,9 +37,20 @@ Specified behavior is in `openspec/specs/`. Design is in `docs/`. This index lis
 - [[interop-rayfish-dns]] — Magic DNS patterns
 - [[interop-rayfish-invite]] — Invite and admission
 
+### Reticulum
+
+- [[reticulum-codebase-grounding]] — Notes from the Reticulum sources
+- [[interop-gossip-transport]] — A Reticulum channel as a future `GossipTransport`
+- [[interop-identity-sharing]] — The two identity blobs, and a derivation that is not built
+- [[interop-name-translation]] — `.mesh` names and Reticulum destinations
+- [[interop-carrier-extension]] — Carrier ideas. meshd does not spawn Reticulum interfaces
+- [[interop-bulk-sync]] — Resource sync for CRDT reconciliation
+- [[interop-protocol-bridge]] — A gateway, marked future
+
 ## Comparisons
 
 - [[mesh-vs-rayfish]] — CRDT mesh beside a coordinator-admitted iroh VPN
+- [[mesh-vs-reticulum]] — Ed25519 iroh mesh beside Reticulum's 64-byte identity
 
 ## Research
 
