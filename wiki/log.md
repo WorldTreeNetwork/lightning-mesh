@@ -14,3 +14,8 @@ state: [CURRENT]
 
 - Added `SCHEMA.md`, `index.md`, and this log.
 - The notebook points at `openspec/specs/` and `docs/` for specified behavior and design.
+
+## 2026-11-05 — concept atlas
+
+- Added nine concept pages and two appendix pages.
+- Gossip variant names, merge rules, babel ownership, the node id, and the meshd CLI match the tree.
