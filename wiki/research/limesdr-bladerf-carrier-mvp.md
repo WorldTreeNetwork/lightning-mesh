@@ -299,26 +299,13 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="2cf0", ATTR{idProduct}=="5272", MODE="0666"
 
 ## 8. MVP Build Plan
 
-### Phase 1: SDR Library Integration (1-2 weeks)
+### Phase 1: SoapySDR Integration (1 week)
 
-1. **Add `mjolnir-sdr` crate** (or module) to the workspace
-2. **FFI bindings** for `liblimesuite` and `libbladeRF`:
-   - `limesuite-sys` (rust bindings for liblimesuite)
-   - `bladerf-sys` (rust bindings for libbladeRF)
-3. **Device abstraction trait:**
-   ```rust
-   pub trait SdrDevice: Send + Sync {
-       fn set_frequency(&self, freq: f64);  // MHz
-       fn set_bandwidth(&self, bw: f64);    // Hz
-       fn set_sample_rate(&self, sr: u32);  // SPS
-       fn set_gain(&self, gain: f32);       // dB
-       fn start_tx(&mut self) -> Result<(), SdrError>;
-       fn start_rx(&mut self) -> Result<rx_stream, SdrError>;
-       fn stop(&mut self) -> Result<(), SdrError>;
-   }
-   ```
-4. **Implement for LimeSDR-USB** (primary target)
-5. **Implement for bladeRF** (secondary, same trait)
+1. **Add `soapysdr` crate** to the workspace (117K downloads, Apache-2.0)
+2. **Single `SdrGossipTransport`** impl using `soapysdr::Device` — works with ANY SoapySDR device
+3. **Auto-detect TX/RX capability** — RX-only devices (RTL-SDR, Airspy) get `tx_stream: None`
+4. **Device selection** via CLI: `--sdr-device "driver=rtlsdr,serial=00000001"` or `--sdr-device "driver=lms7"`
+5. **No per-device code** — new hardware = install SoapySDR module, no code change
 
 ### Phase 2: GFSK Modem (2-3 weeks)
 
@@ -365,27 +352,35 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="2cf0", ATTR{idProduct}=="5272", MODE="0666"
 | Phase 5 | SDR over IP (SoapyRemote client) | 2-3 weeks |
 | Phase 5 | AES-128 encryption on SDR link (before iroh layer) | 1-2 weeks |
 
-## 11. Alternative: Use Existing SDR Frameworks
+## 11. SDR Driver Deep Dive: Why SoapySDR over Direct Drivers
 
-Instead of building a custom GFSK modem from scratch, we could integrate with:
+### Why not liblimesuite / libbladeRF directly?
 
-### GNU Radio
-- **Pros:** Mature, well-tested modems, large community
-- **Cons:** Heavy dependency (Python, NumPy), not ideal for Rust
-- **Fit:** Use as reference/prototype, then port modem to Rust
+Building per-device FFI bindings (limesuite-sys, bladerf-sys) means:
+- One `GossipTransport` impl per device (LimeSDRTransport, BladeRfTransport, RtlSdrTransport...)
+- New hardware = new FFI crate + new impl
+- More code to maintain, more crates in the workspace
 
-### gr-limesdr / gr-bladerf
-- **Pros:** Ready-made SDR source/sink blocks
-- **Cons:** GNU Radio dependency
-- **Fit:** Prototype modulation scheme, then implement in Rust
+### Why SoapySDR wins
 
-### SoapySDR + SoapyRemote
-- **Pros:** Unified API, network-transparent SDR access
-- **Cons:** Adds network hop (SDR → SoapySDRServer → meshd)
-- **Fit:** SDR-over-IP in Phase 5, not MVP
+- **One codebase** for 15+ devices — RTL-SDR, HackRF, LimeSDR, bladeRF, PlutoSDR, Airspy, SDRplay, USRP
+- **Runtime module loading** — install a SoapySDR module, no code change
+- **RX-only support** — automatic, no special case code
+- **SoapyRemote** — built-in SDR-over-IP
+- **`soapysdr` Rust crate** — 117K downloads, pre-generated bindings, safe wrappers
+- **~200 lines** for generic `SdrGossipTransport` vs ~200 lines per device
 
-### Recommended Approach:
-**Build the GFSK modem in Rust** (no external SDR framework dependency). Use GNU Radio only for prototype/validation. The modem is simple enough (GFSK at 9600 baud) that a Rust implementation is straightforward.
+### Direct driver approach still useful for...
+
+- **Custom FPGA waveforms** on LimeSDR (user-replaceable FPGA → upload CSS/LoRa firmware)
+- **Maximum performance** (SoapySDR adds one extra copy through its normalization layer)
+- **Device-specific features** not exposed by SoapySDR (e.g., LimeSDR FPGA calibration)
+
+For MVP: SoapySDR is the right choice. Direct drivers can be added later for specific hardware features.
+
+### GNU Radio note
+
+GNU Radio is NOT needed. It's a flow-graph editor with huge dependencies (100+ MB, boost, swig, python3, GTK). We just need raw IQ samples from the SDR — SoapySDR gives us that in ~50 lines of Rust. GNU Radio is useful only for prototyping modems, not production code.
 
 ## 12. Summary: MVP Scope
 
@@ -397,6 +392,6 @@ Instead of building a custom GFSK modem from scratch, we could integrate with:
 | SdrGossipTransport | 🔲 Need to write | 3 days |
 | meshd integration | 🔲 Need to wire | 2 days |
 | OpenWrt cross-compile | 🔲 Need to test | 2 days |
-| **Total MVP** | | **~3 weeks** |
+| **Total MVP** | | **~5 weeks** (SoapySDR + GFSK modem + meshd integration) |
 
 **MVP Deliverable:** Two nodes (laptops first, OpenWrt second) connected via LimeSDR-USB at 915 MHz, running gossip messages over the SDR link at 9600 baud GFSK.

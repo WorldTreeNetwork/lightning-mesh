@@ -52,9 +52,10 @@ state: [CURRENT]
 
 ## Research
 
-- [[sdr-radio-integration]] — SDR/Radio integration: RTL-SDR, HackRF, LoRa, SoapySDR, SDR-over-IP
+- [[sdr-radio-integration]] — SDR/Radio integration overview: landscape, integration strategy, GFSK modem
 - [[baofeng-tnc-aprs-reticulum]] — Baofeng VHF/UHF radio + DireWolf TNC + APRS/AX.25 + Reticulum integration
-- [[limesdr-bladerf-carrier-mvp]] — LimeSDR/bladeRF as mesh carrier links: GFSK modem, SdrGossipTransport, two-node MVP plan
+- [[limesdr-bladerf-carrier-mvp]] — LimeSDR/bladeRF MVP design: GFSK modem, SdrGossipTransport, two-node plan
+- [[sdr-generic-soapysdr]] — Generic SDR abstraction via SoapySDR: one codebase for all devices, RX-only support, SoapyRemote
 
 ## Appendix
 

@@ -66,12 +66,28 @@ state: [CURRENT]
 - Verified OuterGuard pattern: cgroup v2 + nft socket matching + ip rule/fwmark for underlay route isolation
 - Verified underlay.rs: Babeld instance on br-mesh, physical peer routes via ip route show table 210, HouseDialGate rejects relay dials without physical path
 - Verified radio.rs: Pure iw telemetry parser — reads iw dev/station/mpath output, produces radio.json — NOT a carrier abstraction
-- Proposed GFSK at 9600 baud in 200 kHz channel as MVP modulation (simple, proven, works on any SDR, no FPGA changes)
+- Proposed GFSK at 9600 baud, 200 kHz channel as MVP modulation (simple, proven, works on any SDR, no FPGA changes)
 - Proposed SdrGossipTransport as new GossipTransport impl: TX = bytes→FCS→GFSK IQ→liblimesuite; RX = liblimesuite IQ→GFSK demod→FCS→bytes
 - Proposed MVP architecture: SDR as second gossip channel alongside iroh-gossip (not replacement), both feed same CRDT state
 - Two-node MVP plan: 3 weeks, laptops first then OpenWrt, ~$400 hardware
 - LimeSDR-USB recommended over bladeRF: user-replaceable FPGA, higher sample rate, larger community
 - Updated index.md with new research page
+
+## 2026-11-05 (Generic SDR via SoapySDR)
+
+- Added 1 new research page: sdr-generic-soapysdr (~17K lines)
+- Replaced per-device FFI approach with SoapySDR abstraction: ONE SdrGossipTransport for ALL devices
+- Documented why GNU Radio is NOT the answer (100+ MB deps, breaking changes, Python/C++, overkill)
+- Documented how SDRs are actually driven: pure userspace USB, 5-10 function calls, no kernel drivers
+- Documented SoapySDR plugin architecture: runtime-loaded modules, no compile-time hardware dependency
+- Documented `soapysdr` Rust crate (117K downloads, Apache-2.0, pre-generated bindings, MSRV 1.85)
+- Documented RX-only device support: automatic via optional tx_stream, no special case code
+- Documented 5 deployment scenarios: full-duplex, TX+many-RX, half-duplex, SoapyRemote, mixed fleet
+- Documented SoapySDR stream API: setupStream, readStream, writeStream, stream status
+- Documented SoapyRemote for SDR-over-IP: same API, driver=remote,remote-host=X
+- Updated sdr-radio-integration.md: corrected radio.rs (telemetry-only), replaced per-device transports with generic SoapySDR approach, updated MVP plan
+- Updated limesdr-bladerf-carrier-mvp.md: replaced Phase 1 FFI plan with SoapySDR integration, updated MVP timeline to 5 weeks
+- Updated wiki index with new SoapySDR page
 
 ## 2026-11-05 (Rayfish Codebase Grounding)
 

@@ -37,17 +37,11 @@ The mesh stack has a clear separation:
 
 The `GossipTransport` trait is the integration point. The existing `IrohTransport` uses Iroh's `DatagramConn` for gossip messages, which runs over whatever network interfaces the system provides (WiFi, Ethernet, etc.).
 
-### Existing radio.rs (17.9K lines)
+### Existing radio.rs (telemetry only)
 
-The codebase already has a `radio.rs` module (17,908 chars, 6 structs, 6 impls):
+**IMPORTANT:** `radio.rs` is NOT a carrier abstraction. It is a pure `iw` telemetry parser — reads `iw dev/station/mpath` output and produces `radio.json` for the browser topology view. It has no transmit capability and is not used for carrier communication.
 
-- **`Radio`** — Generic radio abstraction with `RadioError`
-- **`RadioMode`** enum — `Active`, `Passive`, `Scanning`, `Monitoring`
-- **`RadioSignal`** struct — RSSI, SNR, timestamp, frequency, modulation, bandwidth, device_id
-- **`RadioConfig`** struct — frequency, bandwidth, gain, sample_rate, modulation
-- **`RadioStats`** struct — rx_bytes, tx_bytes, errors, packets, sample_rate, frequency, bandwidth
-
-This is a **generic radio abstraction** that can be extended for any radio type.
+The real carrier integration point is the **`GossipTransport` trait** in `crdt/sync.rs` (see `limesdr-bladerf-carrier-mvp.md` and `sdr-generic-soapysdr.md`).
 
 ### Existing underlay.rs (12.7K lines)
 
@@ -238,159 +232,68 @@ This is the **transport layer** that handles message transport.
 
 ## 7. Recommended Integration Strategy
 
-### Phase 1: RTL-SDR + RTL-TCP (Receiver-Only)
+### Phase 1: SoapySDR + GFSK Modem (5 weeks)
 
-**Effort:** Low (2-3 weeks)
-**Value:** High (immediate passive monitoring capability)
+**Effort:** 5 weeks
+**Value:** High (multi-device support, works with all SDRs including RX-only)
 
-- Add `RtlSdrTransport` impl of `GossipTransport`
-- Use `libusb` to read I/Q samples from RTL-SDR
-- Demodulate using simple FM/SSB demodulation
-- Create virtual interface for mesh traffic
-- RTL-TCP support for remote SDR access
+- Add `soapysdr` crate to workspace
+- Implement single `SdrGossipTransport` using `soapysdr::Device` — works with ALL supported devices
+- Auto-detect TX/RX capability (RX-only devices get `tx_stream: None`)
+- Build GFSK modem (~500 lines Rust) on top of SoapySDR IQ samples
+- Wire into meshd as optional second gossip channel
+- Device selection via CLI: `--sdr-device "driver=rtlsdr,serial=00000001"`
+- New hardware = install SoapySDR module, no code change
 
-### Phase 2: SoapySDR Framework
+### Phase 2: Per-device optimization (as needed)
 
-**Effort:** Medium (4-6 weeks)
-**Value:** High (multi-device support)
+**Effort:** Variable
+**Value:** Medium-High (device-specific features)
 
-- Add SoapySDR as abstraction layer
-- Support RTL-SDR, HackRF, BladeRF, etc.
-- SoapyRemote for remote SDR access
-- Unified API for all SDR types
-
-### Phase 3: LoRa + KISS TNC
-
-**Effort:** Medium (4-6 weeks)
-**Value:** High (long-range, low-bandwidth)
-
-- Add `LoRaTransport` impl of `GossipTransport`
-- Use KISS protocol for TNC communication
-- Support serial and TCP TNC connections
-- Low-bandwidth gossip optimization
-
-### Phase 4: Full-Duplex Transceivers (HackRF/BladeRF)
-
-**Effort:** High (8-12 weeks)
-**Value:** Medium-High (full-duplex, but expensive)
-
-- Add `HackRfTransport` impl of `GossipTransport`
-- Add `BladeRfTransport` impl of `GossipTransport`
-- Full-duplex communication support
-- Higher bandwidth than LoRa
+- Custom FPGA waveforms on LimeSDR (CSS/LoRa firmware)
+- Maximum performance paths bypassing SoapySDR normalization
+- Device-specific features not exposed by SoapySDR
 
 ## 8. Integration Architecture
 
-The mesh already has a carrier abstraction. The key is to implement `GossipTransport` for each carrier type:
+The mesh uses a **single generic `SdrGossipTransport`** via SoapySDR, not per-device transports. See `sdr-generic-soapysdr.md` for the full design.
+
+### Generic SdrGossipTransport (via SoapySDR)
 
 ```rust
-pub trait GossipTransport: Send + Sync + 'static {
-    fn send_bytes(&self, bytes: &[u8]) -> Result<(), GossipError>;
-    fn recv_bytes(&self) -> Vec<u8>;
-    fn is_connected(&self) -> bool;
-}
-```
-
-### RTL-SDR Transport
-
-```rust
-pub struct RtlSdrTransport {
-    device: RtlSdrDevice,
-    frequency: f64,
-    bandwidth: f64,
-    sample_rate: u32,
-    rtl_tcp_server: Option<RtlTcpServer>,
+pub struct SdrGossipTransport {
+    device: soapysdr::Device,       // Any SoapySDR device
+    rx_stream: Option<soapysdr::RxStream>,  // None for RX-only
+    tx_stream: Option<soapysdr::TxStream>,  // None for RX-only
+    frequency: f64,                  // Center frequency in Hz
+    sample_rate: f64,               // Sample rate in SPS
 }
 
-impl GossipTransport for RtlSdrTransport {
-    fn send_bytes(&self, bytes: &[u8]) -> Result<(), GossipError> {
-        // Modulate bytes into IQ samples
-        // Send IQ samples to RTL-SDR device
+#[async_trait::async_trait]
+impl GossipTransport for SdrGossipTransport {
+    async fn broadcast(&self, payload: Bytes) -> Result<(), GossipError> {
+        // TX path: bytes → FCS framing → GFSK mod → IQ samples → write_stream()
     }
-    
-    fn recv_bytes(&self) -> Vec<u8> {
-        // Read IQ samples from RTL-SDR device
-        // Demodulate IQ samples into bytes
-        // Return bytes
-    }
-    
-    fn is_connected(&self) -> bool {
-        self.device.is_connected()
+
+    async fn recv(&self) -> Result<Bytes, GossipError> {
+        // RX path: read_stream() → GFSK demod → FCS parse → bytes
     }
 }
 ```
 
-### SoapySDR Transport
-
-```rust
-pub struct SoapySdrTransport {
-    device: SoapySdrDevice,
-    frequency: f64,
-    bandwidth: f64,
-    sample_rate: u32,
-    soapy_remote: Option<SoapyRemoteClient>,
-}
-
-impl GossipTransport for SoapySdrTransport {
-    fn send_bytes(&self, bytes: &[u8]) -> Result<(), GossipError> {
-        // Modulate bytes into IQ samples
-        // Send IQ samples to SoapySDR device
-    }
-    
-    fn recv_bytes(&self) -> Vec<u8> {
-        // Read IQ samples from SoapySDR device
-        // Demodulate IQ samples into bytes
-        // Return bytes
-    }
-    
-    fn is_connected(&self) -> bool {
-        self.device.is_connected()
-    }
-}
-```
-
-### LoRa Transport
-
-```rust
-pub struct LoRaTransport {
-    device: LoRaDevice,
-    frequency: f64,
-    bandwidth: f64,
-    spreading_factor: u8,
-    coding_rate: u8,
-    kiss_tnc: Option<KissTnc>,
-}
-
-impl GossipTransport for LoRaTransport {
-    fn send_bytes(&self, bytes: &[u8]) -> Result<(), GossipError> {
-        // Encode bytes into LoRa packet
-        // Send packet via KISS TNC
-    }
-    
-    fn recv_bytes(&self) -> Vec<u8> {
-        // Read packet via KISS TNC
-        // Decode packet into bytes
-        // Return bytes
-    }
-    
-    fn is_connected(&self) -> bool {
-        self.device.is_connected()
-    }
-}
-```
+One implementation. Works with RTL-SDR, LimeSDR, bladeRF, HackRF, Airspy, PlutoSDR, USRP, and more. New hardware = install SoapySDR module, no code change.
 
 ## 9. Research Gaps
 
-- **RTL-SDR modulation:** Need to research how to modulate gossip messages into IQ samples
-- **SoapySDR API:** Need to research SoapySDR Rust bindings
-- **LoRa KISS protocol:** Need to research KISS protocol implementation details
-- **OpenWrt package availability:** Need to verify package availability for all carriers
-- **Performance testing:** Need to test bandwidth/latency for each carrier type
-- **Security:** Need to research encryption/encryption for SDR links
+- **GFSK modem implementation** — Need to implement GFSK modulator/demodulator in Rust (see `limesdr-bladerf-carrier-mvp.md` for channel plan)
+- **SoapySDR thread safety** — Many SoapySDR driver modules have bugs; wrap in `tokio::spawn_blocking` (see `sdr-generic-soapysdr.md`)
+- **OpenWrt SoapySDR packages** — Need to cross-compile libsoapysdr + device modules for OpenWrt targets
+- **Performance testing** — Need to test throughput/latency/BER for each carrier type
+- **Security** — Need to research encryption for SDR links (iroh handles transport layer encryption)
 
 ## 10. Next Steps
 
-1. **Phase 1:** Implement RTL-SDR transport (receiver-only)
-2. **Phase 2:** Implement SoapySDR framework (multi-device)
-3. **Phase 3:** Implement LoRa transport (long-range, low-bandwidth)
-4. **Phase 4:** Implement full-duplex transceivers (HackRF/BladeRF)
+1. **SoapySDR integration** — Add `soapysdr` crate, implement `SdrGossipTransport`
+2. **GFSK modem** — Build TX/RX modem on top of SoapySDR IQ samples
+3. **meshd integration** — Wire as optional second gossip channel
+4. **End-to-end testing** — Two-node MVP (laptops first, OpenWrt second)
