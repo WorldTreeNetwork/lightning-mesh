@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-11-04 — A killed meshd leaves the BusyBox outer rule behind (`RTNETLINK File exists` on the next start). Delete that `pref 11999` rule before adding it. (`crates/mjolnir-mesh/src/bin/meshd/transport.rs`, tr3000-b)
 - 2026-11-04 — OpenWrt BusyBox `ip -6 rule` rejects `ipproto` and `sport`. The outer bind rule has to fall back to `from <ula> lookup 210`, or meshd exits as soon as the identity ULA is usable. (`crates/mjolnir-mesh/src/bin/meshd/transport.rs`, tr3000-b)
 - 2026-11-04 — The backhaul endpoint binds `ula_addr` and dials `ula_addr` of the peer endpoint id. A missing house guild, and a guild that is not the peer's, still open that socket. The outer table carries the identity `/64` on `br-mesh` so the dial is on-link. `10.254` stays unassigned. The lamp treats a missing identity ULA, not a missing `10.254`, as overlay-sick. A peer still on the house-`/128` bind does not answer this dial until it runs the same build. (`crates/mjolnir-mesh/src/bin/meshd/transport.rs`, `led.rs`)
 - 2026-11-04 — meshd build `44a71d7` does not assign legacy `10.254` on `br-mesh` (house `/128` is the transport identity) but the status lamp still treats a missing `10.254` while mesh L2 is up as overlay-sick, so a joined TR3000 flashes red. (`crates/mjolnir-mesh/src/bin/meshd/transport.rs`, `led.rs`)
