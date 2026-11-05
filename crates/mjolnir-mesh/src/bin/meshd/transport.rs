@@ -337,7 +337,35 @@ struct OuterGuard {
     original: Option<PathBuf>,
     routes: [Vec<Vec<String>>; 2],
     binding: Option<SocketAddr>,
+    /// BusyBox `ip -6 rule` rejects `ipproto` and `sport`. The fallback rule
+    /// matches every locally generated packet from the bind address.
+    precise_rule: bool,
 }
+fn bind_rule_args(bind: SocketAddr, action: &str, precise: bool) -> Vec<String> {
+    let family = if bind.is_ipv4() { "-4" } else { "-6" };
+    let mut args = vec![
+        family.to_owned(),
+        "rule".into(),
+        action.into(),
+        "pref".into(),
+        "11999".into(),
+        "iif".into(),
+        "lo".into(),
+        "from".into(),
+        bind.ip().to_string(),
+    ];
+    if precise && bind.port() != 0 {
+        args.extend([
+            "ipproto".into(),
+            "udp".into(),
+            "sport".into(),
+            bind.port().to_string(),
+        ]);
+    }
+    args.extend(["lookup".into(), OUTER_TABLE.into()]);
+    args
+}
+
 async fn ip(args: &[&str]) -> Result<()> {
     let out = tokio::process::Command::new("ip")
         .args(args)
@@ -371,6 +399,7 @@ impl OuterGuard {
             original,
             routes: Default::default(),
             binding: None,
+            precise_rule: false,
         };
         // Install fail-closed terminal routes before the marking/rules. Main
         // WAN defaults can carry relay traffic, but never substitute for a
@@ -475,39 +504,33 @@ impl OuterGuard {
         if self.binding == Some(bind) {
             return Ok(());
         }
-        let family = if bind.is_ipv4() { "-4" } else { "-6" };
-        let source = bind.ip().to_string();
-        let port = bind.port().to_string();
-        let mut args = vec![
-            family, "rule", "add", "pref", "11999", "iif", "lo", "from", &source, "ipproto", "udp",
-        ];
-        if bind.port() != 0 {
-            args.extend(["sport", &port]);
-        }
-        args.extend(["lookup", OUTER_TABLE]);
-        if self.binding.is_none() {
-            let mut delete = args.clone();
-            delete[2] = "del";
-            while ip(&delete).await.is_ok() {}
-        }
-        ip(&args).await?;
         if let Some(old) = self.binding {
-            let family = if old.is_ipv4() { "-4" } else { "-6" };
-            let source = old.ip().to_string();
-            let port = old.port().to_string();
-            let mut args = vec![
-                family, "rule", "del", "pref", "11999", "iif", "lo", "from", &source, "ipproto",
-                "udp",
-            ];
-            if old.port() != 0 {
-                args.extend(["sport", &port]);
-            }
-            args.extend(["lookup", OUTER_TABLE]);
-            ip(&args).await?;
+            self.delete_bind_rule(old, self.precise_rule).await;
         }
-
+        let precise = bind.port() != 0 && self.add_bind_rule(bind, true).await.is_ok();
+        if !precise {
+            self.add_bind_rule(bind, false)
+                .await
+                .with_context(|| format!("installing the outer rule for {bind}"))?;
+            warn!("BusyBox ip has no ipproto/sport rule; outer lookup matches every packet from {bind}");
+        }
+        self.precise_rule = precise;
         self.binding = Some(bind);
         Ok(())
+    }
+
+    async fn add_bind_rule(&self, bind: SocketAddr, precise: bool) -> Result<()> {
+        let args = bind_rule_args(bind, "add", precise);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        ip(&args).await
+    }
+
+    async fn delete_bind_rule(&self, bind: SocketAddr, precise: bool) {
+        for precise in [precise, !precise] {
+            let args = bind_rule_args(bind, "del", precise);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            while ip(&args).await.is_ok() {}
+        }
     }
 
     async fn refresh(&mut self) -> Result<()> {
@@ -568,25 +591,10 @@ impl Drop for OuterGuard {
                 .output();
         }
         if let Some(bind) = self.binding {
-            let family = if bind.is_ipv4() { "-4" } else { "-6" };
-            let mut args = vec![
-                family.to_owned(),
-                "rule".into(),
-                "del".into(),
-                "pref".into(),
-                "11999".into(),
-                "iif".into(),
-                "lo".into(),
-                "from".into(),
-                bind.ip().to_string(),
-                "ipproto".into(),
-                "udp".into(),
-            ];
-            if bind.port() != 0 {
-                args.extend(["sport".into(), bind.port().to_string()]);
+            for precise in [self.precise_rule, !self.precise_rule] {
+                let args = bind_rule_args(bind, "del", precise);
+                let _ = std::process::Command::new("ip").args(args).output();
             }
-            args.extend(["lookup".into(), OUTER_TABLE.into()]);
-            let _ = std::process::Command::new("ip").args(args).output();
         }
         if let Some(original) = &self.original {
             let _ = std::fs::write(
