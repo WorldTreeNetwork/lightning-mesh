@@ -19,3 +19,8 @@ state: [CURRENT]
 
 - Added nine concept pages and two appendix pages.
 - Gossip variant names, merge rules, babel ownership, the node id, and the meshd CLI match the tree.
+
+## 2026-11-05 — Rayfish notes
+
+- Added the Rayfish overview, identity model, grounding notes, five interop pages, and `mesh-vs-rayfish`.
+- These pages describe another codebase. They do not change Lightning Mesh.

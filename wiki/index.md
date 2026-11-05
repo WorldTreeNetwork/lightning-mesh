@@ -26,7 +26,20 @@ Specified behavior is in `openspec/specs/`. Design is in `docs/`. This index lis
 
 ## Interoperability
 
+### Rayfish
+
+- [[rayfish-overview]] — Rayfish as an iroh VPN with a coordinator
+- [[rayfish-identity-model]] — One Ed25519 key, device certs, positional msgpack
+- [[rayfish-codebase-grounding]] — Notes from the Rayfish sources
+- [[interop-rayfish-transport]] — Transport patterns
+- [[interop-rayfish-addressing]] — Identity-derived addresses
+- [[interop-rayfish-firewall]] — Stateful firewall on an overlay TUN
+- [[interop-rayfish-dns]] — Magic DNS patterns
+- [[interop-rayfish-invite]] — Invite and admission
+
 ## Comparisons
+
+- [[mesh-vs-rayfish]] — CRDT mesh beside a coordinator-admitted iroh VPN
 
 ## Research
 
