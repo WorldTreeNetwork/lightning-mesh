@@ -445,6 +445,22 @@ async fn physical_babel(node: String, claims_file: PathBuf, config: PathBuf, gat
     }
 }
 
+/// nftables on the fleet (OpenWrt nft 1.1.6) rejects a `}` that shares a line
+/// with a statement, so every brace in this script is on its own line.
+fn transport_guard_rule(level: usize, cgroup: &str, mark: &str) -> String {
+    format!(
+        "\
+table inet mjolnir_transport {{
+  chain output {{
+    type route hook output priority mangle; policy accept;
+    socket cgroupv2 level {level} \"{cgroup}\" meta l4proto tcp meta mark set {mark};
+    socket cgroupv2 level {level} \"{cgroup}\" udp sport != {{ 6696, 6697, 5353 }} meta mark set {mark};
+  }}
+}}
+"
+    )
+}
+
 /// Route locally generated transport packets through a separate FIB. Forwarded
 /// inner packets have no socket/cgroup match and keep using the normal FIB.
 /// cgroup v2 plus nft socket matching also covers Iroh's independently-created
@@ -586,9 +602,7 @@ impl OuterGuard {
                 .trim_start_matches('/')
                 .to_owned();
             let level = relative.split('/').count();
-            let rule = format!(
-                "table inet mjolnir_transport {{ chain output {{ type route hook output priority mangle; policy accept; socket cgroupv2 level {level} \"{relative}\" meta l4proto tcp meta mark set {OUTER_MARK}; socket cgroupv2 level {level} \"{relative}\" udp sport != {{ 6696, 6697, 5353 }} meta mark set {OUTER_MARK}; }} }}\n"
-            );
+            let rule = transport_guard_rule(level, &relative, OUTER_MARK);
             let _ = tokio::process::Command::new("nft")
                 .args(["delete", "table", "inet", "mjolnir_transport"])
                 .output()

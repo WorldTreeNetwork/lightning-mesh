@@ -559,3 +559,19 @@ async fn physical_babel_cold_start_and_established_outer_path_loss() {
         ep.close().await;
     }
 }
+
+#[test]
+fn transport_guard_rule_puts_each_brace_on_its_own_line() {
+    let rule = transport_guard_rule(4, "services/mjolnir-meshd/meshd/mjolnir-transport-1", "0x4d4a");
+    assert!(rule.contains("udp sport != { 6696, 6697, 5353 }"));
+    assert!(rule.contains("socket cgroupv2 level 4 \"services/mjolnir-meshd/meshd/mjolnir-transport-1\""));
+    for line in rule.lines() {
+        let trimmed = line.trim();
+        if trimmed.ends_with('}') && !trimmed.contains('{') {
+            assert_eq!(
+                trimmed, "}",
+                "OpenWrt nft rejects a block brace that shares a line with a statement: {line}"
+            );
+        }
+    }
+}
