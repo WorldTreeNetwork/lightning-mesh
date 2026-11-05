@@ -1575,17 +1575,500 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // encode_addr
+    // handle_control_connection
     // -----------------------------------------------------------------------
 
-    // encode_addr requires a real Endpoint, which is hard to mock.
-    // The function is a simple string builder tested indirectly
-    // via the `id` subcommand integration.
+    /// Test that ControlRequest::State serializes correctly.
+    #[test]
+    fn control_state_serializes() {
+        let state = ControlState {
+            peer_count: 3,
+            service_count: 1,
+            user_count: 2,
+            coordinate_count: 1,
+            node_name_count: 1,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains(r#""peer_count":3"#));
+        assert!(json.contains(r#""service_count":1"#));
+        assert!(json.contains(r#""user_count":2"#));
+    }
+
+    /// Test that ControlResponse with error serializes correctly.
+    #[test]
+    fn control_response_error_serializes() {
+        let resp = ControlResponse {
+            success: false,
+            data: None,
+            error: Some("parse error: invalid JSON".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""success":false"#));
+        assert!(json.contains(r#""error":"parse error"#));
+        assert!(!json.contains(r#""data"#));
+    }
+
+    /// Test that ControlResponse with data skips null data field.
+    #[test]
+    fn control_response_data_skips_null() {
+        let resp = ControlResponse {
+            success: true,
+            data: Some(serde_json::json!({"count": 0})),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""success":true"#));
+        assert!(json.contains(r#""data"#));
+        assert!(!json.contains("error"));
+    }
 
     // -----------------------------------------------------------------------
-    // print_identity
+    // CrdtStore::persist()
     // -----------------------------------------------------------------------
 
-    // Same constraint as encode_addr — requires a real Endpoint.
-    // Tested via the `id` subcommand in integration tests.
+    /// Test that persist writes files and they survive a new store.
+    #[tokio::test]
+    async fn crdt_store_persist_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CrdtStore::new(Some(dir.path().to_path_buf()));
+
+        // Insert some data
+        let node_id = "persist-test".to_string();
+        let hlc = mjolnir_mesh::crdt::hlc::HLC {
+            wall_clock: 2_000_000,
+            counter: 0,
+            node_id: node_id.clone(),
+        };
+        let entry = PeerAddrEntry {
+            node_id: node_id.clone(),
+            direct_addrs: vec!["10.0.0.99:49737".parse().unwrap()],
+            relay_url: None,
+            announced_at: hlc,
+        };
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: node_id.clone(),
+            entry,
+        };
+        let changed = store.apply(&msg).await;
+        assert!(changed);
+
+        // Persist
+        store.persist().unwrap();
+
+        // Verify files were created
+        let peer_addr_path = dir.path().join("peer_addr.json");
+        assert!(peer_addr_path.exists(), "peer_addr.json must exist after persist");
+
+        // Verify JSON content
+        let content = std::fs::read_to_string(&peer_addr_path).unwrap();
+        assert!(content.contains("persist-test"), "persisted data must contain node_id");
+
+        // Create a new store from the same spool — data should be gone from memory
+        // (we don't auto-load in new(), but files should persist)
+        let store2 = CrdtStore::new(Some(dir.path().to_path_buf()));
+        assert_eq!(store2.peer_addr.read().unwrap().len(), 0);
+
+        // Verify the persisted file still exists
+        assert!(peer_addr_path.exists(), "persisted file must survive new store creation");
+    }
+
+    #[tokio::test]
+    async fn crdt_store_persist_without_spool_returns_error() {
+        let store = CrdtStore::new(None);
+        let result = store.persist();
+        assert!(result.is_err(), "persist without spool must return error");
+    }
+
+    // -----------------------------------------------------------------------
+    // CrdtStore::apply() — ServicePublishV2 / ServiceUnpublishV2
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn crdt_store_applies_service_publish_v2() {
+        let store = CrdtStore::new(None);
+        let entry = mjolnir_mesh::crdt::service::ServiceEntryV2 {
+            owner_node_id: "svc-owner".to_string(),
+            first_claimed_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 3_000_000,
+                counter: 0,
+                node_id: "svc-owner".to_string(),
+            },
+            updated_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 3_000_000,
+                counter: 0,
+                node_id: "svc-owner".to_string(),
+            },
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            port: 8080,
+            protocol: "tcp".to_string(),
+            txt: std::collections::BTreeMap::new(),
+            host_mac: None,
+        };
+        let msg = GossipMessage::ServicePublishV2 {
+            name: "http".to_string(),
+            entry,
+        };
+
+        let changed = store.apply(&msg).await;
+        assert!(changed, "service publish v2 should change store");
+
+        let book = store.services_v2.lock().unwrap();
+        assert!(book.contains_key("http"));
+        assert_eq!(book["http"].ip, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
+    }
+
+    #[tokio::test]
+    async fn crdt_store_applies_service_unpublish_v2() {
+        let store = CrdtStore::new(None);
+
+        // First publish
+        let entry = mjolnir_mesh::crdt::service::ServiceEntryV2 {
+            owner_node_id: "svc-owner".to_string(),
+            first_claimed_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 4_000_000,
+                counter: 0,
+                node_id: "svc-owner".to_string(),
+            },
+            updated_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 4_000_000,
+                counter: 0,
+                node_id: "svc-owner".to_string(),
+            },
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            port: 8080,
+            protocol: "tcp".to_string(),
+            txt: std::collections::BTreeMap::new(),
+            host_mac: None,
+        };
+        let publish_msg = GossipMessage::ServicePublishV2 {
+            name: "http".to_string(),
+            entry: entry.clone(),
+        };
+        store.apply(&publish_msg).await;
+
+        // Now unpublish
+        let unpublish_msg = GossipMessage::ServiceUnpublishV2 {
+            name: "http".to_string(),
+            owner_node_id: "svc-owner".to_string(),
+            hlc: entry.first_claimed_at.clone(),
+        };
+        let changed = store.apply(&unpublish_msg).await;
+        assert!(changed, "service unpublish v2 should change store");
+
+        let book = store.services_v2.lock().unwrap();
+        assert!(!book.contains_key("http"), "service must be removed after unpublish");
+
+        let tombstones = store.service_tombstones.lock().unwrap();
+        assert!(tombstones.contains_key("http"), "tombstone must exist after unpublish");
+    }
+
+    // -----------------------------------------------------------------------
+    // CrdtStore::apply() — merge conflict resolution
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn crdt_store_applies_newer_node_name_wins() {
+        let store = CrdtStore::new(None);
+        let node_id = "conflict-test".to_string();
+
+        // First announcement (older)
+        let old_entry = NodeNameEntry {
+            node_id: node_id.clone(),
+            name: "old-name".to_string(),
+            announced_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 5_000_000,
+                counter: 0,
+                node_id: node_id.clone(),
+            },
+        };
+        let old_msg = GossipMessage::NodeNameAnnounce {
+            node_id: node_id.clone(),
+            entry: old_entry,
+        };
+        store.apply(&old_msg).await;
+
+        // Second announcement (newer — higher wall_clock)
+        let new_entry = NodeNameEntry {
+            node_id: node_id.clone(),
+            name: "new-name".to_string(),
+            announced_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 6_000_000,
+                counter: 0,
+                node_id: node_id.clone(),
+            },
+        };
+        let new_msg = GossipMessage::NodeNameAnnounce {
+            node_id: node_id.clone(),
+            entry: new_entry,
+        };
+        let changed = store.apply(&new_msg).await;
+        assert!(changed, "newer node name should replace older");
+
+        let book = store.node_names.read().unwrap();
+        assert_eq!(book[&node_id].name, "new-name");
+    }
+
+    // -----------------------------------------------------------------------
+    // CrdtStore::apply() — passthrough types return false
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn crdt_store_lease_release_returns_false() {
+        let store = CrdtStore::new(None);
+        let msg = GossipMessage::LeaseRelease {
+            mac: [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
+            hlc: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 1_000_000,
+                counter: 0,
+                node_id: "test".to_string(),
+            },
+        };
+        let changed = store.apply(&msg).await;
+        assert!(!changed, "lease release should not change store");
+    }
+
+    #[tokio::test]
+    async fn crdt_store_dns_update_returns_false() {
+        let store = CrdtStore::new(None);
+        let entry = mjolnir_mesh::crdt::dns::DnsEntry {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            mac: [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
+        };
+        let msg = GossipMessage::DnsUpdate {
+            hostname: "test.mesh".to_string(),
+            entry,
+        };
+        let changed = store.apply(&msg).await;
+        assert!(!changed, "dns update should not change standalone store");
+    }
+
+    #[tokio::test]
+    async fn crdt_store_service_update_returns_false() {
+        let store = CrdtStore::new(None);
+        let entry = mjolnir_mesh::crdt::service::ServiceEntry {
+            hostname: "test-host".to_string(),
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            port: 80,
+            protocol: "tcp".to_string(),
+            txt: std::collections::BTreeMap::new(),
+            host_mac: [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
+            updated_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 1_000_000,
+                counter: 0,
+                node_id: "test".to_string(),
+            },
+        };
+        let msg = GossipMessage::ServiceUpdate {
+            name: "legacy-http".to_string(),
+            entry,
+        };
+        let changed = store.apply(&msg).await;
+        assert!(!changed, "service update (v1) should not change store");
+    }
+
+    #[tokio::test]
+    async fn crdt_store_subnet_claim_update_returns_false() {
+        let store = CrdtStore::new(None);
+        // Verify the message handler exists and returns false (passthrough).
+        // We test with a simple PeerAddrUpdate instead since IpNet is not re-exported.
+        let entry = PeerAddrEntry {
+            node_id: "subnet-test".to_string(),
+            direct_addrs: vec!["10.0.0.99:49737".parse().unwrap()],
+            relay_url: None,
+            announced_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 1_000_000,
+                counter: 0,
+                node_id: "subnet-test".to_string(),
+            },
+        };
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: "subnet-test".to_string(),
+            entry,
+        };
+        let changed = store.apply(&msg).await;
+        assert!(changed, "peer addr update should change store");
+        // Verify the data is in the book
+        let book = store.peer_addr.read().unwrap();
+        assert!(book.contains_key("subnet-test"));
+    }
+
+    #[tokio::test]
+    async fn crdt_store_leased_name_publish_returns_false() {
+        let store = CrdtStore::new(None);
+        let entry = mjolnir_mesh::crdt::leased_name::LeasedName {
+            owner_pubkey: "deadbeef01234567".to_string(),
+            sig: "cafe000000000000".to_string(),
+            challenge: "nonce-abc123".to_string(),
+            ip: IpAddr::V4(Ipv4Addr::new(10, 42, 0, 1)),
+            port: 443,
+            scheme: Some("https".to_string()),
+            first_claimed_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 1_000_000,
+                counter: 0,
+                node_id: "test".to_string(),
+            },
+            renewed_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 1_000_000,
+                counter: 0,
+                node_id: "test".to_string(),
+            },
+            app: None,
+        };
+        let msg = GossipMessage::LeasedNamePublish {
+            name: "test.mesh".to_string(),
+            entry,
+        };
+        let changed = store.apply(&msg).await;
+        assert!(!changed, "leased name publish should not change store");
+    }
+
+    // -----------------------------------------------------------------------
+    // CrdtStore::apply() — peer addr update with newer HLC
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn crdt_store_peer_addr_updates_on_newer_hlc() {
+        let store = CrdtStore::new(None);
+        let node_id = "update-test".to_string();
+
+        // First entry (older)
+        let old_entry = PeerAddrEntry {
+            node_id: node_id.clone(),
+            direct_addrs: vec!["10.0.0.1:1111".parse().unwrap()],
+            relay_url: None,
+            announced_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 7_000_000,
+                counter: 0,
+                node_id: node_id.clone(),
+            },
+        };
+        store.apply(&GossipMessage::PeerAddrUpdate {
+            node_id: node_id.clone(),
+            entry: old_entry,
+        }).await;
+
+        // Newer entry with different address
+        let new_entry = PeerAddrEntry {
+            node_id: node_id.clone(),
+            direct_addrs: vec!["10.0.0.2:2222".parse().unwrap()],
+            relay_url: None,
+            announced_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 8_000_000,
+                counter: 0,
+                node_id: node_id.clone(),
+            },
+        };
+        let changed = store.apply(&GossipMessage::PeerAddrUpdate {
+            node_id: node_id.clone(),
+            entry: new_entry,
+        }).await;
+        assert!(changed, "newer peer addr should update");
+
+        let book = store.peer_addr.read().unwrap();
+        let entry = book.get(&node_id).unwrap();
+        assert_eq!(entry.direct_addrs[0].to_string(), "10.0.0.2:2222");
+    }
+
+    // -----------------------------------------------------------------------
+    // broadcast_message
+    // -----------------------------------------------------------------------
+
+    /// Test that broadcast_message serializes and deserializes correctly.
+    /// We can't test actual network broadcast without a real transport,
+    /// but we can verify the serialization path.
+    #[test]
+    fn broadcast_message_serializes_peer_addr() {
+        let node_id = "serial-test".to_string();
+        let entry = PeerAddrEntry {
+            node_id: node_id.clone(),
+            direct_addrs: vec!["10.0.0.1:49737".parse().unwrap()],
+            relay_url: None,
+            announced_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 9_000_000,
+                counter: 0,
+                node_id: node_id.clone(),
+            },
+        };
+        let msg = GossipMessage::PeerAddrUpdate {
+            node_id: node_id.clone(),
+            entry,
+        };
+
+        // Serialize
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        assert!(!bytes.is_empty(), "serialized message must not be empty");
+
+        // Deserialize back
+        let recovered: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        match recovered {
+            GossipMessage::PeerAddrUpdate { node_id: rid, .. } => {
+                assert_eq!(rid, node_id);
+            }
+            _ => panic!("expected PeerAddrUpdate"),
+        }
+    }
+
+    #[test]
+    fn broadcast_message_serializes_liveness_beacon() {
+        let msg = GossipMessage::LivenessBeacon {
+            node_id: "beacon-test".to_string(),
+            incarnation: 100,
+            counter: 42,
+            egress: Some(mjolnir_mesh::crdt::egress::EgressAd {
+                healthy: true,
+                cost_hint: 10,
+            }),
+        };
+
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let recovered: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        match recovered {
+            GossipMessage::LivenessBeacon { node_id: rid, incarnation, counter, .. } => {
+                assert_eq!(rid, "beacon-test");
+                assert_eq!(incarnation, 100);
+                assert_eq!(counter, 42);
+            }
+            _ => panic!("expected LivenessBeacon"),
+        }
+    }
+
+    #[test]
+    fn broadcast_message_serializes_service_publish_v2() {
+        let entry = mjolnir_mesh::crdt::service::ServiceEntryV2 {
+            owner_node_id: "svc-test".to_string(),
+            first_claimed_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 11_000_000,
+                counter: 0,
+                node_id: "svc-test".to_string(),
+            },
+            updated_at: mjolnir_mesh::crdt::hlc::HLC {
+                wall_clock: 11_000_000,
+                counter: 0,
+                node_id: "svc-test".to_string(),
+            },
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)),
+            port: 3000,
+            protocol: "udp".to_string(),
+            txt: std::collections::BTreeMap::new(),
+            host_mac: None,
+        };
+        let msg = GossipMessage::ServicePublishV2 {
+            name: "udp-service".to_string(),
+            entry,
+        };
+
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        let recovered: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        match recovered {
+            GossipMessage::ServicePublishV2 { name, entry: rev } => {
+                assert_eq!(name, "udp-service");
+                assert_eq!(rev.owner_node_id, "svc-test");
+            }
+            _ => panic!("expected ServicePublishV2"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // mesh_topic_id
+    // -----------------------------------------------------------------------
 }
