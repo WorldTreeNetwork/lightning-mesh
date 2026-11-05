@@ -17,6 +17,26 @@ Add a stateful firewall to Lightning Mesh's overlay TUN, using rayfish's firewal
 
 Lightning Mesh has zero firewall on the overlay TUN. Any node can reach any other without filtering. Rayfish has a mature stateful firewall with conntrack, per-peer rules, network-scoped rules, and secure-by-default posture.
 
+**Verified from firewall.rs:** `src/firewall.rs` is ~56K lines. The firewall inspects IP packets carried inside the VPN. It does NOT filter the control plane (QUIC streams for Welcome, MemberSync, MeshHello). The firewall only sees TUN-bound packets.
+
+**`FirewallRule` struct:**
+```rust
+pub struct FirewallRule {
+    pub direction: Direction,     // In or Out
+    pub action: Action,           // Allow or Deny
+    pub protocol: Protocol,       // Tcp, Udp, Icmp, Any
+    pub port: Option<PortRange>,  // None = all ports
+    pub peer: PeerFilter,         // Any, Identity(id), Except{...}
+    pub network: Option<String>,  // Scope to a network
+    pub origin: RuleOrigin,       // Local, Network(net), or Ssh
+}
+```
+
+**RuleOrigin model:**
+- `RuleOrigin::Local` — hand-added, never touched by network reconvergence
+- `RuleOrigin::Network(net)` — from coordinator suggestions, replaced atomically on blob update
+- `RuleOrigin::Ssh` — auto-seeded SSH passthrough, removed on `ssh off`
+
 ## Rayfish Firewall Architecture
 
 Rayfish's firewall (`src/firewall.rs`, ~1,200 lines) inspects IP packets carried inside the VPN. It does NOT filter the control plane (QUIC streams for Welcome, MemberSync, MeshHello). The firewall only sees TUN-bound packets.

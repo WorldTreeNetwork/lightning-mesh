@@ -36,6 +36,8 @@ state: [CURRENT]
 
 ### Rayfish
 
+- [[rayfish-codebase-grounding]] — Verified Rayfish source code analysis (Identity, Membership, Transport, Forward, Firewall, DNS, Invite, Peers)
+- [[rayfish-identity-model]] — Single Ed25519 key, device certs, derive_ipv6(), ExitFamilies, positional msgpack wire
 - [[rayfish-overview]] — Rayfish P2P VPN: architecture and key facts
 - [[interop-rayfish-transport]] — Transport hardening patterns (Phase 1)
 - [[interop-rayfish-addressing]] — Deterministic addressing from identity (Phase 1)
@@ -46,6 +48,7 @@ state: [CURRENT]
 ## Comparisons
 
 - [[mesh-vs-reticulum]] — Lightning Mesh vs Reticulum: architecture comparison
+- [[mesh-vs-rayfish]] — Lightning Mesh vs Rayfish: CRDT vs coordinator model
 
 ## Research
 

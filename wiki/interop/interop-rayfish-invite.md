@@ -15,7 +15,9 @@ Adopt rayfish's invite and admission model for Lightning Mesh's node onboarding.
 
 ## Concept
 
-Rayfish has a mature invite system (`src/invite.rs`, ~40K lines) for joining mesh networks. Mesh has a single-owner owner-claim ceremony. Rayfish's model supports multi-operator, network-level admission, and device hierarchies.
+Rayfish has a mature invite system (`src/invite.rs`, ~35K lines) for joining mesh networks. Mesh has a single-owner owner-claim ceremony. Rayfish's model supports multi-operator, network-level admission, and device hierarchies.
+
+**Verified from invite.rs:** An invite code is `bs58(network_pubkey || coordinator || secret || checksum)`. The coordinator mints invites and is the *only* node that can verify and burn them. The ledger lives on disk at `~/.config/rayfish/invites/<network>.toml` with 0600 permissions. A `DeviceCert` (user signs device key) is persisted at `~/.config/rayfish/device_cert` as msgpack.
 
 ## Rayfish Invite Flow
 

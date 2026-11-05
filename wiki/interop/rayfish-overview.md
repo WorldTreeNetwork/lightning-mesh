@@ -11,7 +11,7 @@ confidence: high
 
 # Rayfish Overview
 
-Rayfish is a P2P mesh VPN built on iroh. Peers are addressed by cryptographic identity, not IP. Dual-stack addressing: stable IPv4 in `100.64.0.0/10` (FNV-1a of identity), stable IPv6 in `200::/7` (blake3, never rotates).
+Rayfish is a P2P mesh VPN built on iroh. Peers are addressed by cryptographic identity, not IP. Dual-stack addressing: stable IPv4 in `100.64.0.0/10` (FNV-1a of identity), stable IPv6 in `200::/7` (blake3, never rotates). **Overlay is IPv6-only.** IPv4 only for exit node egress.
 
 ## Key Facts
 
@@ -58,10 +58,11 @@ Tailscale operator model. Always-root daemon does privileged work (TUN, DNS, rou
 
 ## Key Files
 
-- `src/transport.rs` -- iroh endpoint setup, ALPN versioning, overlay address filtering (~900 lines)
-- `src/forward.rs` -- TUN packet forwarding, per-peer routing, fragmentation (~11K lines)
-- `src/firewall.rs` -- stateful firewall with conntrack, per-peer rules (~1,200 lines)
-- `src/identity.rs` -- stable SecretKey persistence, device certs (~160 lines)
-- `src/dns/mod.rs` -- Magic DNS with `.ray` domain, DoT forwarding (~45K lines)
-- `src/invite.rs` -- invite system, signed GroupBlob, coordinator admission (~40K lines)
-- `src/ssh.rs` -- embedded SSH server, per-network allow-lists (~67K lines)
+- `src/transport.rs` -- iroh endpoint setup, ALPN versioning, overlay address filtering, QUIC config, control plane DNS isolation (57K lines)
+- `src/forward.rs` -- TUN packet forwarding, per-peer routing, fragmentation, FqCodel (75K lines)
+- `src/firewall.rs` -- stateful firewall with conntrack, per-peer rules, rule origins (56K lines)
+- `src/identity.rs` -- stable Ed25519 SecretKey persistence, device certs (160 lines)
+- `src/dns/mod.rs` -- Magic DNS with `.ray` domain, DoT forwarding, overlay IP filtering (39K lines)
+- `src/invite.rs` -- single-use invite codes, InviteStore, coordinator admission (35K lines)
+- `src/membership.rs` -- Member roster, derive_ipv6(), ExitFamilies, Peer resolution (1,928 lines)
+- `src/peers.rs` -- PeerTable, DeviceUserMap, reachability tracking (84K lines)

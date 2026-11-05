@@ -18,8 +18,8 @@ confidence: high
 | **License** | AGPL-3.0 (dual: commercial) | MPL-2.0 |
 | **Mission** | Mesh OS (CRDT state, Babel routing, hello.mesh) | P2P VPN (TUN + Magic DNS + firewall) |
 | **Transport** | Iroh (QUIC + NAT traversal) | Iroh (QUIC + NAT traversal) |
-| **State Model** | CRDT (FWW merge) | Signed GroupBlob (pkarr) |
-| **Addressing** | blake3 IDs, /24 claims from 10.42.0.0/16 | Deterministic: IPv4 100.64.0.0/10, IPv6 200::/7 |
+| **State Model** | CRDT (FWW merge) | Signed GroupBlob (pkarr), positional msgpack |
+| **Addressing** | blake3 IDs, /24 claims from 10.42.0.0/16 | Deterministic: IPv6 200::/7 (blake3), IPv4 100.64.0.0/10 (FNV-1a), overlay IPv6-only |
 | **Crypto** | Curve25519, blake3, postcard | Curve25519, blake3, FNV-1a, msgpack |
 | **Routing** | Babeld (external process) | Per-peer routing via QUIC datagrams |
 | **Backhaul** | 802.11s WiFi mesh | iroh QUIC (NAT traversal, relays) |

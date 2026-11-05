@@ -15,7 +15,7 @@ Adopt rayfish's transport configuration patterns to harden Lightning Mesh's iroh
 
 ## Concept
 
-Rayfish has ~900 lines of transport hardening in `src/transport.rs` that mesh lacks. These are mostly drop-in patterns: overlay address filtering, versioned ALPN, warm hints, loss-tolerant QUIC, loop prevention, and graceful error classification.
+Rayfish has ~57K lines of transport hardening in `src/transport.rs` that mesh lacks. These are mostly drop-in patterns: overlay address filtering, versioned ALPN, warm hints, loss-tolerant QUIC, loop prevention, and graceful error classification.
 
 ## Patterns to Adopt
 

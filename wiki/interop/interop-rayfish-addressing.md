@@ -25,20 +25,38 @@ These never change across reboots. Mesh uses first-writer-wins `/24` claims from
 ## Rayfish Model
 
 ```rust
-// src/identity.rs - stable SecretKey persistence
+// src/identity.rs - stable Ed25519 SecretKey persistence (iroh::SecretKey)
+pub fn load_existing() -> Result<Option<SecretKey>> {
+    let bytes: [u8; 32] = std::fs::read(&path)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("corrupt secret key file"))?;
+    Ok(Some(SecretKey::from_bytes(&bytes)))
+}
+
 pub fn load_or_create() -> Result<SecretKey> {
-    if let Some(key) = load_existing()? {
-        tracing::info!(id = %key.public().fmt_short(), "loaded identity");
-        return Ok(key);
-    }
+    if let Some(key) = load_existing()? { return Ok(key); }
     let key = SecretKey::generate();
     crate::config::write_file(&key_path()?, &key.to_bytes(), true)?;
-    tracing::info!(id = %key.public().fmt_short(), "generated new identity");
     Ok(key)
 }
 ```
 
-Address derivation uses `membership::derive_ipv6()` (blake3) and `membership::derive_ipv4()` (FNV-1a). The `load_existing()` vs `load_or_create()` distinction is critical: `load_existing()` never auto-mints a key when the caller is about to restore one.
+**Verified from identity.rs:** Rayfish uses a single `iroh::SecretKey` (Ed25519, 32 bytes) — NOT a dual X25519+Ed25519 key like Reticulum. The key file is exactly 32 raw bytes at `~/.config/rayfish/secret_key`. No separate key agreement key exists.
+
+**Address derivation** uses `membership::derive_ipv6()` (blake3) — NOT FNV-1a for IPv6. IPv4 uses FNV-1a into `100.64.0.0/10` but the overlay is IPv6-only.
+
+**`load_existing()` vs `load_or_create()`:** Critical distinction — `load_existing()` returns `None` without minting a key (for restore scenarios), `load_or_create()` auto-generates if absent.
+
+**`derive_ipv6()` from membership.rs:**
+```rust
+pub fn derive_ipv6(identity: &EndpointId) -> Ipv6Addr {
+    let mut hex = [0u8; 64];  // hex encoding on stack, zero allocation
+    hex::encode_to_slice(identity.as_bytes(), &mut hex);
+    let hash = blake3::hash(&hex);
+    let octets: [u8; 16] = [0x02, hash.as_bytes()[0..15]...];
+    Ipv6Addr::from(octets)  // 200::/7 range
+}
+```
 
 ## Mesh Model
 

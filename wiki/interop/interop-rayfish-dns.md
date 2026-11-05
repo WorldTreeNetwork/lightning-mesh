@@ -15,7 +15,9 @@ Adopt rayfish's DNS patterns for Lightning Mesh's `.mesh` name resolution.
 
 ## Concept
 
-Rayfish has a 45K-line Magic DNS responder (`src/dns/mod.rs`) with `.ray` domain support, DNS-over-TLS forwarding, per-network DNS configs, platform-specific DNS handling (Android Private DNS), and overlay IP filtering. Mesh has a simpler `.mesh` DNS responder.
+Rayfish has a 39K-line Magic DNS responder (`src/dns/mod.rs`) with `.ray` domain support, DNS-over-TLS forwarding, per-network DNS configs, platform-specific DNS handling (Android Private DNS), and overlay IP filtering. Mesh has a simpler `.mesh` DNS responder.
+
+**Verified from dns/mod.rs:** Magic DNS is reached via `MAGIC_DNS_V6 = 200::53` (IPv6). No host-level port 53 bind is made — `forward::run_mesh` intercepts UDP DNS packets destined for the magic IP and hands them to `resolver::Resolver`. The resolver is reached via the TUN route, not a local socket. `MAGIC_DNS_V4 = 100.100.100.53` is unusable (Tailscale anti-spoof drops it), so the overlay is IPv6-only.
 
 ## Rayfish DNS Architecture
 
