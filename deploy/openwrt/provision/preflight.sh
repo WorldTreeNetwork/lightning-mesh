@@ -14,12 +14,15 @@ NO_WIRELESS=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--wireless) WIRELESS="${2:?--wireless needs a file}"; shift 2 ;;
+		--bind-iface) PROVISION_BIND_IFACE="${2:?--bind-iface needs an interface}"; shift 2 ;;
 		--no-wireless) NO_WIRELESS=1; shift ;;
 		-*) echo "unknown option: $1" >&2; exit 2 ;;
 		*) HOST="$1"; shift ;;
 	esac
 done
-provision_host_ok "$HOST" || { echo "host must look like root@192.168.1.1" >&2; exit 2; }
+export PROVISION_BIND_IFACE
+provision_install_ssh_wrapper
+provision_host_ok "$HOST" || { echo "host must look like root@192.168.1.1 or root@10.42.x.1" >&2; exit 2; }
 
 BIN="${MJOLNIR_MESHD_BIN:-$OW/mjolnir-meshd-aarch64}"
 TXN="${MJOLNIR_TXN_BIN:-$OW/mjolnir-txn-aarch64}"
@@ -41,7 +44,7 @@ for p in $need; do
 	fi
 done
 
-ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" 'sh -s' <<'EOF'
+provision_ssh "$HOST" 'sh -s' <<'EOF'
 set -e
 [ -f /etc/openwrt_release ] || { echo "not OpenWrt: /etc/openwrt_release missing" >&2; exit 1; }
 . /etc/openwrt_release

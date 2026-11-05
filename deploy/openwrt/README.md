@@ -39,16 +39,28 @@ build:embed`, then the same cross-build approach as `build.sh`); set
 One command — idempotent, safe to re-run, and safe to run **in-band** (over the
 802.11s mesh or the very wifi being reconfigured — mjolnir-mesh-6e5):
 
-A box that is still stock OpenWrt (SSH at `root@192.168.1.1` after the
+A box that is still stock OpenWrt (first SSH at `root@192.168.1.1` after the
 Cudy intermediate and the official sysupgrade) goes through
 `deploy/openwrt/provision/provision-node.sh`. That is the command Lightning
 Admin runs. It preflights the binary and the offline package cache, calls
-`install-node.sh --wireless`, appends the inventory line, renders that
-group's peers, and prints a lamp reading. `--check` is read-only.
+`install-node.sh --wireless`, follows the client gateway meshd claims, appends
+that address to the inventory, renders peers for this node only, and prints a
+lamp reading. `--check` is read-only. A missing `/etc/mjolnir/house-guild-id`
+is a healthy first node: the lamp and the backhaul socket follow the identity
+ULA, and UDP 49737 is the pass/fail for that socket. `10.254` is not assigned.
+`creat(/etc/mjolnir/babeld.underlay.pid): File exists` in logread is babeld
+restarting, not a failed apply. The script does not SSH the other routers.
+
+Once meshd stays up it claims `10.42.x.1/24` on `br-lan` and deletes stock
+`192.168.1.1`. Later SSH to the stock address times out. The inventory column
+is the live gateway (`tr3000-b` is `10.42.149.1`). A node that still serves
+`192.168.1.1` as its client LAN (the bench WR3000S) keeps that address.
+`--bind-iface` pins SSH to the cable NIC when it is not the default route.
+The script will not renew DHCP on the default-route interface.
 
 ```sh
 deploy/openwrt/provision/provision-node.sh --name tr3000-b --group bench root@192.168.1.1
-deploy/openwrt/provision/provision-node.sh --check root@192.168.1.1
+deploy/openwrt/provision/provision-node.sh --check root@10.42.149.1
 deploy/openwrt/install-node.sh root@<node-ip>                      # binary/deps only
 deploy/openwrt/install-node.sh --wireless node.env root@<node-ip>  # + (re)run setup-wireless.sh
 ```
@@ -267,25 +279,28 @@ The gotchas that otherwise get re-discovered every time:
 **Installs/updates run in-band.** `install-node.sh` stages first and applies
 detached with health-gated rollback, so the wifi bounce (wpad swap,
 `setup-wireless.sh`) cutting your SSH session is expected and harmless — the
-script reconnects and reports the result. Ethernet at `192.168.1.1` is the
-**recovery of last resort** (e.g. a rollback that still didn't restore
-reachability), not a requirement.
+script reconnects and reports the result. On a node that has already claimed
+its client `/24`, recovery is that `10.42.x.1` gateway (or link-local on the
+cable), because stock `192.168.1.1` has been removed. `192.168.1.1` is only
+the first contact on a fresh OpenWrt image, and the lasting client LAN of a
+node that has not claimed (the bench WR3000S still answers there).
 
 **Reaching a node — three paths:**
-- **Wired / direct** — plug the build machine into the node's LAN port; the node
-  answers at OpenWrt's default `192.168.1.1`. Simplest, and survives a wifi/meshd
-  bounce.
-- **Over the mesh (jump host)** — a node that's only on the 802.11s backhaul is
-  reachable *through* a wired peer with SSH `ProxyJump`, at its derived `10.254.x`
-  backhaul address (SSH is allowed because the mesh iface sits in the `lan` zone).
-  Find the address with `mjolnir-meshd id` → it's `10.254.<blake3(node_id)[0..2]>`,
-  or just read it off a wired peer (`ip -4 route | grep 10.254`). Example
-  `~/.ssh/config`:
+- **Wired / direct** — plug the build machine into the node's LAN port. A fresh
+  OpenWrt image answers at `192.168.1.1`. After meshd claims, the same port
+  answers at `10.42.x.1`. That survives a wifi bounce. Do not replace the
+  laptop's default route to get there; the cable is a second interface.
+- **Over the mesh (jump host)** — a node that is only on the 802.11s backhaul
+  is reached through a wired peer with SSH `ProxyJump`, at that node's client
+  gateway `10.42.x.1` (SSH is allowed because the mesh iface sits in the `lan`
+  zone). Current meshd does not assign `10.254`. The node id is the `node id`
+  line of `mjolnir-meshd status`; `mjolnir-meshd id` waits until a house `/128`
+  is on `br-mesh`. Example `~/.ssh/config`:
   ```
-  Host gw            # the wired peer
-      HostName 192.168.1.1
+  Host gw            # the wired peer, after it has claimed
+      HostName 10.42.x.1
   Host leaf          # mesh-only peer, reached through gw
-      HostName 10.254.x.y
+      HostName 10.42.y.1
       ProxyJump gw
   ```
 - **NOT the WAN** — OpenWrt firewalls SSH on the `wan` zone, so a node's upstream
@@ -296,9 +311,11 @@ reachability), not a requirement.
 protocol) for any manual copy. `install-node.sh` already does, and lands the
 binary via `.new`+`mv` so replacing the *running* binary doesn't hit `ETXTBSY`.
 
-**Shared direct-link IP / host-key churn.** Every node uses `192.168.1.1` on its
-LAN port, so swapping which node is wired changes the SSH host key. Clear it
-first: `ssh-keygen -R 192.168.1.1`.
+**Shared direct-link IP / host-key churn.** A fresh OpenWrt image and any node
+that has not claimed still answer at `192.168.1.1`, so swapping which box is
+cabled changes the SSH host key. Clear it first: `ssh-keygen -R 192.168.1.1`.
+A claimed node answers at its own `10.42.x.1` and needs that address in
+`known_hosts` (`StrictHostKeyChecking=accept-new` on the provision scripts).
 
 **Update an in-place node.** Re-run `install-node.sh root@<ip>` (config is
 preserved, the wpad swap is skipped, and a running meshd is restarted onto the
