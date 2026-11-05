@@ -486,10 +486,186 @@ async fn run_listen(
 mod tests {
     use super::*;
 
+    const HEX64: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
+    // ---------------------------------------------------------------------------
+    // mesh_topic_id — deterministic topic hash
+    // ---------------------------------------------------------------------------
+
     #[test]
     fn mesh_topic_id_is_deterministic() {
         let a = mesh_topic_id();
         let b = mesh_topic_id();
         assert_eq!(a, b, "topic id must be deterministic");
+    }
+
+    #[test]
+    fn mesh_topic_id_is_not_empty() {
+        let topic = mesh_topic_id();
+        let bytes = topic.as_bytes();
+        assert_eq!(bytes.len(), 32, "topic id must be 32 bytes");
+        assert!(
+            bytes.iter().any(|&b| b != 0),
+            "topic id must not be all zeros"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // load_or_create_secret — identity persistence
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn load_secret_creates_file_on_first_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_path = dir.path().join("secret.hex");
+        assert!(
+            !secret_path.exists(),
+            "secret file must not exist before first call"
+        );
+
+        let key = load_or_create_secret(Some(secret_path.as_path())).unwrap();
+
+        assert!(
+            secret_path.exists(),
+            "secret file must be created on first call"
+        );
+        let hex_str = std::fs::read_to_string(&secret_path).unwrap();
+        let decoded = HEXLOWER.decode(hex_str.trim().as_bytes()).unwrap();
+        assert_eq!(decoded.len(), 32, "secret file must contain 32 bytes");
+        // Re-loaded key must equal the generated key
+        let reloaded = load_or_create_secret(Some(secret_path.as_path())).unwrap();
+        assert_eq!(key.to_bytes(), reloaded.to_bytes());
+    }
+
+    #[test]
+    fn load_secret_reuses_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_path = dir.path().join("secret.hex");
+
+        // Generate and save the first key
+        let key1 = load_or_create_secret(Some(secret_path.as_path())).unwrap();
+
+        // Load again — must return the same key
+        let key2 = load_or_create_secret(Some(secret_path.as_path())).unwrap();
+        assert_eq!(
+            key1.to_bytes(),
+            key2.to_bytes(),
+            "reloading must return the same key"
+        );
+    }
+
+    #[test]
+    fn load_secret_from_nonexistent_path_returns_error() {
+        let result = load_or_create_secret(Some(Path::new("/nonexistent/path/secret.hex")));
+        assert!(result.is_err(), "must error on nonexistent path");
+    }
+
+    #[test]
+    fn load_secret_with_nonhex_content_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_path = dir.path().join("secret.hex");
+        std::fs::write(&secret_path, "not-valid-hex-at-all!!!").unwrap();
+
+        let result = load_or_create_secret(Some(secret_path.as_path()));
+        assert!(
+            result.is_err(),
+            "non-hex content must produce a decode error"
+        );
+    }
+
+    #[test]
+    fn load_secret_with_wrong_length_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_path = dir.path().join("secret.hex");
+        // 20 bytes hex (40 chars) — too short
+        std::fs::write(&secret_path, "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2").unwrap();
+
+        let result = load_or_create_secret(Some(secret_path.as_path()));
+        assert!(
+            result.is_err(),
+            "wrong-length key must produce a length error"
+        );
+    }
+
+    #[test]
+    fn load_secret_creates_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_path = dir.path().join("subdir/nested/secret.hex");
+
+        let key = load_or_create_secret(Some(secret_path.as_path())).unwrap();
+
+        assert!(secret_path.exists());
+        // Verify we can reload from the same path
+        let key2 = load_or_create_secret(Some(secret_path.as_path())).unwrap();
+        assert_eq!(key.to_bytes(), key2.to_bytes());
+    }
+
+    // ---------------------------------------------------------------------------
+    // resolve_peers — peer list resolution
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn resolve_peers_empty_returns_empty() {
+        let peers = resolve_peers(None, &[]);
+        assert!(peers.is_empty());
+    }
+
+    #[test]
+    fn resolve_peers_single_peer_arg() {
+        let peers = resolve_peers(None, &[HEX64.to_string()]);
+        assert_eq!(peers, vec![HEX64.to_string()]);
+    }
+
+    #[test]
+    fn resolve_peers_deduplicates_peer_args() {
+        let peers = resolve_peers(None, &[HEX64.to_string(), HEX64.to_string()]);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0], HEX64);
+    }
+
+    #[test]
+    fn resolve_peers_merges_roster_and_peer_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let roster_path = dir.path().join("roster.txt");
+        std::fs::write(
+            &roster_path,
+            format!("{HEX64}\n{HEX64}  duplicate\n"),
+        )
+        .unwrap();
+
+        let peers = resolve_peers(Some(roster_path.as_path()), &[HEX64.to_string()]);
+        // Roster provides HEX64 (first-wins dedup), peer arg is deduped against roster
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0], HEX64);
+    }
+
+    #[test]
+    fn resolve_peers_roster_file_not_found_warns_and_continues() {
+        let peers = resolve_peers(Some(Path::new("/nonexistent/roster.txt")), &[]);
+        assert!(peers.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // print_identity — address encoding
+    // ---------------------------------------------------------------------------
+
+    // We cannot easily test print_identity without a real Endpoint, but we can
+    // test encode_addr's logic indirectly via the mock endpoint patterns
+    // already tested in the mesh module. The encode_addr function is a simple
+    // string builder — the real test surface is the CLI integration.
+
+    // ---------------------------------------------------------------------------
+    // mesh_topic_id — uniqueness from seed
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn mesh_topic_id_differs_from_random_hash() {
+        let topic = mesh_topic_id();
+        let random_hash = blake3::hash(b"random-string-not-mjolnir-mesh");
+        assert_ne!(
+            topic.as_bytes(),
+            random_hash.as_bytes(),
+            "topic id must be based on the mjolnir/mesh/crdt/v0 seed"
+        );
     }
 }
