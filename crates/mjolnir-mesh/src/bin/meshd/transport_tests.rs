@@ -72,6 +72,63 @@ async fn no_guild_admits_a_relay_dial_and_refuses_a_direct_dial_with_no_route() 
     ));
 }
 
+#[test]
+fn attempt_list_always_includes_the_identity_ula() {
+    let peer = "peer-endpoint";
+    let identity = mjolnir_mesh::tun::ula_addr(peer);
+    assert_eq!(peer_attempt_addrs(peer, &[]), vec![identity]);
+    let guild = [0xab; 32];
+    let house = mjolnir_mesh::tun::router_ula(&guild, peer);
+    let both = peer_attempt_addrs(peer, &[guild]);
+    assert_eq!(both, vec![identity, house]);
+    assert_ne!(identity, house);
+    assert_eq!(peer_attempt_addrs(peer, &[guild, guild]), both);
+}
+
+#[test]
+fn bind_plan_uses_one_default_socket_until_the_identity_ula_has_a_house() {
+    let node = "node-a";
+    let identity = SocketAddr::new(IpAddr::V6(mjolnir_mesh::tun::ula_addr(node)), 49737);
+    let other: SocketAddr = "[::1]:0".parse().unwrap();
+    let house: SocketAddr = "[fd00::1]:49737".parse().unwrap();
+
+    let explicit = bind_plan(node, other, Some(house));
+    assert_eq!(explicit.len(), 1);
+    assert_eq!(explicit[0].prefix_len, 0);
+    assert!(explicit[0].default_route && explicit[0].required);
+
+    let alone = bind_plan(node, identity, None);
+    assert_eq!(alone.len(), 1);
+    assert_eq!(alone[0].addr, identity);
+    assert_eq!(alone[0].prefix_len, 64);
+    assert!(alone[0].default_route && alone[0].required);
+
+    let both = bind_plan(node, identity, Some(house));
+    assert_eq!(both.len(), 2);
+    assert_eq!(both[1].addr, house);
+    assert_eq!(both[1].prefix_len, 128);
+    assert!(!both[1].default_route);
+    assert!(!both[1].required);
+    assert_eq!(bind_plan(node, identity, Some(identity)).len(), 1);
+}
+
+#[test]
+fn a_babel_host_route_covers_a_learned_house_address() {
+    let peer = mjolnir_mesh::tun::ula_addr("p");
+    let house = mjolnir_mesh::tun::router_ula(&[0x11; 32], "p");
+    assert!(!attempt_reachable("", peer, &[house], "br-mesh"));
+    let on_link = format!(
+        "{} dev br-mesh proto kernel metric 256",
+        mjolnir_mesh::tun::ula_link_prefix()
+    );
+    assert!(attempt_reachable(&on_link, peer, &[house], "br-mesh"));
+    assert!(!attempt_reachable(&on_link, peer, &[house], "br-lan"));
+    let host = format!("{house}/128 dev br-mesh proto babel metric 256");
+    assert!(attempt_reachable(&host, peer, &[house], "br-mesh"));
+    let not_babel = format!("{house}/128 dev br-mesh proto kernel metric 256");
+    assert!(!attempt_reachable(&not_babel, peer, &[house], "br-mesh"));
+}
+
 /// All state belongs to this fixture: two veth ends, a dummy overlay, private
 /// FIBs, exact policy rules, temporary configs and two supervised Babel children.
 /// No namespaces, deployed services, inventory, guild files or static peer host

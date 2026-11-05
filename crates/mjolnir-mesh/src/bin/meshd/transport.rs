@@ -1,6 +1,7 @@
 //! Backhaul endpoint lifetime and an independent physical Babel underlay.
-//! The endpoint binds the identity ULA. A house guild is not required, and a
-//! peer in another guild is dialed at `ula_addr` of its endpoint id.
+//! The endpoint binds the identity ULA, and also the house `/128` when that
+//! address is already on `br-mesh`. A dial tries `ula_addr` of the peer and
+//! `router_ula` for each guild id this node has learned.
 use super::*;
 use mjolnir_mesh::tun::underlay::{
     OUTER_MARK, OUTER_TABLE, on_link_backhaul_route, physical_peer_route, relay_routes,
@@ -29,9 +30,90 @@ impl Drop for SessionTasks {
     }
 }
 
-/// Dial address for a peer. Computed from the endpoint id alone.
+/// Identity address of a peer. Computed from the endpoint id alone.
 pub(super) fn peer_backhaul_addr(peer: &str) -> Ipv6Addr {
     mjolnir_mesh::tun::ula_addr(peer)
+}
+
+/// Guild ids this node already has. The house file is the only source in
+/// this change: zero or one id. A beacon is not a guild id.
+pub(super) fn learned_guild_ids() -> Vec<[u8; 32]> {
+    std::fs::read_to_string(mjolnir_mesh::tun::HOUSE_GUILD_PATH)
+        .ok()
+        .and_then(|text| mjolnir_mesh::tun::parse_house_guild_id(&text))
+        .into_iter()
+        .collect()
+}
+
+/// Addresses to try for one peer. The identity ULA is always first. Each
+/// learned guild then adds that guild's house `/128` for the same endpoint
+/// id, including a guild that is not the peer's. Order is stable. Duplicates
+/// are dropped.
+pub(super) fn peer_attempt_addrs(peer: &str, guilds: &[[u8; 32]]) -> Vec<Ipv6Addr> {
+    let mut out = vec![peer_backhaul_addr(peer)];
+    for guild in guilds {
+        let house = mjolnir_mesh::tun::router_ula(guild, peer);
+        if !out.contains(&house) {
+            out.push(house);
+        }
+    }
+    out
+}
+
+/// One socket the endpoint should bind. A prefix of 0 is the single-address
+/// `bind_addr` path. The identity ULA uses prefix 64 and is the default
+/// route, so a peer house `/128` (a different `/48`) still has a socket.
+/// A second socket is that house `/128` at prefix 128, not required and not
+/// a default route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SocketBind {
+    pub(super) addr: SocketAddr,
+    pub(super) prefix_len: u8,
+    pub(super) default_route: bool,
+    pub(super) required: bool,
+}
+
+pub(super) fn bind_plan(
+    node_id: &str,
+    primary: SocketAddr,
+    house: Option<SocketAddr>,
+) -> Vec<SocketBind> {
+    let identity = IpAddr::V6(mjolnir_mesh::tun::ula_addr(node_id));
+    let primary_is_identity = primary.ip() == identity;
+    let mut out = vec![SocketBind {
+        addr: primary,
+        prefix_len: if primary_is_identity { 64 } else { 0 },
+        default_route: true,
+        required: true,
+    }];
+    if primary_is_identity
+        && let Some(house) = house
+        && house.ip() != primary.ip()
+        && !house.ip().is_unspecified()
+    {
+        out.push(SocketBind {
+            addr: house,
+            prefix_len: 128,
+            default_route: false,
+            required: false,
+        });
+    }
+    out
+}
+
+/// Relays off: the identity `/64` or a Babel host route on `iface` covers
+/// the identity address, or a Babel host route covers a learned house address.
+pub(super) fn attempt_reachable(
+    text: &str,
+    identity: Ipv6Addr,
+    houses: &[Ipv6Addr],
+    iface: &str,
+) -> bool {
+    on_link_backhaul_route(text, identity, iface)
+        || physical_peer_route(text, identity, iface)
+        || houses
+            .iter()
+            .any(|house| physical_peer_route(text, *house, iface))
 }
 
 #[derive(Debug)]
@@ -66,10 +148,10 @@ impl iroh::endpoint::EndpointHooks for HouseDialGate {
             return Accept;
         }
         let id = remote.id.to_string();
-        let backhaul = mjolnir_mesh::tun::ula_addr(&id);
-        let house = self
-            .guild
-            .map(|guild| mjolnir_mesh::tun::router_ula(&guild, &id));
+        let guilds = self.guild.into_iter().collect::<Vec<_>>();
+        let attempts = peer_attempt_addrs(&id, &guilds);
+        let identity = attempts[0];
+        let houses = &attempts[1..];
         let routes = tokio::process::Command::new("ip")
             .args(["-6", "route", "show", "table", &self.table])
             .output()
@@ -79,11 +161,16 @@ impl iroh::endpoint::EndpointHooks for HouseDialGate {
                 return false;
             }
             let text = String::from_utf8_lossy(&out.stdout);
-            on_link_backhaul_route(&text, backhaul, &self.iface)
-                || physical_peer_route(&text, backhaul, &self.iface)
-                || house.is_some_and(|peer| physical_peer_route(&text, peer, &self.iface))
+            attempt_reachable(&text, identity, houses, &self.iface)
         });
         if reachable { Accept } else { Reject }
+    }
+}
+
+fn house_of(addr: Option<SocketAddr>) -> Option<Ipv6Addr> {
+    match addr {
+        Some(SocketAddr::V6(addr)) => Some(*addr.ip()),
+        _ => None,
     }
 }
 
@@ -168,8 +255,12 @@ pub(super) async fn supervised_mesh(cli: Cli, secret: SecretKey) -> Result<()> {
         let bind = cli
             .bind
             .unwrap_or(SocketAddr::new(IpAddr::V6(witness.0), MESH_IROH_PORT));
+        let house =
+            super::known_house_router(&node).map(|ip| SocketAddr::new(IpAddr::V6(ip), bind.port()));
         if let Some(g) = &mut guard {
-            g.bind_route(bind).await?;
+            for sock in &bind_plan(&node, bind, house) {
+                g.bind_route(sock.addr).await?;
+            }
         }
         let endpoint =
             match build_endpoint(secret.clone(), no_relay, Some(bind), lan, &cli.relay).await {
@@ -181,8 +272,8 @@ pub(super) async fn supervised_mesh(cli: Cli, secret: SecretKey) -> Result<()> {
                 }
             };
         if let Some(g) = &mut guard {
-            if let Some(actual) = endpoint.bound_sockets().first() {
-                if let Err(e) = g.bind_route(*actual).await {
+            for actual in endpoint.bound_sockets() {
+                if let Err(e) = g.bind_route(actual).await {
                     endpoint.close().await;
                     return Err(e);
                 }
@@ -190,7 +281,9 @@ pub(super) async fn supervised_mesh(cli: Cli, secret: SecretKey) -> Result<()> {
         }
         // Recheck after binding: DAD, guild replacement and interface loss may
         // have happened during builder initialization.
-        if binding_witness(&node) != Some(witness) {
+        if binding_witness(&node) != Some(witness)
+            || super::known_house_router(&node) != house_of(house)
+        {
             endpoint.close().await;
             continue;
         }
@@ -222,7 +315,11 @@ pub(super) async fn supervised_mesh(cli: Cli, secret: SecretKey) -> Result<()> {
                 result = &mut session => { endpoint.close().await; return result; }
                 _ = tokio::signal::ctrl_c() => { break true; }
                 _ = poll.tick() => {
-                    if binding_witness(&node) != Some(witness) { break false; }
+                    if binding_witness(&node) != Some(witness)
+                        || super::known_house_router(&node) != house_of(house)
+                    {
+                        break false;
+                    }
                     if let Some(g) = &mut guard {
                         if let Err(e) = g.refresh().await { warn!("underlay route refresh failed: {e:#}"); break false; }
                     }
@@ -336,10 +433,9 @@ struct OuterGuard {
     cgroup: Option<PathBuf>,
     original: Option<PathBuf>,
     routes: [Vec<Vec<String>>; 2],
-    binding: Option<SocketAddr>,
-    /// BusyBox `ip -6 rule` rejects `ipproto` and `sport`. The fallback rule
-    /// matches every locally generated packet from the bind address.
-    precise_rule: bool,
+    /// One pref-11999 rule per source address. The identity ULA and the house
+    /// `/128` each need their own rule. Adding the second must not delete the first.
+    bindings: Vec<(SocketAddr, bool)>,
 }
 fn bind_rule_args(bind: SocketAddr, action: &str, precise: bool) -> Vec<String> {
     let family = if bind.is_ipv4() { "-4" } else { "-6" };
@@ -398,8 +494,7 @@ impl OuterGuard {
             cgroup,
             original,
             routes: Default::default(),
-            binding: None,
-            precise_rule: false,
+            bindings: Vec::new(),
         };
         // Install fail-closed terminal routes before the marking/rules. Main
         // WAN defaults can carry relay traffic, but never substitute for a
@@ -501,11 +596,17 @@ impl OuterGuard {
     // hook. An exact source/port rule distinguishes outer UDP from forwarded
     // inner house-host packets, which retain the ordinary Babel FIB.
     async fn bind_route(&mut self, bind: SocketAddr) -> Result<()> {
-        if self.binding == Some(bind) {
+        if self.bindings.iter().any(|(old, _)| *old == bind) {
             return Ok(());
         }
-        if let Some(old) = self.binding.filter(|old| *old != bind) {
-            self.delete_bind_rule(old, self.precise_rule).await;
+        // A port change for the same source replaces only that source's rule.
+        if let Some(index) = self
+            .bindings
+            .iter()
+            .position(|(old, _)| old.ip() == bind.ip() && *old != bind)
+        {
+            let (old, precise) = self.bindings.remove(index);
+            self.delete_bind_rule(old, precise).await;
         }
         // A killed process does not run Drop, so the rule can already be there.
         self.delete_bind_rule(bind, false).await;
@@ -514,10 +615,11 @@ impl OuterGuard {
             self.add_bind_rule(bind, false)
                 .await
                 .with_context(|| format!("installing the outer rule for {bind}"))?;
-            warn!("BusyBox ip has no ipproto/sport rule; outer lookup matches every packet from {bind}");
+            warn!(
+                "BusyBox ip has no ipproto/sport rule; outer lookup matches every packet from {bind}"
+            );
         }
-        self.precise_rule = precise;
-        self.binding = Some(bind);
+        self.bindings.push((bind, precise));
         Ok(())
     }
 
@@ -596,9 +698,9 @@ impl Drop for OuterGuard {
                 .args(["delete", "table", "inet", "mjolnir_transport"])
                 .output();
         }
-        if let Some(bind) = self.binding {
-            for precise in [self.precise_rule, !self.precise_rule] {
-                let args = bind_rule_args(bind, "del", precise);
+        for (bind, precise) in &self.bindings {
+            for precise in [*precise, !precise] {
+                let args = bind_rule_args(*bind, "del", precise);
                 let _ = std::process::Command::new("ip").args(args).output();
             }
         }

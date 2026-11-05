@@ -63,7 +63,7 @@ use tracing_subscriber::EnvFilter;
 
 #[path = "meshd/transport.rs"]
 mod mesh_transport;
-use mesh_transport::{SessionTasks, HouseDialGate, peer_backhaul_addr, supervised_mesh};
+use mesh_transport::{HouseDialGate, SessionTasks, supervised_mesh};
 
 /// ALPN for the P0 mesh connectivity probe. Bumped per protocol revision.
 const MESH_ALPN: &[u8] = b"mjolnir/mesh/v0";
@@ -1035,14 +1035,19 @@ async fn run_mesh(
         .map(|a| a.id)
         .filter(|id| *id != self_id)
         .collect();
-    // Seed the lookup with identity ULAs. A guild file is not required.
+    // Seed the lookup with every address this node can form for a peer.
+    // The identity ULA is always included. A guild file is not required.
     // All protocols share the on-link gate, including gossip's dials.
     let addr_lookup: Option<MemoryLookup> = match endpoint.address_lookup() {
         Ok(services) => {
             let lookup = MemoryLookup::with_provenance("mjolnir_addrbook");
+            let guilds = mesh_transport::learned_guild_ids();
             for id in &bootstrap {
-                let ip = peer_backhaul_addr(&id.to_string());
-                lookup.add_endpoint_info(EndpointAddr::new(*id).with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT)));
+                let mut info = EndpointAddr::new(*id);
+                for ip in mesh_transport::peer_attempt_addrs(&id.to_string(), &guilds) {
+                    info = info.with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT));
+                }
+                lookup.add_endpoint_info(info);
             }
             // Also seed from the restored address book (0yb): a rebooting node
             // can dial peers it learned last run before gossip re-announces them.
@@ -1641,6 +1646,7 @@ async fn run_mesh(
                 "LAN mode: per-peer iroh tunnels ENABLED (--lan-tunnels; mjolnir-mesh-auu retest)"
             );
         }
+        let guilds = mesh_transport::learned_guild_ids();
         for entry in &peer_entries {
             let addr = match parse_peer(&entry.token) {
                 Ok(a) => a,
@@ -1653,12 +1659,12 @@ async fn run_mesh(
             if peer == self_id {
                 continue; // our own id appears in the roster — skip
             }
-            // Identity ULA of the peer endpoint id. Same address with no guild
-            // and with a guild that is not ours.
-            let addr = addr.with_ip_addr(SocketAddr::new(
-                IpAddr::V6(peer_backhaul_addr(&peer.to_string())),
-                MESH_IROH_PORT,
-            ));
+            // Identity ULA, then each learned house `/128`. The first handshake
+            // that completes wins. A missing guild file still dials the ULA.
+            let mut addr = addr;
+            for ip in mesh_transport::peer_attempt_addrs(&peer.to_string(), &guilds) {
+                addr = addr.with_ip_addr(SocketAddr::new(IpAddr::V6(ip), MESH_IROH_PORT));
+            }
             if self_id_str < peer.to_string() {
                 let ep = endpoint.clone();
                 let label = entry.label.clone();
@@ -8363,6 +8369,28 @@ async fn build_endpoint(
     build_endpoint_with_gate(secret, no_relay, bind, lan, relays, gate).await
 }
 
+fn apply_bind_plan(
+    mut builder: iroh::endpoint::Builder,
+    plan: &[mesh_transport::SocketBind],
+) -> Result<iroh::endpoint::Builder> {
+    for sock in plan {
+        builder = if sock.prefix_len == 0 && sock.required {
+            builder
+                .bind_addr(sock.addr)
+                .context("invalid bind address")?
+        } else {
+            let opts = iroh::endpoint::BindOpts::default()
+                .set_prefix_len(sock.prefix_len)
+                .set_is_required(sock.required)
+                .set_is_default_route(sock.default_route);
+            builder
+                .bind_addr_with_opts(sock.addr, opts)
+                .context("invalid bind address")?
+        };
+    }
+    Ok(builder)
+}
+
 async fn build_endpoint_with_gate(
     secret: SecretKey,
     no_relay: bool,
@@ -8373,19 +8401,27 @@ async fn build_endpoint_with_gate(
 ) -> Result<Endpoint> {
     let addr = bind.context("no usable backhaul address or explicit --bind")?;
     anyhow::ensure!(!addr.ip().is_unspecified(), "wildcard --bind is forbidden");
+    let node = secret.public().to_string();
+    let house = if addr.ip() == IpAddr::V6(mjolnir_mesh::tun::ula_addr(&node)) {
+        known_house_router(&node).map(|ip| SocketAddr::new(IpAddr::V6(ip), addr.port()))
+    } else {
+        None
+    };
+    let plan = mesh_transport::bind_plan(&node, addr, house);
     if lan {
-        return Endpoint::builder(presets::Minimal)
-            .clear_ip_transports()
-            .relay_mode(RelayMode::Disabled)
-            .secret_key(secret)
-            .transport_config(tunnel_transport_config())
-            .address_lookup(MdnsAddressLookup::builder())
-            .hooks(gate)
-            .bind_addr(addr)
-            .context("invalid bind address")?
-            .bind()
-            .await
-            .context("failed to bind house endpoint");
+        return apply_bind_plan(
+            Endpoint::builder(presets::Minimal)
+                .clear_ip_transports()
+                .relay_mode(RelayMode::Disabled)
+                .secret_key(secret)
+                .transport_config(tunnel_transport_config())
+                .address_lookup(MdnsAddressLookup::builder())
+                .hooks(gate),
+            &plan,
+        )?
+        .bind()
+        .await
+        .context("failed to bind house endpoint");
     }
 
     let relay_mode = if no_relay {
@@ -8416,18 +8452,19 @@ async fn build_endpoint_with_gate(
     // resolves direct LAN socket addresses with no relay or internet, so same-LAN
     // peers form a direct path regardless of pkarr — relay stays as the off-LAN
     // fallback, pkarr/DNS as global discovery. Best of all worlds, additive only.
-    Endpoint::builder(presets::N0)
-        .clear_ip_transports()
-        .secret_key(secret)
-        .transport_config(tunnel_transport_config())
-        .address_lookup(MdnsAddressLookup::builder())
-        .hooks(gate)
-        .relay_mode(relay_mode)
-        .bind_addr(addr)
-        .context("invalid --bind address")?
-        .bind()
-        .await
-        .context("failed to bind house endpoint")
+    apply_bind_plan(
+        Endpoint::builder(presets::N0)
+            .clear_ip_transports()
+            .secret_key(secret)
+            .transport_config(tunnel_transport_config())
+            .address_lookup(MdnsAddressLookup::builder())
+            .hooks(gate)
+            .relay_mode(relay_mode),
+        &plan,
+    )?
+    .bind()
+    .await
+    .context("failed to bind house endpoint")
 }
 
 /// Wait until the endpoint has at least one publishable address. With relays
