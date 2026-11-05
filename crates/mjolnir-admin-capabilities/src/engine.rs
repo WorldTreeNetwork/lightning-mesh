@@ -470,11 +470,15 @@ fn reject_asserted_holder(token: &Biscuit) -> Result<(), AuthzError> {
     let hits: Vec<(String,)> = authorizer
         .query_all("data($h) <- holder($h)")
         .map_err(token_err)?;
-    if hits.is_empty() {
-        Ok(())
-    } else {
-        Err(AuthzError::HolderFact)
+    if !hits.is_empty() {
+        return Err(AuthzError::HolderFact);
     }
+    // A rule headed `holder` derives the fact once the verifier injects its own.
+    let (_facts, rules, _checks, _policies) = authorizer.dump();
+    if rules.iter().any(|rule| rule.head.name == "holder") {
+        return Err(AuthzError::HolderFact);
+    }
+    Ok(())
 }
 
 /// The issuer pins the holder in the authority block. A later block cannot

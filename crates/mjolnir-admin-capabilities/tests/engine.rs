@@ -984,6 +984,65 @@ fn asserted_holder_fact_is_refused() {
 }
 
 #[test]
+fn same_block_holder_rule_is_refused() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        holder("victim") <- time($t);
+        check if holder($fp), $fp == "{h}";
+        issued_at(1000);
+        expires_at(100000);
+        "#,
+        h = fp_hex(&hk),
+    );
+    let raw = mint_code(&root, &source);
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::HolderFact);
+}
+
+#[test]
+fn appended_holder_rule_is_refused() {
+    let root = KeyPair::new();
+    let (sk, hk) = holder();
+    let source = format!(
+        r#"
+        right("diagnostics_status");
+        check if holder($fp), $fp == "{h}";
+        issued_at(1000);
+        expires_at(100000);
+        "#,
+        h = fp_hex(&hk),
+    );
+    let token = Biscuit::from(mint_code(&root, &source), root.public()).unwrap();
+    let block = BlockBuilder::new()
+        .code(format!(
+            r#"holder("{owner}") <- holder("{other}");"#,
+            owner = fp_hex(&hk),
+            other = "bb".repeat(32),
+        ))
+        .unwrap();
+    let raw = token.append(block).unwrap().to_vec().unwrap();
+    let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
+    let auth = authority(
+        root.public(),
+        GrantClass::DiagnosticsRead,
+        SecurityProfile::Standard,
+    );
+    let mut floor = HighWaterFloor::default();
+    let err = authorize(&proof, &raw, &hk, &auth, time(5_000, 4_000), &mut floor).unwrap_err();
+    assert_eq!(err, AuthzError::HolderFact);
+}
+
+#[test]
 fn note_mentioning_holder_is_not_a_holder_fact() {
     let root = KeyPair::new();
     let (sk, hk) = holder();
