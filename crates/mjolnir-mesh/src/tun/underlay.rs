@@ -126,7 +126,11 @@ pub fn relay_routes(text: &str) -> Vec<Vec<String>> {
                 route.push(value.to_string());
             }
         }
-        if t.contains(&"onlink") {
+        // `onlink` is only valid with a gateway. A Babel client route can
+        // show `dev br-mesh onlink` and no `via`; copying that token makes
+        // `ip route replace` return Invalid argument and the endpoint stays
+        // closed.
+        if t.contains(&"onlink") && field("via").is_some() {
             route.push("onlink".into());
         }
         out.push(route);
@@ -138,6 +142,23 @@ pub fn relay_routes(text: &str) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn onlink_without_a_gateway_is_not_copied() {
+        let text = "\
+10.42.149.0/24 dev br-mesh onlink
+10.42.181.0/24 via 10.254.181.221 dev br-mesh onlink
+";
+        let routes = relay_routes(text);
+        let plain = routes.iter().find(|r| r[0] == "10.42.149.0/24").unwrap();
+        assert_eq!(
+            plain,
+            &vec!["10.42.149.0/24".to_string(), "dev".into(), "br-mesh".into(),]
+        );
+        let via = routes.iter().find(|r| r[0] == "10.42.181.0/24").unwrap();
+        assert!(via.iter().any(|s| s == "via"));
+        assert!(via.iter().any(|s| s == "10.254.181.221"));
+        assert!(via.iter().any(|s| s == "onlink"));
+    }
     #[test]
     fn outer_table_is_a_babeld_installable_id() {
         let id: u32 = OUTER_TABLE.parse().unwrap();
