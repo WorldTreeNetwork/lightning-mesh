@@ -14,3 +14,8 @@ state: [CURRENT]
 
 - Added `SCHEMA.md`, `index.md`, and this log.
 - The notebook points at `openspec/specs/` and `docs/` for specified behavior and design.
+
+## 2026-11-05 — contributor intake
+
+- New concepts, links, and papers land in `wiki/<name>/` first, with the same folders as this notebook.
+- `wiki/.contributor` is gitignored and selects the directory. The shared pages are the accepted set.
