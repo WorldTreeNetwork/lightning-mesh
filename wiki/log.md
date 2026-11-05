@@ -35,3 +35,8 @@ state: [CURRENT]
 - Added four carrier notes: SDR survey, SoapySDR, LimeSDR/bladeRF, and Baofeng/KISS.
 - The seam is `GossipTransport::broadcast` / `recv`. The only production impl is `IrohGossipTransport`.
 - `radio.rs` is `iw` telemetry. `tun/underlay.rs` is table 210, not a second gossip transport.
+
+## 2026-11-05 — contributor intake
+
+- New concepts, links, and papers land in `wiki/<name>/` first, with the same folders as this notebook.
+- `wiki/.contributor` is gitignored and selects the directory. The shared pages are the accepted set.

@@ -1,0 +1,4 @@
+# Copy this file to wiki/.contributor. That copy is gitignored.
+# One directory name. The LLM wiki skill writes only under wiki/<this name>/.
+# Same folders as the shared notebook. See wiki/SCHEMA.md.
+your-name

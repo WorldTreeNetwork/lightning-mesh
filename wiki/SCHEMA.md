@@ -17,16 +17,26 @@ This directory is a research notebook: concept notes, comparisons, and interoper
 
 ```
 wiki/
-├── SCHEMA.md          # This file — conventions and tag taxonomy
-├── index.md           # Content catalog — all pages listed by category
-├── log.md             # Action log — wiki creation and updates
-├── concepts/          # Concept and entity pages (code, protocols, architecture)
-├── comparisons/       # Side-by-side comparisons
-├── interop/           # Interoperability research and integration patterns
-├── appendix/          # Crypto reference and wire format tables
-├── research/          # Carrier and hardware proposals
-├── raw/               # Raw source documents (meeting notes, external docs)
-└── queries/           # Query and search reference pages
+├── SCHEMA.md                 # This file — conventions and tag taxonomy
+├── index.md                  # Shared catalog. Contributor pages are not listed
+├── log.md                    # Shared notebook log
+├── .contributor.example      # Copy to .contributor (gitignored) to choose a writer
+├── concepts/                 # Accepted concept and entity pages
+├── comparisons/              # Accepted side-by-side comparisons
+├── interop/                  # Accepted interoperability notes
+├── appendix/                 # Accepted reference tables
+├── research/                 # Accepted carrier and hardware proposals
+├── queries/                  # Accepted query pages
+└── <name>/                   # One person's intake. Same folders as above
+    ├── index.md
+    ├── log.md
+    ├── concepts/
+    ├── comparisons/
+    ├── interop/
+    ├── appendix/
+    ├── research/
+    ├── queries/
+    └── raw/                  # Immutable sources for that person's pages
 ```
 
 ## Frontmatter Convention
@@ -67,6 +77,20 @@ Claims about this repository cite a file under `crates/`, `docs/`, or `openspec/
 - **wiki-admin:** wiki-admin (only on SCHEMA.md, index.md, and log.md)
 
 Add a tag to this list in the same change that first uses it.
+
+## Contributors
+
+A new concept, link, or paper enters in a contributor directory. The shared pages above are what this project has accepted as relevant to Lightning Mesh.
+
+`wiki/.contributor` is gitignored. Copy `wiki/.contributor.example` and put one directory name on the first non-empty, non-comment line. The LLM wiki skill (`.grok/skills/llm-wiki`) reads that file and writes only under `wiki/<name>/`. If the file is missing, it does not guess a name and it does not write the shared notebook.
+
+The name is one path segment of letters, digits, `.`, `_`, or `-`. It is not `.` or `..`, and it is not `concepts`, `comparisons`, `interop`, `appendix`, `research`, `queries`, or `raw`.
+
+`wiki/<name>/` has the same folders as the shared notebook, plus `raw/` for sources that are kept as collected. It has its own `index.md` and `log.md`. It does not contain a second `SCHEMA.md`. Pages there use this file's frontmatter. A note that is not yet accepted is `[FUTURE]`.
+
+The contributor `log.md` records ingest, query, and lint operations, including the `no material` heading the evidence check reads. The shared `wiki/log.md` records changes to the accepted notebook.
+
+Promotion is explicit. When a concept, link, or paper is relevant here, write or update the matching shared page and cite the contributor page or its raw file. Leave the contributor page in place. The skill does not promote on its own.
 
 ## Page Thresholds
 
