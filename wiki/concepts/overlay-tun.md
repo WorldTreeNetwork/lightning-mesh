@@ -23,9 +23,9 @@ Cross-site traffic rides Iroh. Two TUN shapes exist in `crates/mjolnir-mesh/src/
 ## Addressing
 
 - The client LAN is a routed `10.42.0.0/16` /24 per node.
-- The backhaul address is `10.254.<blake3(node id)>/16` (`backhaul_addr` in `tun/link.rs`).
-- Per-peer tunnel links are IPv4 /31s from `pick_link_31`.
-- The identity ULA and the house prefix come from `ula_addr` and the guild id, not from the `10.254` address.
+- The backhaul address is one host in `10.254.0.0/16`. `backhaul_addr` takes the first 16 bits of `blake3(node id)`. The node does not own that `/16`.
+- Per-peer tunnel links are IPv4 /31s in `10.255.0.0/16`, from `pick_link_31`.
+- The identity ULA is `ula_addr(node_id)`. The house prefix is `house_ula_prefix` of the guild id in `/etc/mjolnir/house-guild-id`. Those prefixes differ, and neither is derived from the `10.254` address.
 
 ## Platform Support
 

@@ -1,7 +1,7 @@
 ---
 title: Liveness Plane
 created: 2025-11-05
-updated: 2025-11-05
+updated: 2026-11-05
 type: concept
 tags: [mesh-core, crdt]
 sources: [crates/mjolnir-mesh/src/crdt/liveness.rs]
@@ -28,7 +28,7 @@ An ephemeral per-node liveness tracking system that avoids flash writes by decou
 
 ## Staleness Judgment
 
-The beacon carries NO timestamp that orders events. Freshness is judged by the receiver's local monotonic clock. This makes the plane immune to clock skew.
+The beacon carries no timestamp that orders events. Freshness is `monotonic_now_ms()` minus the receiver-local time the beacon was accepted. This makes the plane immune to clock skew.
 
 ## Gateway Tracking
 

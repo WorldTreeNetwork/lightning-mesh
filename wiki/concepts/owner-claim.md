@@ -15,11 +15,11 @@ The household owner claim is a ceremony that binds one owner to a node through d
 
 ## Flow
 
-1. **Device proof** -- the client verifies the node's meshd identity signature against the node id on the off-device card. Developer SSH, discovery, and WPS are not ownership.
-2. **Card HMAC** -- the claim carries an HMAC of that request under the card secret. The card is that secret, not an NFC or Bluetooth device. The node does not display the secret.
-3. **Button window** -- a fresh 120-second local window confirms the same request.
+1. **Device proof** -- Lightning Admin checks the node's signature on the challenge against the node id on the off-device card, before it derives anything from the secret. Developer SSH, discovery, and WPS are not ownership. hello.mesh only relays.
+2. **Card HMAC** -- `k = HMAC-SHA256(salt, secret)`. The proof is `HMAC-SHA256(k, owner pk ‖ node id ‖ epoch ‖ nonce)`. The card is that secret (at least 80 bits of lowercase base32), not an NFC or Bluetooth device. The node does not display the secret, and the proof submission has no field for it.
+3. **Button window** -- order is request, then press. A press arms a fresh 120-second window for the requests pending at press time. The window is not persisted. It closes on success, reboot, lost time, expiry, or five failed proofs. A sniffed proof does not replay: each attempt has a fresh nonce.
 
-All three must match the same claim for ownership to be granted.
+All three must match the same claim for ownership to be granted. A ceremony press arms the window. It does not toggle WAN SSH.
 
 ## Recovery
 
@@ -29,7 +29,7 @@ All three must match the same claim for ownership to be granted.
 
 ## Storage
 
-The node stores `k` (the derived key), not the card string. The setup button toggles WAN SSH when there is no verifier, or when the node is already owned and no recovery credential has verified.
+The node stores `k` and the salt, not the card string. A successful first claim retires `k`. The setup button toggles WAN SSH when there is no verifier, and when the node is already owned and no recovery credential has verified (`ButtonEffect::ToggleWanSsh`). A verified recovery pending at press time arms the ceremony instead.
 
 ## Living Spec
 

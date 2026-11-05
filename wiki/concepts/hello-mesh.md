@@ -1,10 +1,10 @@
 ---
 title: hello.mesh
 created: 2025-11-05
-updated: 2025-11-05
+updated: 2026-11-05
 type: concept
 tags: [mesh-components, hello]
-sources: [crates/mjolnir-hello/]
+sources: [crates/mjolnir-hello/, hello-mesh-web/src/lib/miniapp/contract.ts, hello-mesh-web/src/lib/miniapp/identity-bridge.ts]
 state: [CURRENT]
 confidence: high
 ---
@@ -23,12 +23,12 @@ hello.mesh is the visitor front desk -- a live directory of people, apps, servic
 ## Architecture
 
 - `crates/mjolnir-hello/` -- The hello.mesh web application (Rust HTTP server + embedded assets)
-- Serves on the LAN gateway (e.g., `http://10.42.1.1`)
+- The public name is `http://hello.mesh` on that node's LAN gateway (`10.42.<x>.1`)
 - The visitor's rung-1 key lives in IndexedDB of hello origins
-- `canEmbed` refuses every key-bearing origin structurally (IP-literal hosts, reserved names)
+- `canEmbed` accepts an embed only when the mode is `card`, the host ends in `.mesh`, and the origin is not key-bearing. Same-origin, IP-literal hosts, and reserved names are refused
 
 ## Security Model
 
-- Identity over the bridge uses a one-shot MessagePort pattern
+- The identity bridge accepts exactly one `MessagePort`
 - One pending request, 60s host deadline, cooldown keyed by service name
 - Framed hello.mesh fails closed before identity load

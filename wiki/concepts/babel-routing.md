@@ -15,7 +15,8 @@ Babeld is run as an external process on each node. Lightning Mesh does not own t
 
 ## Role
 
-- Routes between nodes over the 802.11s backhaul (`br-mesh`)
+- Routes between nodes over the 802.11s backhaul (`br-mesh`, rendered `type wireless`)
+- Ethernet node-links render `type wired` on their own interface and stay out of `br-mesh`. Per-peer tunnels render `type tunnel`
 - The mesh daemon renders babeld configuration via `render_babeld_conf()` and `render_overlay_babeld_conf()`
 - procd's `mjolnir-babeld` service owns the babeld process, including restarts. meshd rewrites the config and asks procd to reload when the rendered file changes
 

@@ -11,13 +11,13 @@ confidence: high
 
 # Gossip Transport
 
-The gossip sync seam is a transport-agnostic abstraction for CRDT state propagation. It is the primary integration point for cross-stack interoperability.
+`GossipTransport` is the seam that lets `mjolnir-mesh` gossip CRDT state without depending on iroh. The daemon supplies the iroh implementation.
 
 ## Architecture
 
-- **`GossipTransport` trait** -- defines `broadcast(Bytes)` and `recv() -> Bytes`. The trait lives in `crates/mjolnir-mesh/src/crdt/sync.rs` (line 44).
-- **`GossipSync<T>`** -- dispatcher that encodes/decodes `GossipMessage` (postcard) and runs the receive loop.
-- **Concrete impl** -- `IrohGossipTransport` inside `crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs` wraps `iroh_gossip::GossipSender` and `GossipReceiver`. Nothing else implements the trait. `iroh_gossip::Gossip` itself is not a `GossipTransport`.
+- **`GossipTransport` trait** -- async `broadcast(&self, payload: Bytes) -> Result<(), GossipError>` and `recv(&self) -> Result<Bytes, GossipError>`. It lives in `crates/mjolnir-mesh/src/crdt/sync.rs`.
+- **`GossipSync<T>`** -- encodes and decodes `GossipMessage` with postcard and runs the receive loop. It owns no CRDT books.
+- **Production impl** -- `IrohGossipTransport` in `crates/mjolnir-mesh/src/bin/mjolnir-meshd.rs` wraps `iroh_gossip::GossipSender` and `GossipReceiver`. `iroh_gossip::Gossip` itself is not a `GossipTransport`. Tests also implement the trait (`MockTransport`, `ChannelTransport`, `NullTransport`).
 
 ## Wire Format
 

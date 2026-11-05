@@ -31,9 +31,10 @@ The `Command` enum in `mjolnir-meshd.rs` is the contract. Router deployments run
 - CRDT books and gossip sync through `IrohGossipTransport`
 - Babeld configuration rendering. procd's `mjolnir-babeld` owns the process
 - DNS for the `.mesh` zone
-- Optional ACME HTTPS issuance
 - Per-peer tunnels, and the `mjolnir0` overlay when that mode is on
 - Owner claim and the capability beacon
+
+`https_acme` is a library in `mjolnir-mesh` with no default network client. `mjolnir-meshd` does not start ACME issuance.
 
 ## Build
 

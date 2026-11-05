@@ -20,7 +20,7 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 - [[crdt-overlay]] — Per-book merge rules for mesh state
 - [[gossip-transport]] — `GossipTransport` and `IrohGossipTransport`
 - [[hello-mesh]] — hello.mesh front desk and service directory
-- [[iroh-transport]] — Ed25519 identity, staging relays, QUIC
+- [[iroh-transport]] — Ed25519 identity. LAN is the default; internet mode is opt-in
 - [[liveness-plane]] — Ephemeral per-node liveness beacons
 - [[meshd-binary]] — `mjolnir-meshd` and the `mesh` subcommand
 - [[overlay-tun]] — Per-peer /31 tunnels and the `mjolnir0` overlay
@@ -34,5 +34,5 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 
 ## Appendix
 
-- [[crypto-primitives]] — Mesh Ed25519 identity, and Reticulum's separate key blob
-- [[wire-formats]] — Postcard `GossipMessage` names, and Reticulum packets
+- [[crypto-primitives]] — Mesh Ed25519 identity and blake3 addresses
+- [[wire-formats]] — Postcard `GossipMessage` names
