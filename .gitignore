@@ -102,6 +102,9 @@ deploy/openwrt/fleet.d/*
 !deploy/openwrt/fleet.d/*.example
 .playwright-mcp
 
+# This checkout's wiki writer. Copy wiki/.contributor.example.
+wiki/.contributor
+
 # Intention scratch (conductor isolate, spawn stage, harness session)
 .worktrees/
 .spawns/
