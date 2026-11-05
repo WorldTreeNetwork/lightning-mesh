@@ -1,0 +1,32 @@
+[package]
+name = "mjolnir-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Gossip observer for the Lightning Mesh CRDT topic"
+
+[dependencies]
+mjolnir-mesh = { path = "../mjolnir-mesh" }
+
+iroh = { workspace = true }
+iroh-gossip = { workspace = true }
+iroh-mdns-address-lookup = "0.4"
+
+tokio = { workspace = true }
+
+postcard = { workspace = true }
+bytes = { workspace = true }
+blake3 = { workspace = true }
+
+clap = { workspace = true, features = ["derive"] }
+
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+data-encoding = { workspace = true }
+futures-lite = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
