@@ -26,6 +26,17 @@ Intake notes for Clay. These pages are not the shared notebook. The shared catal
 ## Comparisons
 
 - [[mesh-vs-rayfish]] — This mesh beside Rayfish
+- [[mesh-vs-reticulum]] — This mesh beside Reticulum
+
+## Reticulum
+
+- [[reticulum-codebase-grounding]] — What these notes actually checked
+- [[interop-identity-sharing]] — Two different private keys
+- [[interop-gossip-transport]] — A proposed second `GossipTransport`, not built
+- [[interop-name-translation]] — A proposed `.mesh` to destination bridge
+- [[interop-carrier-extension]] — Radio and serial ideas. meshd does not spawn them
+- [[interop-bulk-sync]] — A proposed snapshot transfer
+- [[interop-protocol-bridge]] — A proposed gateway
 
 ## Appendix
 

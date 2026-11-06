@@ -35,7 +35,7 @@ state: [CURRENT]
 - Clay's Rayfish reading lives in `wiki/claysaurus/`. It is not the shared notebook.
 - The node backhaul (`10.254`) and the identity ULA are already derived from the node id. A client `/24` is a claim.
 
-## 2026-11-05 — Reticulum interop
+## 2026-11-06 — Reticulum notes
 
-- Added the Reticulum grounding notes, six interop pages, and `mesh-vs-reticulum`.
-- Identity sharing stays a proposal. The mesh key is an Ed25519 `iroh::SecretKey`. A Reticulum identity is 64 bytes.
+- Clay's Reticulum reading lives in `wiki/claysaurus/`. It is not the shared notebook.
+- A mesh node id is an Ed25519 public key. A Reticulum identity is a separate 64-byte blob. `mjolnir-meshd` does not start ACME and does not spawn Reticulum interfaces.
