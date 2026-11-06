@@ -16,6 +16,16 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 
 ## Concepts
 
+- [[babel-routing]] — Babeld over the backhaul. procd owns the process
+- [[crdt-overlay]] — Per-book merge rules for mesh state
+- [[gossip-transport]] — `GossipTransport` and `IrohGossipTransport`
+- [[hello-mesh]] — hello.mesh front desk and service directory
+- [[iroh-transport]] — Ed25519 identity. LAN is the default; internet mode is opt-in
+- [[liveness-plane]] — Ephemeral per-node liveness beacons
+- [[meshd-binary]] — `mjolnir-meshd` and the `mesh` subcommand
+- [[overlay-tun]] — Per-peer /31 tunnels and the `mjolnir0` overlay
+- [[owner-claim]] — Device proof, card HMAC, and the button window
+
 ## Interoperability
 
 ## Comparisons
@@ -23,3 +33,6 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 ## Research
 
 ## Appendix
+
+- [[crypto-primitives]] — Mesh Ed25519 identity and blake3 addresses
+- [[wire-formats]] — Postcard `GossipMessage` names
