@@ -25,3 +25,7 @@ Moved out of the shared notebook. Mesh already derives the node backhaul and the
 ## [2026-11-06] ingest | Reticulum interop notes
 
 Moved out of the shared notebook. The mesh key and a Reticulum identity are different blobs. meshd does not spawn Reticulum interfaces.
+
+## [2026-11-06] ingest | radio carrier notes
+
+Moved out of the shared notebook. radio.rs is telemetry. OuterGuard is not an SDR underlay. A second carrier would not inherit QUIC.

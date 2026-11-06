@@ -26,13 +26,6 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 - [[overlay-tun]] — Per-peer /31 tunnels and the `mjolnir0` overlay
 - [[owner-claim]] — Device proof, card HMAC, and the button window
 
-## Research
-
-- [[sdr-radio-integration]] — `GossipTransport` as the seam for a second carrier. `radio.rs` is telemetry
-- [[sdr-generic-soapysdr]] — One proposed SoapySDR transport for many devices
-- [[limesdr-bladerf-carrier-mvp]] — LimeSDR and bladeRF as a point-to-point carrier
-- [[baofeng-tnc-aprs-reticulum]] — Baofeng, DireWolf KISS, and a proposed `broadcast` / `recv` impl
-
 ## Appendix
 
 - [[crypto-primitives]] — Mesh Ed25519 identity and blake3 addresses

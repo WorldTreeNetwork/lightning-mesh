@@ -40,8 +40,7 @@ state: [CURRENT]
 - Clay's Reticulum reading lives in `wiki/claysaurus/`. It is not the shared notebook.
 - A mesh node id is an Ed25519 public key. A Reticulum identity is a separate 64-byte blob. `mjolnir-meshd` does not start ACME and does not spawn Reticulum interfaces.
 
-## 2026-11-05 — radio research
+## 2026-11-06 — radio notes
 
-- Added four carrier notes: SDR survey, SoapySDR, LimeSDR/bladeRF, and Baofeng/KISS.
-- The seam is `GossipTransport::broadcast` / `recv`. The only production impl is `IrohGossipTransport`.
-- `radio.rs` is `iw` telemetry. `tun/underlay.rs` is table 210, not a second gossip transport.
+- Clay's radio reading lives in `wiki/claysaurus/`. It is not the shared notebook.
+- `radio.rs` writes `radio.json` from `iw`. A second carrier would be another `GossipTransport` beside `IrohGossipTransport`. `OuterGuard` is not that carrier.

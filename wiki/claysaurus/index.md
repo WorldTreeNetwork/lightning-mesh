@@ -38,6 +38,13 @@ Intake notes for Clay. These pages are not the shared notebook. The shared catal
 - [[interop-bulk-sync]] — A proposed snapshot transfer
 - [[interop-protocol-bridge]] — A proposed gateway
 
+## Research
+
+- [[sdr-radio-integration]] — `radio.rs` is telemetry. A second carrier is not built
+- [[sdr-generic-soapysdr]] — A proposed SoapySDR transport. Nothing here calls SoapySDR
+- [[limesdr-bladerf-carrier-mvp]] — A proposed LimeSDR or bladeRF link
+- [[baofeng-tnc-aprs-reticulum]] — A proposed Baofeng and KISS path
+
 ## Appendix
 
 - [[crypto-primitives]] — Reticulum cipher and identity catalog
