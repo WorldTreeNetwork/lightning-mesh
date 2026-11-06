@@ -26,12 +26,6 @@ Contributor notes live under `wiki/<name>/` and are not listed here. `wiki/.cont
 - [[overlay-tun]] — Per-peer /31 tunnels and the `mjolnir0` overlay
 - [[owner-claim]] — Device proof, card HMAC, and the button window
 
-## Interoperability
-
-## Comparisons
-
-## Research
-
 ## Appendix
 
 - [[crypto-primitives]] — Mesh Ed25519 identity and blake3 addresses
