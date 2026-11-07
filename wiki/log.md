@@ -39,3 +39,8 @@ state: [CURRENT]
 
 - Clay's Reticulum reading lives in `wiki/claysaurus/`. It is not the shared notebook.
 - A mesh node id is an Ed25519 public key. A Reticulum identity is a separate 64-byte blob. `mjolnir-meshd` does not start ACME and does not spawn Reticulum interfaces.
+
+## 2026-11-06 — radio notes
+
+- Clay's radio reading lives in `wiki/claysaurus/`. It is not the shared notebook.
+- `radio.rs` writes `radio.json` from `iw`. A second carrier would be another `GossipTransport` beside `IrohGossipTransport`. `OuterGuard` is not that carrier.
