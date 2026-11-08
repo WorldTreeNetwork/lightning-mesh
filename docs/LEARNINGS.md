@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-11-08 — `mjolnir-apply` `RUN_WIRELESS=1` must export `RADIOSET_FUNCTIONS` from `mjolnir.radioset.function` before `setup-wireless.sh`. A live STA without that table is refused before the z3th last-wins template; missing the export clobbers or FATAL-refuses an owned station. (`deploy/openwrt/files/usr/sbin/mjolnir-apply`, `openspec/specs/radio-sets/spec.md`)
 - 2026-11-07 — OpenWrt One bench node `openwrt-one` is `10.42.58.1`, node id `4298275cb60f39582d8c41187494ee01171379184db10f9ebc4885b15e4fbced`, group bench. Mesh ESTAB to tr3000 (`82:af:ca:98:fb:10`). First health after enroll can miss UDP 49737; a second `--check` a few seconds later is bound. (`deploy/openwrt/fleet-nodes.conf`)
 - 2026-11-07 — macOS `/bin/bash` is 3.2: `local -A` and `find -printf` fail in `install-node.sh` prune/trim. The laptop has no `ip`; provision follow-the-claim uses `route`/`ifconfig`/`arp` and `ipconfig set IFACE DHCP` on the cable NIC only. (`deploy/openwrt/install-node.sh`, `deploy/openwrt/provision/lib.sh`)
 - 2026-11-07 — OpenWrt One (`openwrt,one`) ships SNAPSHOT on SPI-NAND. Official 25.12.5 is `squashfs-sysupgrade.itb` (FIT), not a Cudy `.bin`. `sysupgrade -n` from SNAPSHOT r27876 (kernel 6.6.57, opkg) landed 25.12.5 r33051 (kernel 6.12.94, apk) over LAN `eth1`. Do not use `factory.ubi` or NOR images for that step. (`deploy/openwrt/vendor-firmware/openwrt-one/`)

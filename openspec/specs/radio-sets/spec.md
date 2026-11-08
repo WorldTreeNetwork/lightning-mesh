@@ -103,10 +103,14 @@ A plan that places station on a phy whose committed function is mesh
 SHALL be refused unless the same transaction moves mesh off that phy.
 The station interface SHALL NOT be bridged into the client LAN. Station
 credentials, default-route evidence, and `ProvesUpstream` remain
-`wifi-internet-uplink` (mjolnir-mesh-21rw). Wiring the shell
-`setup-wireless.sh` so an owned station is not a FATAL on metal is
-mjolnir-mesh-9d3o; this change owns the refusals and the plan-builder
-preserve.
+`wifi-internet-uplink` (mjolnir-mesh-21rw).
+
+On metal, `mjolnir-apply` with `RUN_WIRELESS=1` SHALL export the committed
+`mjolnir.radioset.function` table as `RADIOSET_FUNCTIONS` before invoking
+`setup-wireless.sh`, so the radioset projector runs. That projector SHALL
+NOT treat an owned station as a fatal template error. A live STA with no
+committed radioset table SHALL be refused before the last-wins template
+runs. Mesh and client-ap phys SHALL stay as the radioset assigned them.
 
 #### Scenario: Re-apply with assigned station
 - GIVEN a committed radioset with radio0 station and radio1 mesh
@@ -124,6 +128,13 @@ preserve.
 - GIVEN committed mesh on radio1
 - WHEN a radioset marks radio1 station and does not move mesh
 - THEN the plan is refused
+
+#### Scenario: Metal RUN_WIRELESS preserves owned station
+- GIVEN committed `mjolnir.radioset.function` includes radio0=station
+- AND radio0 is `mjolnir.uplink.radio`
+- AND a live sta iface is on radio0
+- WHEN mjolnir-apply runs with RUN_WIRELESS=1
+- THEN setup-wireless takes the radioset branch, the sta iface remains, and there is no z3th FATAL
 
 ### Requirement: Radioset apply is a durable transaction
 A radioset change SHALL be one network-change transaction. The committed
