@@ -518,7 +518,10 @@ settings_export_radio() {
 	v=$(uci -q get mjolnir.radio.ssid 2>/dev/null) && [ -n "$v" ] && CLIENT_SSID="$v"
 	v=$(uci -q get mjolnir.radio.encryption 2>/dev/null) && [ -n "$v" ] && CLIENT_ENC="$v"
 	CLIENT_KEY=$(uci -q get mjolnir.radio.key 2>/dev/null) || CLIENT_KEY=
-	export CLIENT_SSID CLIENT_ENC CLIENT_KEY
+	# Committed radioset table selects the setup-wireless radioset branch
+	# (owned STA preserved). Empty means last-wins, which FATALS on sta.
+	RADIOSET_FUNCTIONS=$(uci -q get mjolnir.radioset.function 2>/dev/null) || RADIOSET_FUNCTIONS=
+	export CLIENT_SSID CLIENT_ENC CLIENT_KEY RADIOSET_FUNCTIONS
 }
 
 ensure_mjolnir_settings || log "WARN: could not ensure mjolnir radio/wan_admin sections"
@@ -559,6 +562,15 @@ if [ "$RUN_WIRELESS" = 1 ]; then
 		settings_from_env
 	fi
 	settings_export_radio
+	if [ -z "${RADIOSET_FUNCTIONS:-}" ]; then
+		sta=0
+		for s in $(uci -q show wireless 2>/dev/null | sed -n 's/^wireless\.\([^.]*\)=wifi-iface/\1/p'); do
+			[ "$(uci -q get "wireless.$s.mode")" = sta ] && sta=1 && break
+		done
+		if [ "$sta" = 1 ]; then
+			rollback "station present without mjolnir.radioset.function (z3th)"
+		fi
+	fi
 	WIRELESS_RC=0
 	sh /root/setup-wireless.sh || WIRELESS_RC=$?
 	# the env file carries MESH_KEY/CLIENT_KEY/FT_KEY — once consumed, don't
