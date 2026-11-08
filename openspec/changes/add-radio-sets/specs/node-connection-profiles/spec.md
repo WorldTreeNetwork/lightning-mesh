@@ -1,0 +1,64 @@
+## MODIFIED Requirements
+
+### Requirement: Each port and radio has one role
+<!-- base: 5ff4df82bed94a3000f87ca80547b1785961cc8a openspec/specs/node-connection-profiles/spec.md -->
+A node-connection profile SHALL assign each used port exactly one of WAN,
+node-link, client, or disabled. Radio functions SHALL come from the node's
+radioset (`radio-sets`), not from the profile. A profile that assigns two
+roles to one port SHALL be refused before any configuration change. A
+profile SHALL NOT assign radio roles.
+
+#### Scenario: Shared port
+- GIVEN a profile that marks one Ethernet port as both WAN and client
+- WHEN the profile is submitted
+- THEN it is refused before mutation
+
+#### Scenario: Radio roles on a profile
+- GIVEN a profile document that marks a phy as mesh
+- WHEN the profile is submitted
+- THEN it is refused and names radio-sets as the store
+
+### Requirement: The default profile is the satellite split
+<!-- base: 5ff4df82bed94a3000f87ca80547b1785961cc8a openspec/specs/node-connection-profiles/spec.md -->
+Until a per-model port map is qualified, the default profile SHALL be
+`ethernet-gateway-satellites`: Ethernet WAN on the gateway. Mesh backhaul
+and the client AP SHALL come from the default radioset `satellite-split`
+(5 GHz mesh, 2.4 GHz client AP). `wired-core` SHALL be refused when that
+model has no qualified port map.
+
+#### Scenario: Unqualified wired-core
+- GIVEN a model with no qualified port map
+- WHEN an owner applies `wired-core`
+- THEN the apply is refused and names the missing map
+
+### Requirement: Wired-core keeps the three domains apart
+<!-- base: 5ff4df82bed94a3000f87ca80547b1785961cc8a openspec/specs/node-connection-profiles/spec.md -->
+`wired-core` SHALL require distinct WAN, node-link, and client ports. Client
+ports SHALL NOT run the mesh routing protocol. Node-link ports SHALL NOT
+serve resident DHCP, and SHALL NOT be bridged with a mesh radio. WAN SHALL
+NOT be bridged into the client bridge. Every port in a qualified map SHALL
+have an explicit role; an omitted port SHALL be disabled rather than left in
+the client bridge. When the profile's cable-loss mode is `isolate`, loss of
+the node-link SHALL NOT retarget the radioset onto mesh. When the mode is
+`reserve-mesh`, the committed radioset SHALL keep one phy on mesh and SHALL
+NOT place client-ap on that phy.
+
+#### Scenario: Client port running babel
+- GIVEN a `wired-core` plan whose client port would run babel
+- WHEN the plan is checked
+- THEN it is refused
+
+#### Scenario: Node-link joined to the mesh bridge
+- GIVEN a plan that puts the node-link port in `br-mesh` while a mesh radio stays up
+- WHEN the plan is checked
+- THEN it is refused
+
+#### Scenario: Unassigned mapped port
+- GIVEN a qualified map that lists a port the profile does not assign
+- WHEN the plan is checked
+- THEN that port is disabled and is not left in the client bridge
+
+#### Scenario: Cable loss isolates
+- GIVEN a committed `wired-core` profile whose cable-loss mode is `isolate`
+- WHEN the node-link goes down
+- THEN the node does not retake a client radio for mesh
