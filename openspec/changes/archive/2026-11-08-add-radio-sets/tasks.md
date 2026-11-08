@@ -8,7 +8,7 @@
 - [x] Tests: two functions on one phy refused; extra phy disabled; default set is a no-op on today's satellite fixture; reordered UCI names; two same-band phys; map/inventory mismatch; unowned STA; isolate without acknowledgement
 - [x] Advise accept on this architecture change (READER line) before act — reviews/2026-11-08-advise-r2.md
 - [x] Fresh advise after preparation — accepted by astra-arch-review in reviews/2026-11-08-advise-r2.md; contract d4b510719083f5ae2ab812b16cd90868702bf13e
-- [ ] Amend ARCHITECTURE.md on fold: radioset is the radio assignment store
+- [x] Amend ARCHITECTURE.md on fold: radioset is the radio assignment store
 
 ## Owed from advise — 2026-11-08
 

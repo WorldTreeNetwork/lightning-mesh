@@ -56,10 +56,19 @@ well is a raw transcript, not a second parser. One canvas switches
 (`add-crystal-grid`) is later. Living spec:
 `openspec/specs/admin-stdout-views/spec.md`.
 
-`/etc/config/mjolnir` (`radio`, `wan_admin`) is the live operator store.
-`mjolnir-apply` is the only projector of those knobs onto UCI `wireless`.
-A staged `wireless.env` writes the store and is then wiped. LuCI-edited
-`wireless` is not canonical.
+`/etc/config/mjolnir` (`radio`, `wan_admin`, `radioset`) is the live
+operator store. `mjolnir-apply` is the only projector of those knobs
+onto UCI `wireless`. A staged `wireless.env` writes the store and is
+then wiped. LuCI-edited `wireless` is not canonical.
+
+Radio assignment is a radioset (`add-radio-sets`, bead
+`mjolnir-mesh-i5m0`), not `BACKHAUL_BAND` last-wins. Each phy in the
+model map gets one function: mesh, client-ap, station, or disabled.
+The committed record is definition id, optional 2g variant, and the
+resolved per-phy function table. Apply projects that table.
+`BACKHAUL_BAND=2g` selects `satellite-split-2g` only on first adoption
+when no id is committed. A profile may name a radioset id; it does not
+list radio roles. Living spec: `openspec/specs/radio-sets/spec.md`.
 
 Coverage survey (`add-coverage-survey`, bead `mjolnir-mesh-6hn`): last-known
 WGS84 lives on the gossiped directory projection, not in `radio.json` v1
@@ -130,9 +139,10 @@ bridged into the client LAN. Living spec:
 `openspec/specs/wifi-internet-uplink/spec.md`.
 
 Wired node profiles (`add-wired-node-profiles`, bead `mjolnir-mesh-ai0.6`):
-each used port is WAN, node-link, client, or disabled, and each used
-radio is mesh, client-ap, station, or disabled. The default stays
-`ethernet-gateway-satellites`. `wired-core` needs a qualified port map.
+each used port is WAN, node-link, client, or disabled. Radio functions
+come from the node's radioset, not from the profile. The default stays
+`ethernet-gateway-satellites` with radioset `satellite-split`.
+`wired-core` needs a qualified port map.
 A node-link stays off `br-mesh` and off resident DHCP. meshd feeds
 `mjolnir.node_link` into the babel renderer as `type wired` and does
 not drop a house-gateway `0.0.0.0/0` export. Living spec:
@@ -164,6 +174,8 @@ Living spec: `openspec/specs/private-household-wifi/spec.md`.
 - Front desk / hello.mesh: `crates/mjolnir-hello/`, `docs/products/hello.mesh/`
 - Owner-signed admin records: `openspec/specs/admin-record-integrity/spec.md`
 - Station internet uplink: `openspec/specs/wifi-internet-uplink/spec.md`
+- Radio assignment (radioset, not BACKHAUL_BAND last-wins):
+  `openspec/specs/radio-sets/spec.md`
 - Wired node profiles: `openspec/specs/node-connection-profiles/spec.md`
 - Household owner claim: `openspec/specs/household-owner-claim/spec.md`
 - Captive portal (offer IdentiKey, or pass through): `openspec/specs/captive-portal/spec.md`
