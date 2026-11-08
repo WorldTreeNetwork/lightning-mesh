@@ -1,7 +1,7 @@
 //! Durable, target-owned network configuration transactions.
 //!
-//! This crate owns the journal and recovery state machine. It deliberately does
-//! not contain an OpenWrt service adapter, launcher, init script, or radio code.
+//! This crate owns the journal and recovery state machine, including an
+//! OpenWrt adapter with injectable health probes and wireless reload.
 
 mod client_class;
 mod engine;
@@ -30,7 +30,10 @@ pub use node_profile::{
     ProvesReachability, RADIO_MAP_DIR, RadioMap, RadioPhy, RadioRole, RadiosetRecord, build_plan,
     check_profile_safety, decide, submit_profile_plan,
 };
-pub use openwrt::{OpenWrtAdapter, active_plan, write_result_from_receipt};
+pub use openwrt::{
+    OpenWrtAdapter, OpenWrtProbes, ProbeResult, ProbeTargets, active_plan,
+    write_result_from_receipt,
+};
 pub use storage::{NodeLock, TxnPaths};
 pub use uplink::{
     Authorization, Candidate, DefaultExport, EXPORT_GATE, HOUSE_CLIENT_SSID, MeshInventory,

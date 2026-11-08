@@ -71,6 +71,13 @@ impl TxnPaths {
         self.transaction(id).join("snapshot")
     }
 
+    pub fn uplink_secrets(&self) -> PathBuf {
+        self.config_root
+            .parent()
+            .unwrap_or(Path::new("/etc"))
+            .join("mjolnir/secrets/uplink")
+    }
+
     pub fn config(&self, config: UciConfig) -> PathBuf {
         self.config_root.join(config.file_name())
     }
@@ -329,6 +336,7 @@ pub(crate) fn restore_snapshot(paths: &TxnPaths, id: &str) -> Result<(), EngineE
             atomic_bytes(&target, &fs::read(source)?)?;
         }
     }
+    restore_uplink_secret(paths, id)?;
     verify_restored(paths, &manifest)
 }
 
@@ -409,5 +417,41 @@ pub(crate) fn prune_receipts(paths: &TxnPaths) -> Result<(), EngineError> {
 
 pub(crate) fn sync_dir(path: &Path) -> Result<(), EngineError> {
     File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+// The secret sidecar is root-only and never copied into receipts or digests.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct SecretSnapshot {
+    pub name: String,
+    pub previous: Option<Vec<u8>>,
+}
+
+pub(crate) fn secret_name(name: &str) -> Result<(), EngineError> {
+    if !name.starts_with("uplink-")
+        || name.len() != 31
+        || !name[7..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(EngineError::Storage("invalid uplink secret name".into()));
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_uplink_secret(paths: &TxnPaths, id: &str) -> Result<(), EngineError> {
+    let sidecar = paths.snapshot(id).join("uplink-secret.json");
+    if !sidecar.exists() {
+        return Ok(());
+    }
+    let saved: SecretSnapshot = read_json(&sidecar)?;
+    secret_name(&saved.name)?;
+    let target = paths.uplink_secrets().join(&saved.name);
+    match saved.previous {
+        Some(bytes) => atomic_bytes(&target, &bytes)?,
+        None => match fs::remove_file(&target) {
+            Ok(()) => sync_dir(&paths.uplink_secrets())?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        },
+    }
     Ok(())
 }
