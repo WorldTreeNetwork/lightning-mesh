@@ -25,9 +25,10 @@ pub use model::{
     RecoveryTrigger, SCHEMA_VERSION, Tombstone, Tombstones, UciConfig, Vantage,
 };
 pub use node_profile::{
-    Band, CableLoss, NodeConfig, NodeFacts, PORT_MAP_DIR, PlanIds, PortMap, PortRole,
-    ProfileDecision, ProfileId, ProfilePlan, ProfileRefusal, ProfileRequest, ProvesReachability,
-    RadioRole, build_plan, check_profile_safety, decide, submit_profile_plan,
+    Band, CableLoss, NodeConfig, NodeFacts, OPENWRT_ONE_RADIO_MAP, PORT_MAP_DIR, PlanIds, PortMap,
+    PortRole, ProfileDecision, ProfileId, ProfilePlan, ProfileRefusal, ProfileRequest,
+    ProvesReachability, RADIO_MAP_DIR, RadioMap, RadioPhy, RadioRole, RadiosetRecord, build_plan,
+    check_profile_safety, decide, submit_profile_plan,
 };
 pub use openwrt::{OpenWrtAdapter, active_plan, write_result_from_receipt};
 pub use storage::{NodeLock, TxnPaths};

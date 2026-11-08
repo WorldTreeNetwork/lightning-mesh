@@ -63,6 +63,83 @@ DISTANCE="${DISTANCE:-}"                  # metres to the farthest mesh peer; se
 FT_KEY="${FT_KEY:-}"                         # 256-bit hex string (64 hex chars), shared mesh-wide — the r0kh/r1kh key-holder push secret
 FT_MOBILITY_DOMAIN="${FT_MOBILITY_DOMAIN:-a1b2}" # 2-octet hex MDID, shared mesh-wide (must match on every node/band the client roams across)
 
+# Resolved tables use whitespace-separated map-id=function entries, matching
+# mjolnir.radioset.function. This branch only stages wireless UCI projection;
+# the mjolnir-apply transaction owns commit/reload and reachability checks.
+# It never falls through to the legacy template's commits or service restarts.
+radioset_table="${RADIOSET_FUNCTIONS:-}"
+if [ -n "${RADIOSET_FUNCTIONS_FILE:-}" ]; then
+    radioset_table="$(cat "$RADIOSET_FUNCTIONS_FILE")"
+fi
+if [ -z "$radioset_table" ]; then
+    radioset_table="$(uci -q get mjolnir.radioset.function || true)"
+fi
+if [ -n "$radioset_table" ] || [ "${RADIOSET_FUNCTIONS+x}" = x ] || [ -n "${RADIOSET_FUNCTIONS_FILE:-}" ]; then
+    set -f
+    fail_radioset() { echo "FATAL: radioset: $*" >&2; exit 1; }
+    [ -n "$radioset_table" ] || fail_radioset "empty resolved table"
+    seen=" "
+    for entry in $radioset_table; do
+        r="${entry%%=*}"; role="${entry#*=}"
+        case "$r" in ''|*[!a-zA-Z0-9_.@-]*) fail_radioset "invalid map id" ;; esac
+        case "$seen" in *" $r "*) fail_radioset "duplicate function for $r" ;; esac
+        seen="$seen$r "
+        [ "$(uci -q get "wireless.$r")" = wifi-device ] || fail_radioset "missing $r"
+        case "$role" in mesh|client-ap|station|disabled) ;; *) fail_radioset "invalid function" ;; esac
+    done
+    function_for() {
+        for assignment in $radioset_table; do
+            [ "${assignment%%=*}" != "$1" ] || { echo "${assignment#*=}"; return; }
+        done
+    }
+    ifaces="$(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface/\1/p')"
+    # Validate every STA and managed iface before staging any writes.
+    for iface in $ifaces; do
+        r="$(uci -q get "wireless.$iface.device")"
+        mode="$(uci -q get "wireless.$iface.mode")"
+        role="$(function_for "$r")"
+        if [ "$mode" = sta ]; then
+            [ "$role" = station ] && [ "$(uci -q get mjolnir.uplink.radio)" = "$r" ] || fail_radioset "unowned station $iface"
+            case " $(uci -q get "wireless.$iface.network") " in *' lan '*) fail_radioset "station in LAN" ;; esac
+        fi
+        case "$iface" in meshbh|clientap|clientap2g)
+            [ -n "$role" ] || fail_radioset "managed iface on unmapped $r" ;;
+        esac
+    done
+    # An existing iface is required. A role never authorizes association.
+    for entry in $radioset_table; do
+        r="${entry%%=*}"; role="${entry#*=}"
+        found=0
+        for iface in $ifaces; do
+            [ "$(uci -q get "wireless.$iface.device")" = "$r" ] || continue
+            mode="$(uci -q get "wireless.$iface.mode")"
+            case "$role:$mode" in mesh:mesh|client-ap:ap|station:sta) found=1 ;; esac
+        done
+        [ "$role" = disabled ] || [ "$found" = 1 ] || fail_radioset "no existing $role iface on $r"
+    done
+    for entry in $radioset_table; do
+        r="${entry%%=*}"; role="${entry#*=}"
+        case "$role" in
+            disabled) uci set "wireless.$r.disabled=1" ;;
+            mesh|client-ap) uci set "wireless.$r.disabled=0" ;;
+            station) ;; # Never enable a station radio here.
+        esac
+    done
+    for iface in $ifaces; do
+        r="$(uci -q get "wireless.$iface.device")"
+        role="$(function_for "$r")"
+        [ -n "$role" ] || continue # Unmapped devices remain dongle-owned.
+        mode="$(uci -q get "wireless.$iface.mode")"
+        case "$role:$mode" in
+            station:sta) ;; # Preserve credentials, generation and enabled state.
+            mesh:mesh|client-ap:ap) uci set "wireless.$iface.disabled=0" ;;
+            *) uci set "wireless.$iface.disabled=1" ;;
+        esac
+    done
+    echo ">> radioset projection staged; mjolnir-apply owns commit/reload"
+    exit 0
+fi
+
 # z3th: this template has no station/uplink role. A live STA (m3000-b
 # `wireless.uplink` onto Symbio) would be destroyed by the generic projection.
 for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface/\1/p'); do
