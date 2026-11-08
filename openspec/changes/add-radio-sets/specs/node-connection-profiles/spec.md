@@ -39,9 +39,11 @@ serve resident DHCP, and SHALL NOT be bridged with a mesh radio. WAN SHALL
 NOT be bridged into the client bridge. Every port in a qualified map SHALL
 have an explicit role; an omitted port SHALL be disabled rather than left in
 the client bridge. When the profile's cable-loss mode is `isolate`, loss of
-the node-link SHALL NOT retarget the radioset onto mesh. When the mode is
-`reserve-mesh`, the committed radioset SHALL keep one phy on mesh and SHALL
-NOT place client-ap on that phy.
+the node-link SHALL NOT retarget the radioset onto mesh, and the profile
+SHALL be refused without an explicit acknowledgement when a current mesh
+peer has no other path. When the mode is `reserve-mesh`, the committed
+radioset SHALL keep one phy on mesh and SHALL NOT place client-ap on that
+phy.
 
 #### Scenario: Client port running babel
 - GIVEN a `wired-core` plan whose client port would run babel
@@ -62,3 +64,10 @@ NOT place client-ap on that phy.
 - GIVEN a committed `wired-core` profile whose cable-loss mode is `isolate`
 - WHEN the node-link goes down
 - THEN the node does not retake a client radio for mesh
+
+#### Scenario: Isolate without stranded-peer acknowledgement
+- GIVEN a node whose current mesh peers have no other path
+- AND a `wired-core` isolate plan that would leave those peers without mesh
+- AND the plan does not carry an explicit stranded-peer acknowledgement
+- WHEN the plan is checked
+- THEN it is refused before mutation

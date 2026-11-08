@@ -2,9 +2,11 @@
 
 ## Shape
 
-A **radioset** is a named map from phy id → one function: `mesh`, `client-ap`, `station`, `disabled`. It is not a wired node-connection profile. Ports stay in `node-connection-profiles`. A node records `mjolnir.radioset.id` (and the profile may name that id). Apply projects both in one network-change transaction when both change, or radioset-only when ports do not.
+A **radioset** is a named map from phy id → one function: `mesh`, `client-ap`, `station`, `disabled`. It is not a wired node-connection profile. Ports stay in `node-connection-profiles`.
 
-`setup-wireless.sh` today picks the last `band=2g` and last `band=5g` device and FATALS on `mode=sta`. The projector reads the radioset instead. `BACKHAUL_BAND` remains a way to *select* the default satellite radioset (5g mesh vs 2g mesh), not a discovery loop.
+Committed store (replay without env): `mjolnir.radioset.id`, optional `variant` (`2g` only when not the 5 GHz default), and a resolved `function` table keyed by map `id`. Definitions live as image data next to radio maps (`satellite-split`, `satellite-split-2g`). Hardware maps do not store functions. A profile-named id wins over `BACKHAUL_BAND`. `BACKHAUL_BAND=2g` selects `satellite-split-2g` only on first adoption. Absent id is `satellite-split` (today's no-op). Unknown id is refused.
+
+`setup-wireless.sh` today picks the last `band=2g` and last `band=5g` device and FATALS on `mode=sta`. The plan builder reads the radioset instead. The shell SHALL NOT commit UCI or `wifi reload` outside the durable transaction. Live radioset **changes** still refuse `OpenWrtAdapter` until probes exist. Preserving an **owned** station in the plan is this change; making the metal shell not FATAL that station is mjolnir-mesh-9d3o.
 
 ## Model map
 
@@ -21,7 +23,9 @@ Image data: `/usr/share/mjolnir/radio-maps/<model>.json`.
 }
 ```
 
-`qualified: true` is only `mjolnir-mesh-lpv`. OpenWrt One evidence (2026-11-07): one DT node `wifi@18000000` (`mediatek,mt7981-wmac`), driver `mt798x-wmac` / `mt7915e`, two wiphy (`phy0` 2.4 TX/RX 0x3, `phy1` 5 GHz configured 0x1c). Firmware `kmod-mt7981-firmware`. Not a missing third radio.
+Identity: `id` is the UCI wifi-device name; `path` is hardware; `band` is a constraint. Match inventory by path, then require UCI name == id. Two 5 GHz phys are not interchangeable. Unmapped detected phys are unmanaged (dongle) unless they already carry a managed iface. Mapped-but-omitted is disabled.
+
+`qualified: true` is only `mjolnir-mesh-lpv`. Unqualified maps still identify phys for the default set. OpenWrt One evidence (2026-11-07): one DT node `wifi@18000000` (`mediatek,mt7981-wmac`), driver `mt798x-wmac` / `mt7915e`, two wiphy (`phy0` 2.4 TX/RX 0x3, `phy1` 5 GHz configured 0x1c). Firmware `kmod-mt7981-firmware`. Not a missing third radio.
 
 ## Default set
 
@@ -40,7 +44,9 @@ OpenWrt One field map is this set. Ethernet WAN is the uplink (eth0). Station is
 
 ## Apply
 
-Same durable transaction rules as profiles: snapshot, health when mesh radio changes (`ManagementReachability` + `MeshReachability`), restore previous radioset on failure. Until `OpenWrtAdapter` has those probes, the builder tests against a fake adapter and refuses submit to the live adapter (same pattern as wired profiles).
+Same durable transaction rules as profiles: snapshot, health when mesh radio changes (`ManagementReachability` + `MeshReachability`), restore the previous **resolved** radioset record on failure. Until `OpenWrtAdapter` has those probes, the builder tests against a fake adapter and refuses submit of a radioset change to the live adapter. `clientap2g` stays rendered-disabled when that phy is not client-ap. Stale enabled ifaces on a disabled phy are disabled in the plan.
+
+Wired-core `isolate` still requires `acknowledge_stranded_peers` when `wireless_only_peers` is non-empty (`node_profile.rs`). That check is composed profile+radioset validation, not replaced by health probes.
 
 ## Not owed here
 
