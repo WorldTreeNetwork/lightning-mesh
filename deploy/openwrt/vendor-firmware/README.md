@@ -1,9 +1,4 @@
-# Cudy-signed OpenWrt intermediates
-
-Stock Cudy only accepts **signed** images. These bins are Cudy’s
-“remove signature check” step from
-[OpenWrt Software Download](https://www.cudy.com/blogs/faq/openwrt-software-download)
-(Google Drive folder linked there). They are **not** official OpenWrt.
+# Vendor firmware (Git LFS)
 
 Checked in with Git LFS. After clone:
 
@@ -12,6 +7,41 @@ git lfs pull
 ```
 
 Wrong board image bricks the box. Match the **label**, not the marketing name.
+
+## OpenWrt One
+
+The One ships as OpenWrt already (NAND production, NOR recovery). There is
+no vendor-signed intermediate. The fleet image is official **25.12.5**
+`squashfs-sysupgrade.itb` (FIT, not a Cudy `.bin`):
+
+| directory | file | board id |
+|-----------|------|----------|
+| `openwrt-one/` | `openwrt-25.12.5-mediatek-filogic-openwrt_one-squashfs-sysupgrade.itb` | `openwrt,one` |
+
+Checksum in `openwrt-one/SHA256SUMS.openwrt-25.12.5`
+(`771fbaca6cde230ac7167630674d51cdb4370d36bc4a9b22e36eb1969113779c`,
+matching `downloads.openwrt.org` `releases/25.12.5` sha256sums).
+
+The box is already OpenWrt, so flash from SSH:
+
+```sh
+scp -O -o BindInterface=en15 \
+  deploy/openwrt/vendor-firmware/openwrt-one/openwrt-25.12.5-mediatek-filogic-openwrt_one-squashfs-sysupgrade.itb \
+  root@192.168.1.1:/tmp/sysupgrade.itb
+ssh -o BindInterface=en15 root@192.168.1.1 'sysupgrade -n /tmp/sysupgrade.itb'
+```
+
+`-n` wipes the snapshot overlay. Do **not** use `factory.ubi`,
+`nor-factory.bin`, or a `ubootmod` image for this step. USB recovery
+(NAND boot switch, hold **Reset**, FAT32 stick) wants the same `.itb`
+renamed to `openwrt-mediatek-filogic-openwrt_one-squashfs-sysupgrade.itb`.
+
+## Cudy-signed OpenWrt intermediates
+
+Stock Cudy only accepts **signed** images. These bins are Cudy’s
+“remove signature check” step from
+[OpenWrt Software Download](https://www.cudy.com/blogs/faq/openwrt-software-download)
+(Google Drive folder linked there). They are **not** official OpenWrt.
 
 | directory | Cudy Drive zip | board | OpenWrt id after this |
 |-----------|----------------|-------|------------------------|

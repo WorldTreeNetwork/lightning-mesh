@@ -2,6 +2,7 @@
 
 Append-only. One line per hard-won fact. Dated, with a file reference.
 
+- 2026-11-07 — OpenWrt One (`openwrt,one`) ships SNAPSHOT on SPI-NAND. Official 25.12.5 is `squashfs-sysupgrade.itb` (FIT), not a Cudy `.bin`. `sysupgrade -n` from SNAPSHOT r27876 (kernel 6.6.57, opkg) landed 25.12.5 r33051 (kernel 6.12.94, apk) over LAN `eth1`. Do not use `factory.ubi` or NOR images for that step. (`deploy/openwrt/vendor-firmware/openwrt-one/`)
 - 2026-11-04 — `id`, `listen`, `connect`, and the tun one-shots bind the identity ULA through `oneshot_bind`. A missing house `/128` does not refuse them. `build_endpoint` still adds the house socket when that `/128` is usable and the primary bind is the ULA. (`crates/mjolnir-mesh/src/bin/meshd/transport.rs`)
 - 2026-11-04 — Stock bring-up SSH starts at `192.168.1.1`. After meshd stays up it claims `10.42.x.1/24` on `br-lan` and deletes `192.168.1.1`, so the next SSH to the stock address times out. The fleet dial is the live client gateway (`tr3000-b` is `10.42.149.1`). Renewing DHCP to follow that claim must not touch the laptop's default-route interface. (`deploy/openwrt/provision/provision-node.sh`)
 - 2026-11-04 — `creat(/etc/mjolnir/babeld.underlay.pid): File exists` every couple of seconds is babeld, not the outer-rule crash. A missing house guild is healthy when UDP 49737 is bound on the identity ULA. `mjolnir-meshd id` still exits until a house `/128` exists; the node id comes from `status`. (`deploy/openwrt/provision/health.sh`, tr3000-b)
