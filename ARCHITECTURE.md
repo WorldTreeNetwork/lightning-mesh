@@ -127,15 +127,20 @@ not write a new head. Living spec:
 `openspec/specs/admin-record-integrity/spec.md`.
 
 Wi-Fi internet uplink (`add-wifi-internet-uplink`, bead
-`mjolnir-mesh-bf7.2`): one authorized node joins a selected upstream
+`mjolnir-mesh-bf7.2`; live probes `add-live-uplink-probes`,
+`mjolnir-mesh-21rw`): one authorized node joins a selected upstream
 SSID as a station and feeds the mesh. Credentials bind to that candidate
 (node id, radio id, SSID; a different BSSID is a new candidate). The
 passphrase lives in a root-only file outside the four revisioned UCI
 files. A DHCP lease is not downstream internet. The mesh default-route
 export is not a second default beside an existing house-gateway export
 unless that change is in the same revision-checked plan. Failure
-restores the previous committed plan. The station interface is not
-bridged into the client LAN. Living spec:
+restores the previous committed plan; restoration health is management
+reachability and the applied revision only. `OpenWrtAdapter` implements
+`ProvesUpstream` (association, address, route, upstream-bound DNS+HTTPS,
+mesh and management) and reloads wireless after UCI. Field RF stays
+`mjolnir-mesh-lpv`; this OpenWrt One does not STA Solstice Grove. The
+station interface is not bridged into the client LAN. Living spec:
 `openspec/specs/wifi-internet-uplink/spec.md`.
 
 Wired node profiles (`add-wired-node-profiles`, bead `mjolnir-mesh-ai0.6`):

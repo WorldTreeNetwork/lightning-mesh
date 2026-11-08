@@ -3,10 +3,11 @@
 One authorized node joins a selected upstream Wi-Fi as a station and feeds
 the mesh. Credentials are candidate-bound. A DHCP lease is not downstream
 internet. Integrates with `network-change-transactions` and `mjolnir-apply`.
-Folded from `add-wifi-internet-uplink` (2026-10-22).
+Folded from `add-wifi-internet-uplink` (2026-10-22) and
+`add-live-uplink-probes` (2026-11-08).
 
-Code: `crates/mjolnir-apply/src/uplink.rs` (plan builder on a fake adapter;
-submission to `OpenWrtAdapter` stays refused until live probes exist).
+Code: `crates/mjolnir-apply/src/uplink.rs` (`OpenWrtAdapter` implements
+`ProvesUpstream`; tests inject probes).
 
 ## Requirements
 
@@ -37,7 +38,9 @@ Wrong credentials, a failed health check, or an uncertain receipt SHALL
 restore the previous committed configuration through the durable transaction.
 A station plan SHALL NOT install a second default route beside an existing
 house-gateway export unless that export change is part of the same
-revision-checked plan.
+revision-checked plan. Restoration health SHALL be management reachability
+and the applied revision only; it SHALL NOT require upstream association,
+address, route, or DNS+HTTPS.
 
 #### Scenario: Wrong passphrase
 - GIVEN a committed configuration and a station plan with the wrong passphrase
@@ -79,3 +82,23 @@ HTTPS evidence passes.
 - GIVEN a radio whose committed mode is mesh
 - WHEN a station plan selects it and no profile has changed that mode in the same transaction
 - THEN the plan is refused
+
+### Requirement: OpenWrtAdapter proves upstream on metal
+`OpenWrtAdapter` SHALL implement `ProvesUpstream`. After writing allowlisted
+UCI it SHALL reload wireless. Before commit it SHALL observe station
+association, address, default route on that iface, and upstream-bound DNS
+plus HTTPS, and SHALL observe mesh and management reachability. A DHCP lease
+alone SHALL NOT pass DNS+HTTPS. The uplink secret file SHALL be snapshotted
+and restored with the transaction. `submit_uplink_plan` SHALL accept
+`OpenWrtAdapter`. Field RF walks remain `mjolnir-mesh-lpv`.
+
+#### Scenario: Passing probes commit
+- GIVEN a candidate-bound station plan and probes that pass REQUIRED_HEALTH
+- WHEN submit_uplink_plan runs on OpenWrtAdapter
+- THEN the transaction commits and the receipt does not contain the passphrase
+
+#### Scenario: Failed DNS restores
+- GIVEN a station that associated and received a lease
+- AND upstream-bound DNS+HTTPS fails
+- WHEN the transaction health-checks
+- THEN the previous revision is restored
