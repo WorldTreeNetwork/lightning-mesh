@@ -10,6 +10,9 @@ set -euo pipefail
 BIN="${1:-mjolnir-meshd}"
 TARGET="aarch64-unknown-linux-musl"
 FEATURES="${FEATURES:-daemon}"
+# mjolnir-txn lives in crate mjolnir-apply, not mjolnir-mesh.
+PKG="${MJOLNIR_PKG:-mjolnir-mesh}"
+[ "$BIN" = mjolnir-txn ] && PKG=mjolnir-apply && FEATURES=""
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
@@ -42,7 +45,7 @@ docker run --rm \
   -e MJOLNIR_BUILD="${GIT_SHA}" \
   messense/rust-musl-cross:aarch64-musl \
   cargo build --release --locked --target "${TARGET}" \
-    -p mjolnir-mesh --bin "${BIN}" --features "${FEATURES}"
+    -p "${PKG}" --bin "${BIN}" ${FEATURES:+--features "${FEATURES}"}
 
 cp "${CROSS_TARGET}/${TARGET}/release/${BIN}" "${OUT}"
 echo ">> done -> ${OUT}  ($(du -h "${OUT}" | cut -f1))"

@@ -32,9 +32,8 @@ set -euo pipefail
 pkg_cache_prune() {
 	local dir="$1"
 	[ -d "$dir" ] || return 0
-	local f base name ver rel maxrel top old
-	local -a apks keep
-	local -A best_ver
+	local f base name ver rel maxrel top old n v maxver maxfile
+	local -a apks keep names
 	local nullglob_was=0
 	shopt -q nullglob && nullglob_was=1
 	shopt -s nullglob
@@ -87,30 +86,47 @@ pkg_cache_prune() {
 		keep+=("$f")
 	done
 
+	# bash 3.2 (macOS /bin/bash) has no associative arrays. Unique names,
+	# then keep the highest version of each. kernel stays as-is (vermagic).
+	names=()
 	for f in "${keep[@]}"; do
 		[ -f "$f" ] || continue
 		base=$(basename "$f" .apk)
 		[[ "$base" =~ ^(.+)-([0-9].*)$ ]] || continue
 		name="${BASH_REMATCH[1]}"
-		ver="${BASH_REMATCH[2]}"
-		# Same kernel release, different vermagic hash: keep each file.
 		[ "$name" = kernel ] && continue
-		if [ -z "${best_ver[$name]+x}" ]; then
-			best_ver[$name]="$ver"
-			continue
-		fi
-		top="$(printf '%s\n%s\n' "$ver" "${best_ver[$name]}" | sort -V | tail -n 1)"
-		if [ "$top" = "$ver" ] && [ "$ver" != "${best_ver[$name]}" ]; then
-			for old in "$dir/$name-${best_ver[$name]}.apk"; do
-				[ -f "$old" ] || continue
-				echo "   cache drop $(basename "$old")"
-				rm -f -- "$old"
-			done
-			best_ver[$name]="$ver"
-		elif [ "$ver" != "${best_ver[$name]}" ]; then
-			echo "   cache drop $(basename "$f")"
-			rm -f -- "$f"
-		fi
+		n=0
+		for old in "${names[@]+"${names[@]}"}"; do
+			[ "$old" = "$name" ] && n=1 && break
+		done
+		[ "$n" = 1 ] || names+=("$name")
+	done
+	for name in "${names[@]+"${names[@]}"}"; do
+		maxver=""
+		maxfile=""
+		for f in "${keep[@]}"; do
+			[ -f "$f" ] || continue
+			base=$(basename "$f" .apk)
+			[[ "$base" =~ ^(.+)-([0-9].*)$ ]] || continue
+			n="${BASH_REMATCH[1]}"
+			v="${BASH_REMATCH[2]}"
+			[ "$n" = "$name" ] || continue
+			if [ -z "$maxver" ]; then
+				maxver="$v"
+				maxfile="$f"
+				continue
+			fi
+			top="$(printf '%s\n%s\n' "$v" "$maxver" | sort -V | tail -n 1)"
+			if [ "$top" = "$v" ] && [ "$v" != "$maxver" ]; then
+				echo "   cache drop $(basename "$maxfile")"
+				rm -f -- "$maxfile"
+				maxver="$v"
+				maxfile="$f"
+			elif [ "$v" != "$maxver" ]; then
+				echo "   cache drop $(basename "$f")"
+				rm -f -- "$f"
+			fi
+		done
 	done
 }
 
@@ -119,8 +135,13 @@ pkg_cache_prune() {
 pkg_cache_trim_stage() {
 	local dir="$1" host="$2" stage="$3"
 	[ -d "$dir" ] || return 0
-	find "$dir" -maxdepth 1 -type f -name '*.apk' -printf '%f\n' \
-		| ssh -o BatchMode=yes -o ConnectTimeout=6 "$host" "cat > /tmp/mjolnir-cache-keep
+	{
+		local f
+		for f in "$dir"/*.apk; do
+			[ -f "$f" ] || continue
+			basename "$f"
+		done
+	} | ssh -o BatchMode=yes -o ConnectTimeout=6 "$host" "cat > /tmp/mjolnir-cache-keep
 cd '$stage/pkgs' 2>/dev/null || exit 0
 for f in *; do
   [ -f \"\$f\" ] || continue
