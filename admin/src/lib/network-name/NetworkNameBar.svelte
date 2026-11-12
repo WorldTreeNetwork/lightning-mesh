@@ -23,6 +23,11 @@
 	>
 		{networkName.applying ? 'Applying…' : 'Apply'}
 	</button>
+	{#if networkName.name.trim() === '' && networkName.applying === false && networkName.report === null}
+		<p class="nn-empty">
+			No network name is loaded on this computer. Type the client SSID to apply it. This is not the guild name.
+		</p>
+	{/if}
 	{#if networkName.applying}
 		<span class="nn-status">Applying across the reachable nodes…</span>
 	{:else if networkName.error}
@@ -97,6 +102,13 @@
 
 	.apply:hover:not(:disabled) {
 		filter: brightness(1.08);
+	}
+
+	.nn-empty {
+		flex-basis: 100%;
+		margin: 0;
+		color: var(--muted);
+		font-size: var(--font-size-sm);
 	}
 
 	.nn-status {

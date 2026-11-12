@@ -16,6 +16,7 @@
 	.card {
 		display: grid;
 		gap: 0.35rem;
+		min-width: 0;
 		padding: 0.75rem;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
@@ -43,9 +44,11 @@
 	}
 
 	.addr {
+		min-width: 0;
 		font-family: var(--mono);
 		font-size: 12px;
-		overflow-wrap: anywhere;
+		white-space: nowrap;
+		overflow-x: auto;
 		user-select: all;
 	}
 </style>

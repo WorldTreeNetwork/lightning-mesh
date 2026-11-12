@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { CircleUser, House, Map, PanelLeftClose, PanelLeftOpen, Radio, Shield, Waypoints, Wifi } from '@lucide/svelte';
 	import { sectionFor, type SectionId } from './section';
@@ -10,18 +11,24 @@
 		{ id: 'backhaul', href: '/backhaul', label: 'Backhaul', icon: Wifi },
 		{ id: 'guild', href: '/guild', label: 'Guild', icon: Shield },
 		{ id: 'map', href: '/map', label: 'Map', icon: Map },
-		{ id: 'nearby', href: '/nearby', label: 'Nearby', icon: Radio },
+		{ id: 'network', href: '/network', label: 'Network', icon: Radio },
 		{ id: 'services', href: '/services', label: 'Services', icon: Waypoints }
 	];
 
+	const NARROW = 847;
 	let collapsed = $state(false);
 
-	$effect(() => {
+	onMount(() => {
 		try {
-			collapsed = localStorage.getItem(STORAGE_KEY) === '1';
+			const stored = localStorage.getItem(STORAGE_KEY);
+			if (stored === '1' || stored === '0') {
+				collapsed = stored === '1';
+				return;
+			}
 		} catch {
 			/* private mode */
 		}
+		collapsed = window.innerWidth <= NARROW;
 	});
 
 	const current = $derived(sectionFor(page.url.pathname));
@@ -123,6 +130,12 @@
 	a:hover,
 	button:hover {
 		background: var(--row-hover);
+	}
+
+	a:focus-visible,
+	button:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
 	}
 
 	a[aria-current='page'] {

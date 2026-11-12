@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { LinkLocalNeighbor } from './api';
-import { groupResources, resourceAddress } from './resources';
+import { formatVia, groupResources, resourceAddress } from './resources';
 
 function row(partial: Partial<LinkLocalNeighbor> & Pick<LinkLocalNeighbor, 'address' | 'iface' | 'ifindex'>): LinkLocalNeighbor {
 	return {
@@ -129,5 +129,14 @@ describe('groupResources', () => {
 		expect(resources).toHaveLength(2);
 		expect(resources.every((r) => r.guess === false)).toBe(true);
 		expect(resourceAddress(resources[0])).toBe('fe80::1');
+	});
+});
+
+describe('formatVia', () => {
+	test('keeps one name and counts the rest', () => {
+		expect(formatVia(['Gateway', 'Gateway', 'Gateway'])).toBe('Gateway');
+		expect(formatVia(['Gateway', 'Wi-Fi'])).toBe('Gateway +1');
+		expect(formatVia(['', '  '])).toBe('');
+		expect(formatVia([])).toBe('');
 	});
 });

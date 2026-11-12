@@ -12,6 +12,8 @@ export type Resource = {
 	hostname: string | null;
 	meshName: string | null;
 	meshNodeId: string | null;
+	/** Hello answered, even when the node has not published a name. */
+	lightning: boolean;
 	meshSubnet: string | null;
 	meshBackhaul: string | null;
 	houseUla: string | null;
@@ -123,7 +125,7 @@ export function groupResources(rows: LinkLocalNeighbor[]): Resource[] {
 		const local = sorted.every((row) => row.kind === 'local');
 		const macs = new Set(sorted.map((row) => row.mac?.toLowerCase()).filter((m): m is string => Boolean(m)));
 		const hostname = sorted.find((row) => hostOf(row))?.hostname ?? null;
-		const mesh = sorted.find((row) => row.mesh_name?.trim());
+		const mesh = sorted.find((row) => row.mesh_name?.trim() || row.mesh_node_id?.trim() || row.lightning);
 		const iroh = sorted.find((row) => row.iroh?.trim())?.iroh ?? null;
 		const router = sorted.some((row) => row.router);
 		const joinedByMac = macs.size === 1 && sorted.length > 1 && !iroh && !hostname;
@@ -144,8 +146,9 @@ export function groupResources(rows: LinkLocalNeighbor[]): Resource[] {
 			mac: macs.size === 1 ? sorted.find((row) => row.mac)?.mac ?? null : null,
 			iroh,
 			hostname,
-			meshName: mesh?.mesh_name ?? null,
-			meshNodeId: mesh?.mesh_node_id ?? null,
+			meshName: mesh?.mesh_name?.trim() || null,
+			meshNodeId: mesh?.mesh_node_id?.trim() || null,
+			lightning: sorted.some((row) => row.lightning) || Boolean(mesh?.mesh_name?.trim() || mesh?.mesh_node_id?.trim()),
 			meshSubnet: mesh?.mesh_subnet ?? null,
 			meshBackhaul: mesh?.mesh_backhaul ?? null,
 			houseUla: sorted.find((row) => row.house_ula)?.house_ula ?? null,
@@ -173,4 +176,16 @@ export function resourceLabel(resource: Resource): string {
 /** Address to read and copy: house reference, then the transport pin. */
 export function resourceAddress(resource: Resource): string {
 	return resource.houseUla ?? resource.meshBackhaul ?? resource.primary.address;
+}
+
+export function formatVia(vias: string[]): string {
+	const unique: string[] = [];
+	for (const via of vias) {
+		const name = via.trim();
+		if (!name || unique.includes(name)) continue;
+		unique.push(name);
+	}
+	if (unique.length === 0) return '';
+	if (unique.length === 1) return unique[0];
+	return `${unique[0]} +${unique.length - 1}`;
 }

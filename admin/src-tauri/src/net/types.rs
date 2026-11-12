@@ -37,6 +37,10 @@ pub struct LinkLocalNeighbor {
     pub router: bool,
     /// mDNS hostname (`edgebox.local`), when Avahi resolved this address.
     pub hostname: Option<String>,
+    /// `GET /api/node` answered as Mjolnir hello, even when the node has not
+    /// published a name yet (`{}`).
+    #[serde(default)]
+    pub lightning: bool,
     /// `name` from `GET /api/node` when this address is a Lightning node.
     pub mesh_name: Option<String>,
     pub mesh_node_id: Option<String>,
@@ -98,6 +102,7 @@ impl LinkLocalNeighbor {
             source: source.into(),
             router: false,
             hostname: None,
+            lightning: false,
             mesh_name: None,
             mesh_node_id: None,
             mesh_subnet: None,

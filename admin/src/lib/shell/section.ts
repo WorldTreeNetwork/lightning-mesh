@@ -1,4 +1,4 @@
-export type SectionId = 'home' | 'backhaul' | 'guild' | 'map' | 'nearby' | 'services' | 'you';
+export type SectionId = 'home' | 'backhaul' | 'guild' | 'map' | 'network' | 'services' | 'you';
 
 /** Which section bar row is current, including pages that are not sections. */
 export function sectionFor(pathname: string): SectionId {
@@ -12,7 +12,14 @@ export function sectionFor(pathname: string): SectionId {
 		return 'guild';
 	}
 	if (pathname === '/map' || pathname.startsWith('/map/')) return 'map';
-	if (pathname === '/nearby' || pathname.startsWith('/nearby/')) return 'nearby';
+	if (
+		pathname === '/network' ||
+		pathname.startsWith('/network/') ||
+		pathname === '/nearby' ||
+		pathname.startsWith('/nearby/')
+	) {
+		return 'network';
+	}
 	if (pathname === '/services' || pathname.startsWith('/services/')) return 'services';
 	if (
 		pathname === '/you' ||

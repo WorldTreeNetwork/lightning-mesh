@@ -16,6 +16,7 @@ pub mod permit;
 use canvas::{close_canvas, list_canvases, open_canvas};
 use commands::claim::{claim_owner_key, claim_prove, claim_request};
 use commands::discovery::scan_link_local;
+use commands::lan::fetch_lan_json;
 use commands::guild::{guild_admit, guild_assign, guild_rename, guild_snapshot, sign_guild_op};
 use commands::network_name::apply_network_name;
 use commands::provision::{provision_node_health, provision_stock_node};
@@ -37,7 +38,7 @@ pub fn run() {
     init_logging();
     tracing::info!(target: "startup", "lightning-admin starting");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(canvas::CanvasState::new())
         .setup(|app| {
             canvas::open_if_env(app.handle());
@@ -51,9 +52,20 @@ pub fn run() {
                 _ => {}
             }
         })
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    // Debug builds only. The socket stays on localhost. Release binaries do not start it.
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build(),
+    );
+
+    builder
         .invoke_handler(tauri::generate_handler![
             scan_link_local,
+            fetch_lan_json,
             apply_network_name,
             provision_stock_node,
             provision_node_health,
