@@ -43,8 +43,9 @@ and `wvg.4` stayed open. This change closes it.
    install the peers' reports in hostapd, with 802.11v BSS transition on.
 4. **Prompt proxy ARP.** `proxy_delay=0` on the client bridge.
 
-Not in this change: a shared gateway MAC (see design.md, bead filed). That
-needs a decision on shared copper before it touches a live bridge.
+5. **One gateway MAC.** Every client bridge answers on the same MAC, so a
+   phone's gateway check passes on any node (added 2026-11-13 on Duke's
+   go-ahead; shared copper is covered by the existing merged-L2 detector).
 
 ## Impact
 

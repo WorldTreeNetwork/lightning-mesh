@@ -22,6 +22,16 @@ use ipnet::Ipv4Net;
 /// blackhole). Delete host routes by destination instead.
 pub const MOBILITY_ROUTE_PROTO: u8 = 158;
 
+/// MAC every node's client bridge answers on (locally administered, unicast).
+///
+/// A phone checks its gateway after a hop by unicast ARP to the gateway's
+/// *remembered* MAC (RFC 4436). With one MAC mesh-wide that check passes on
+/// any node and the phone skips DHCP. Safe because client L2 is per node: the
+/// MAC never appears twice in one broadcast domain unless two nodes' LAN
+/// ports are cabled together, and that case already detaches copper
+/// (`heal::foreign_gateway_on_bridge`).
+pub const GATEWAY_MAC: &str = "02:4c:6d:65:73:68";
+
 /// One IPv4 neighbour on the client bridge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Neighbour {

@@ -6865,6 +6865,9 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
     // Sol consult: do not nomaster on a single neigh glimpse (stale/spoof).
     // Two consecutive live foreign `.1`s (~6s) before detaching copper.
     let mut merge_ticks: u8 = 0;
+    // The bridge's MAC before the shared gateway MAC went on, to put back if
+    // the client L2 turns out to be merged with another node's.
+    let mut hardware_mac: Option<String> = None;
     loop {
         interval.tick().await;
         enable_ip_forwarding();
@@ -6900,10 +6903,19 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
                 // address; the phone then drops the lease (spinner, no IP).
                 let path = format!("/proc/sys/net/ipv4/conf/{client_iface}/proxy_arp");
                 let _ = ensure_sysctl_value(&path, "0");
+                // Two bridges on one segment must not share a MAC.
+                if let Some(mac) = hardware_mac.as_deref() {
+                    ensure_bridge_mac(&client_iface, mac).await;
+                }
             }
         } else {
             merge_ticks = 0;
             enable_roam_sysctls(&client_iface);
+            if let Some(was) =
+                ensure_bridge_mac(&client_iface, mjolnir_mesh::roam::GATEWAY_MAC).await
+            {
+                hardware_mac.get_or_insert(was);
+            }
         }
         if mjolnir_mesh::heal::iface_has_ipv4(&addr_show, mjolnir_mesh::heal::STOCK_LAN_ALIAS) {
             strip_stock_lan_alias(&client_iface).await;
@@ -6912,6 +6924,43 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
             assign_client_addr(net, &client_iface).await;
         } else {
             ensure_client_connected_route(net, &client_iface).await;
+        }
+    }
+}
+
+/// Set the client bridge's MAC if it differs. Returns the MAC it replaced.
+///
+/// Runtime only (`ip link`), so no netifd reload and no client drop: the
+/// bridge keeps accepting frames for its ports' own MACs, so a client with
+/// the old gateway MAC cached keeps working until it next ARPs.
+#[cfg(target_os = "linux")]
+async fn ensure_bridge_mac(client_iface: &str, want: &str) -> Option<String> {
+    let path = format!("/sys/class/net/{client_iface}/address");
+    let current = std::fs::read_to_string(&path).ok()?.trim().to_ascii_lowercase();
+    if current == want {
+        return None;
+    }
+    match tokio::process::Command::new("ip")
+        .args(["link", "set", "dev", client_iface, "address", want])
+        .output()
+        .await
+    {
+        Ok(o) if o.status.success() => {
+            info!(iface = client_iface, mac = want, was = %current, "client bridge MAC set");
+            Some(current)
+        }
+        Ok(o) => {
+            warn!(
+                iface = client_iface,
+                mac = want,
+                "could not set client bridge MAC: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            None
+        }
+        Err(e) => {
+            warn!(iface = client_iface, "could not set client bridge MAC: {e}");
+            None
         }
     }
 }

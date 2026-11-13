@@ -108,3 +108,29 @@ A node SHALL set `proxy_delay` to `0` on the client bridge.
 - GIVEN a roamed phone ARPs for its home gateway
 - WHEN the request reaches the node it is on
 - THEN the node replies without the kernel's proxy delay
+
+### Requirement: Every client bridge answers on one gateway MAC
+
+A node SHALL set its client bridge's MAC to the fleet gateway MAC
+`02:4c:6d:65:73:68`, at runtime, without reloading the network. It SHALL
+re-assert it if something resets it. A node that detects another node's
+gateway on its own client segment SHALL put its hardware MAC back.
+
+#### Scenario: Gateway check passes after a hop
+
+- GIVEN a phone leased on node-a has the gateway MAC cached
+- WHEN it associates to node-b and sends a unicast ARP for its gateway to
+  that MAC
+- THEN node-b replies from the same MAC
+
+#### Scenario: Existing clients keep their gateway
+
+- GIVEN a client that cached the bridge's hardware MAC as its gateway
+- WHEN the node sets the gateway MAC
+- THEN that client's traffic to the gateway still flows
+
+#### Scenario: Merged copper
+
+- GIVEN two nodes' LAN ports are cabled to one switch
+- WHEN a node sees the other's gateway address on its client bridge
+- THEN it restores its hardware MAC

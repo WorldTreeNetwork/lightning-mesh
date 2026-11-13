@@ -86,21 +86,29 @@ AP sooner. It does not steer or kick clients; no `usteer`/`dawn`.
 Works on an open SSID. 802.11r stays off there: there is no key handshake to
 shorten.
 
-## Decision deferred: shared gateway MAC
+## Shared gateway MAC
 
 Phones check their gateway after a hop by unicast ARP to the gateway's
 *remembered MAC* (RFC 4436; iOS does this). On a new node that MAC is absent,
-the check fails, and the phone falls back to DHCP plus a fresh ARP: about a
-second with this change, instead of a renumber.
+the check fails, and the phone falls back to DHCP plus a fresh ARP.
 
-Making it zero needs every node to answer on the same gateway MAC. The same
-gateway *IP* is not needed, because proxy ARP already answers for every
-`10.42.x.1`. This is the standard anycast-gateway technique (VRRP virtual
-MAC, EVPN distributed gateway). It is not confusing on Wi-Fi: client L2 is
-per node, so the MAC never appears twice in one broadcast domain.
+Every node therefore sets its client bridge to one MAC,
+`02:4c:6d:65:73:68` (locally administered, a constant: nothing to converge).
+The same gateway *IP* is not needed, because proxy ARP already answers for
+every `10.42.x.1`, and it now answers from the same MAC everywhere. This is
+the anycast-gateway technique (VRRP virtual MAC, EVPN distributed gateway).
+Client L2 is per node, so the MAC never appears twice in one broadcast
+domain.
 
-It is deferred because `br-lan` also holds the wired LAN ports. Two nodes
-cabled to one switch would put the same MAC on one segment. That is the
-failure the fleet-identical `192.168.1.1` alias already caused (AP3000,
-2026-09-15). It needs either a Wi-Fi-only scope or a shared-copper detector
-first. Tracked as a bead under `wvg`.
+It is set with `ip link`, not UCI: no netifd reload. The bridge still accepts
+frames for its ports' own MACs, so a client holding the old gateway MAC is
+not cut off. The client-dataplane loop re-asserts it every 3 s.
+
+Shared copper (two nodes' LAN ports on one switch) is the one place the MAC
+would collide. That case is already detected by
+`heal::foreign_gateway_on_bridge`, which detaches the copper ports and turns
+proxy ARP off. The same branch now restores the hardware MAC.
+
+Side effect: the kernel adds a second IPv6 link-local derived from the new
+MAC, identical on every node. The hardware-derived link-local stays, so
+recorded recovery addresses still work.

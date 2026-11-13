@@ -17,15 +17,20 @@
 - [x] Appended `GossipMessage` variant; old-node decode-skip covered
 - [x] meshd: publish own reports, install peers', re-assert on a loop
 
+## Shared gateway MAC
+
+- [x] `roam::GATEWAY_MAC`; client-dataplane loop asserts it, restores the
+      hardware MAC on merged copper
+
 ## Gates
 
 - [x] `cargo test -p mjolnir-mesh --features daemon`, `cargo build --workspace`
       (clippy: no errors; existing warnings elsewhere left alone)
 - [ ] Sim `e2e/run.sh dhcp-crdt` green
-- [ ] Fleet rollout through `update-fleet.sh`
+- [x] Fleet rollout through `update-fleet.sh` (2026-11-13: tr3000,
+      wr3000s-bench, ap3000-outdoor-b)
 - [ ] Metal walk with a phone on a call (`0pv`, `wvg.4`)
 
 ## Handoffs
 
-- Shared gateway MAC: bead under `wvg`, needs the shared-copper decision.
 - Channel plan: both indoor client APs share 2.4 GHz channel 6.
