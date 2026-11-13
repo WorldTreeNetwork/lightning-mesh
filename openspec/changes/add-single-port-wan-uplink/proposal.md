@@ -31,10 +31,14 @@ The ceiling AP3000 has `eth0` as WAN only because its board default differs.
 2. **Install and apply enforce it.** A single-port node found with that port
    on the client bridge is converted in one network-change transaction with
    the usual health gate and rollback.
-3. **Foreign upstream on a client bridge is detected.** A node that sees a
-   DHCP server or router that is not a mesh node on its client bridge detaches
-   the wired ports from that bridge and says so. Today
-   `heal::foreign_gateway_on_bridge` only knows mesh gateways.
+3. **Foreign upstream on a client port is isolated, per port and visibly.**
+   A node that sees a DHCP server or router that is not a mesh node behind a
+   wired client port detaches that one port. Wi-Fi, mesh, WAN and the other
+   ports are untouched. hello.mesh names the port and the server. The port
+   rejoins when the cable is pulled or the server is gone for 60 s. An owner
+   can exempt a port. Today `heal::foreign_gateway_on_bridge` only knows
+   mesh gateways, detaches every copper port, and says nothing outside the
+   log.
 4. **Every wired node is a gateway.** Each node with a live WAN exports the
    default route (`gateway=auto`, already built). Nodes without one use the
    nearest.
