@@ -199,9 +199,11 @@ pub fn parse_lease_file(text: &str) -> Vec<LeaseFileEntry> {
 ///
 /// An entry is fresh when its MAC was not in `prev`, or its address changed,
 /// or its expiry advanced (a renewal). On the first poll after start `prev` is
-/// empty and every line looks new, so an entry the book already holds at the
-/// same address is held back: re-stamping it would make an old lease here
-/// look newer than a later ACK on another node.
+/// empty and every line looks new, so the book decides instead: a line is
+/// published only if the book lacks the MAC or the line expires later than the
+/// book's entry. Lease times are equal fleet-wide, so a later expiry is a later
+/// ACK. That keeps a stale row here from overriding a newer ACK on another
+/// node, and still picks up a renewal dnsmasq granted while meshd was down.
 pub fn fresh_acks(
     prev: &LeasePoll,
     current: &[LeaseFileEntry],
@@ -212,15 +214,13 @@ pub fn fresh_acks(
         .iter()
         .filter(|e| {
             let key = mac_key(&e.mac);
-            let fresh = match prev.get(&key) {
+            if first_poll {
+                return book.get(&key).is_none_or(|held| e.expiry > held.expiry);
+            }
+            match prev.get(&key) {
                 None => true,
                 Some((ip, expiry)) => *ip != e.ip || e.expiry > *expiry,
-            };
-            let already_booked = first_poll
-                && book
-                    .get(&key)
-                    .is_some_and(|held| held.ip == IpAddr::V4(e.ip));
-            fresh && !already_booked
+            }
         })
         .cloned()
         .collect()
@@ -366,6 +366,40 @@ mod tests {
     }
 
     #[test]
+    fn first_poll_keeps_a_newer_ack_from_another_node() {
+        // Our file still holds m at .61.106 until 1000; node b ACKed m at
+        // .242.50 later (expiry 2000). A restart must not bring .61.106 back.
+        let mac = [0xaa, 0, 0, 0, 0, 1];
+        let mut book = LeaseBook::new();
+        let mut held = lease(mac, "10.42.242.50", "b", 5);
+        held.expiry = 2000;
+        apply_lease(&mut book, held);
+        let file = [LeaseFileEntry {
+            mac,
+            ip: "10.42.61.106".parse().unwrap(),
+            hostname: None,
+            expiry: 1000,
+        }];
+        assert!(fresh_acks(&LeasePoll::new(), &file, &book, true).is_empty());
+    }
+
+    #[test]
+    fn first_poll_publishes_a_renewal_granted_while_down() {
+        let mac = [0xaa, 0, 0, 0, 0, 1];
+        let mut book = LeaseBook::new();
+        let mut held = lease(mac, "10.42.61.106", "a", 5);
+        held.expiry = 1000;
+        apply_lease(&mut book, held);
+        let file = [LeaseFileEntry {
+            mac,
+            ip: "10.42.61.106".parse().unwrap(),
+            hostname: None,
+            expiry: 1000 + 43_200,
+        }];
+        assert_eq!(fresh_acks(&LeasePoll::new(), &file, &book, true).len(), 1);
+    }
+
+    #[test]
     fn hostsfile_lists_every_mesh_guest_lease() {
         let mut book = LeaseBook::new();
         apply_lease(&mut book, lease([0xde, 0x45, 0x53, 0xf5, 0xf7, 0x74], "10.42.203.146", "c", 1));
@@ -501,15 +535,18 @@ not a lease line
     fn restart_does_not_restamp_a_lease_the_book_already_holds() {
         // Book: node-b wrote this MAC at this address after we first leased it.
         let mut book = LeaseBook::new();
-        apply_lease(&mut book, lease([0xaa, 0, 0, 0, 0, 1], "10.42.61.106", "node-b", 500));
-        apply_lease(&mut book, lease([0xaa, 0, 0, 0, 0, 2], "10.42.203.9", "node-b", 500));
+        for (mac, ip) in [(1, "10.42.61.106"), (2, "10.42.203.9")] {
+            let mut held = lease([0xaa, 0, 0, 0, 0, mac], ip, "node-b", 500);
+            held.expiry = 1000;
+            apply_lease(&mut book, held);
+        }
         let same = file_entry(1, "10.42.61.106", 1000);
-        // Same MAC, but our file holds a different address than the book.
-        let differs = file_entry(2, "10.42.61.107", 1000);
+        // Same MAC, an older row here than the book's ACK elsewhere.
+        let differs = file_entry(2, "10.42.61.107", 900);
         let unknown = file_entry(3, "10.42.61.108", 1000);
         let current = [same.clone(), differs.clone(), unknown.clone()];
         let first = fresh_acks(&LeasePoll::new(), &current, &book, true);
-        assert_eq!(first, vec![differs, unknown]);
+        assert_eq!(first, vec![unknown]);
         // Past the first poll the same line is an ordinary new MAC...
         assert_eq!(fresh_acks(&LeasePoll::new(), &current, &book, false).len(), 3);
         // ...and a renewal after the restart is published as usual.

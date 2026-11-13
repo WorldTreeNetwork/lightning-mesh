@@ -6903,7 +6903,12 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
                 // address; the phone then drops the lease (spinner, no IP).
                 let path = format!("/proc/sys/net/ipv4/conf/{client_iface}/proxy_arp");
                 let _ = ensure_sysctl_value(&path, "0");
-                // Two bridges on one segment must not share a MAC.
+                // Two bridges on one segment must not share a MAC. After a
+                // restart the bridge already carried the shared MAC, so the
+                // hardware one comes from a port instead.
+                if hardware_mac.is_none() {
+                    hardware_mac = bridge_port_mac(&client_iface);
+                }
                 if let Some(mac) = hardware_mac.as_deref() {
                     ensure_bridge_mac(&client_iface, mac).await;
                 }
@@ -6928,11 +6933,26 @@ async fn reconcile_client_dataplane(store: ClaimStore, self_id: String, client_i
     }
 }
 
+/// A hardware MAC for the bridge: the lowest of its ports' addresses.
+#[cfg(target_os = "linux")]
+fn bridge_port_mac(client_iface: &str) -> Option<String> {
+    let ports = std::fs::read_dir(format!("/sys/class/net/{client_iface}/brif")).ok()?;
+    ports
+        .flatten()
+        .filter_map(|p| {
+            let name = p.file_name();
+            let path = format!("/sys/class/net/{}/address", name.to_string_lossy());
+            Some(std::fs::read_to_string(path).ok()?.trim().to_ascii_lowercase())
+        })
+        .filter(|mac| mac != mjolnir_mesh::roam::GATEWAY_MAC)
+        .min()
+}
+
 /// Set the client bridge's MAC if it differs. Returns the MAC it replaced.
 ///
-/// Runtime only (`ip link`), so no netifd reload and no client drop: the
-/// bridge keeps accepting frames for its ports' own MACs, so a client with
-/// the old gateway MAC cached keeps working until it next ARPs.
+/// Runtime only (`ip link`), so no netifd reload. A client that cached the
+/// old gateway MAC keeps working only where it arrives on a port that owns
+/// that MAC; elsewhere it stalls until it next ARPs for its gateway.
 #[cfg(target_os = "linux")]
 async fn ensure_bridge_mac(client_iface: &str, want: &str) -> Option<String> {
     let path = format!("/sys/class/net/{client_iface}/address");

@@ -43,8 +43,8 @@ elected to serve DHCP for another.
 A node SHALL publish a lease to the mesh lease book when dnsmasq's lease file
 gains an entry in `10.42.0.0/16`, or when an existing entry's expiry
 advances. It SHALL NOT depend on a dnsmasq hook script. On its first read
-after start it SHALL NOT re-stamp an entry the book already holds with the
-same address.
+after start it SHALL publish an entry only if the book lacks that MAC or the
+entry expires later than the book's.
 
 #### Scenario: A fresh lease is gossiped
 
@@ -53,12 +53,19 @@ same address.
 - THEN node-a's lease book holds that MAC and address
 - AND node-b's hosts file lists that MAC and address after gossip delivery
 
-#### Scenario: Restart does not reorder leases
+#### Scenario: Restart does not bring back an older lease
 
-- GIVEN node-a's lease file and lease book both hold MAC `m` at address `p`
-- AND the book's entry was last written by node-b
+- GIVEN node-a's lease file holds MAC `m` at address `p`
+- AND the book holds `m` at address `q` from a later ACK on node-b
 - WHEN meshd on node-a restarts
-- THEN the book entry for `m` is unchanged
+- THEN the book entry for `m` is still `q`
+
+#### Scenario: A renewal granted while meshd was down is kept
+
+- GIVEN the book holds `m` at `p` expiring at T
+- AND dnsmasq renewed that lease past T while meshd was stopped
+- WHEN meshd starts
+- THEN the book entry for `m` expires at the renewed time
 
 #### Scenario: The jail does not stop ingest
 
@@ -122,12 +129,6 @@ gateway on its own client segment SHALL put its hardware MAC back.
 - WHEN it associates to node-b and sends a unicast ARP for its gateway to
   that MAC
 - THEN node-b replies from the same MAC
-
-#### Scenario: Existing clients keep their gateway
-
-- GIVEN a client that cached the bridge's hardware MAC as its gateway
-- WHEN the node sets the gateway MAC
-- THEN that client's traffic to the gateway still flows
 
 #### Scenario: Merged copper
 

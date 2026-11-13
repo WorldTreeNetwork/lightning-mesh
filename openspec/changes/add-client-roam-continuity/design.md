@@ -100,15 +100,25 @@ the anycast-gateway technique (VRRP virtual MAC, EVPN distributed gateway).
 Client L2 is per node, so the MAC never appears twice in one broadcast
 domain.
 
-It is set with `ip link`, not UCI: no netifd reload. The bridge still accepts
-frames for its ports' own MACs, so a client holding the old gateway MAC is
-not cut off. The client-dataplane loop re-asserts it every 3 s.
+It is set with `ip link`, not UCI: no netifd reload. The client-dataplane
+loop re-asserts it every 3 s.
 
-Shared copper (two nodes' LAN ports on one switch) is the one place the MAC
-would collide. That case is already detected by
-`heal::foreign_gateway_on_bridge`, which detaches the copper ports and turns
-proxy ARP off. The same branch now restores the hardware MAC.
+A client that cached the bridge's old MAC is not guaranteed to keep working.
+The bridge keeps a local entry for each port's own MAC, but a frame for a
+MAC owned by a *different* port than it arrived on is marked other-host and
+IPv4 drops it. Where the AP port owns the old MAC (wr3000s-bench: every port
+shares one) nothing breaks; elsewhere the client stalls until it re-ARPs.
+This happens once, when the MAC first goes on, and after a reboot for
+clients that associated before meshd started. A gratuitous ARP would close
+it; the nodes have no `arping`. Sol review, 2026-11-13.
 
-Side effect: the kernel adds a second IPv6 link-local derived from the new
-MAC, identical on every node. The hardware-derived link-local stays, so
-recorded recovery addresses still work.
+Shared copper (two nodes' LAN ports on one switch) is where the MAC would
+collide. `heal::foreign_gateway_on_bridge` detaches the copper ports, turns
+proxy ARP off, and now restores a hardware MAC (taken from a bridge port, so
+it survives a meshd restart). That detector is passive: it needs a neighbour
+entry for the other node's gateway, and nothing guarantees one. Until an
+active check exists, a cabled pair can share the MAC undetected. Tracked as
+a bead.
+
+The kernel does not add a link-local for the new MAC on a MAC-only change,
+so recorded IPv6 recovery addresses are unaffected.
