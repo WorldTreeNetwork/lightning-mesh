@@ -45,6 +45,7 @@ pub mod led;
 pub mod owner_claim;
 pub mod radio;
 pub mod roam;
+pub mod roam_assist;
 pub mod roster;
 pub mod tun;
 
@@ -62,8 +63,9 @@ pub use crdt::{
     gossip::GossipMessage,
     hlc::{HLC, HlcClock, observe_hlc, tick_hlc},
     lease::{
-        LeaseBook, LeaseEntry, apply_lease, gateway_v4, mac_key, merge_lease, parse_mac,
-        reap_expired, render_hostsfile, render_roam_conf,
+        LeaseBook, LeaseEntry, LeaseFileEntry, LeasePoll, apply_lease, fresh_acks, gateway_v4,
+        mac_key, merge_lease, parse_lease_file, parse_mac, reap_expired, render_hostsfile,
+        render_roam_static_conf,
     },
     leased_name::{LEASE_TTL_MS, LeasedName, LeasedNameBook, apply_leased_name, name_owned_by},
     liveness::{LivenessTracker, monotonic_now_ms},
@@ -71,6 +73,10 @@ pub use crdt::{
         MergeResult, ReservedServiceName, apply_coordinate, merge_coordinate, merge_node_name,
         merge_peer_addr, merge_service, merge_service_v2, merge_subnet_claim, merge_user,
         resolve_subnet_conflict,
+    },
+    neighbour_report::{
+        NeighbourReportBook, NeighbourReportEntry, apply_neighbour_report, bssid_key,
+        merge_neighbour_report, parse_bssid, reap_expired_neighbour_reports,
     },
     node_name::{NodeNameBook, NodeNameEntry},
     peer_addr::{AddrBook, PeerAddrEntry},

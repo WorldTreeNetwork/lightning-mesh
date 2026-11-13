@@ -45,15 +45,16 @@ use mjolnir_mesh::tun::{
 };
 use mjolnir_mesh::{
     AddrBook, AppMarker, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport,
-    HLC, LeaseBook, LeaseEntry, LeasedName, LeasedNameBook, LivenessTracker, LostNameMap,
+    HLC, LeaseBook, LeaseEntry, LeasePoll, LeasedName, LeasedNameBook, LivenessTracker, LostNameMap,
     MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome,
     ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError,
     ServiceTombstone, ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry,
-    alloc, apply_coordinate, apply_lease, apply_leased_name,
+    alloc, apply_coordinate, apply_lease, apply_leased_name, fresh_acks, parse_lease_file,
+    render_hostsfile, render_roam_static_conf,
     apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
     merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, name_owned_by,
-    observe_hlc, parse_host_mac, parse_mac, project_coordinate, publish_service_v2,
-    publish_txt_with_marker, reap_expired, render_roam_conf, tick_hlc, validate_app_marker,
+    observe_hlc, parse_host_mac, project_coordinate, publish_service_v2,
+    publish_txt_with_marker, reap_expired, tick_hlc, validate_app_marker,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -922,6 +923,12 @@ async fn run_mesh(
     }
     let lease_book: Arc<Mutex<LeaseBook>> = Arc::new(Mutex::new(restored_leases));
 
+    // Roam assistance: BSSID → 802.11k neighbour report of every client AP in
+    // the mesh. In memory only — owners refresh their entries every
+    // `ROAM_ASSIST_INTERVAL`, so a restart relearns the book within one tick.
+    let neighbour_reports: Arc<Mutex<mjolnir_mesh::NeighbourReportBook>> =
+        Arc::new(Mutex::new(mjolnir_mesh::NeighbourReportBook::new()));
+
     // User directory (mjolnir-mesh-2xd / p6u): username → user identity record,
     // the first hello.mesh front-desk record type. Same persistence pattern as
     // the address book — a sibling `users.state`, tolerant load, tmp+rename
@@ -1116,6 +1123,7 @@ async fn run_mesh(
                     let leased_names = leased_names.clone();
                     let leased_names_persist_path = leased_names_file.clone();
                     let liveness = liveness.clone();
+                    let neighbour_reports = neighbour_reports.clone();
                     tasks.spawn(async move {
                         let result = sync
                         .run(move |msg| {
@@ -1160,6 +1168,32 @@ async fn run_mesh(
                                         leases.lock().expect("lease book poisoned").clone();
                                     persist_lease_book(&snapshot, &leases_path);
                                     info!(count = snapshot.len(), "gossip: DHCP lease book updated");
+                                }
+                                return;
+                            }
+                            // Roam assistance: a peer's client-AP neighbour
+                            // report. Held in memory for `roam_assist_loop` to
+                            // install in hostapd; own echoes and stale (LWW)
+                            // refreshes are dropped by the helper.
+                            if let GossipMessage::NeighbourReportUpdate(entry) = &msg {
+                                observe_hlc(&entry.hlc);
+                                let now_secs = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+                                let result = {
+                                    let mut b = neighbour_reports
+                                        .lock()
+                                        .expect("neighbour report book poisoned");
+                                    apply_neighbour_report_message(&mut b, &msg, &me, now_secs)
+                                };
+                                if result == MergeResult::Inserted {
+                                    info!(
+                                        bssid = %mjolnir_mesh::bssid_key(&entry.bssid),
+                                        ssid = %entry.ssid,
+                                        node = %entry.node_id,
+                                        "roam assist: learned a peer client AP"
+                                    );
                                 }
                                 return;
                             }
@@ -1513,17 +1547,30 @@ async fn run_mesh(
                     client_iface.clone(),
                 ));
 
-                // CRDT DHCP roam (wvg.4): ingest dnsmasq spool, gossip MAC→IP
-                // LWW, project one dnsmasq conf so a foreign AP OFFERs the
-                // latest ACK.
+                // Roam assistance: gossip this node's 802.11k neighbour reports
+                // and install the peers' in hostapd, with 802.11v BSS transition
+                // on, so a phone learns where the next mesh AP is before it
+                // needs it. Advice only — never steers or kicks a client.
+                tasks.spawn(roam_assist_loop(
+                    sync.clone(),
+                    neighbour_reports.clone(),
+                    self_id_str.clone(),
+                ));
+
+                // CRDT DHCP roam (wvg.4): ingest dnsmasq's lease file, gossip
+                // MAC→IP LWW, project the book into dnsmasq so a foreign AP
+                // confirms the latest ACK. Needs the claim store (which /24
+                // is ours) and the client interface, like `roam_loop`.
                 {
                     let sync = sync.clone();
                     let leases = lease_book.clone();
                     let leases_path = lease_book_file.clone();
                     let me = self_id_str.clone();
-                    tasks.spawn(
-                        async move { dhcp_roam_loop(sync, leases, leases_path, me).await },
-                    );
+                    let claims = claims.clone();
+                    let iface = client_iface.clone();
+                    tasks.spawn(async move {
+                        dhcp_roam_loop(sync, leases, leases_path, me, claims, iface).await
+                    });
                 }
 
                 // Control API (S3.1, bead e21.2.5): needs `sync` for the immediate
@@ -3685,19 +3732,50 @@ async fn radio_telemetry_loop(directory_file: PathBuf, backhaul_ip: Ipv4Addr) {
 // (mjolnir-mesh-sz9; parsers and guest-route selection live in `roam.rs`)
 
 const DHCP_ROAM_INTERVAL: Duration = Duration::from_secs(2);
-const DHCP_EVENT_SPOOL: &str = "/tmp/mjolnir/dhcp-events";
-const DHCP_SCRIPT: &str = "/usr/libexec/mjolnir-dhcp-event";
+/// Where OpenWrt's dnsmasq keeps leases unless its generated config says
+/// otherwise (`dhcp-leasefile=`).
+const DHCP_LEASE_FILE: &str = "/tmp/dhcp.leases";
 const DHCP_ROAM_CONF_NAME: &str = "mjolnir-roam.conf";
+/// Leading dot: dnsmasq's `conf-dir` skips it as config, and `conf-dir` is
+/// already mounted into the dnsmasq jail, so SIGHUP can re-read it there.
+const DHCP_ROAM_HOSTS_NAME: &str = ".mjolnir-roam.hosts";
+/// UCI values earlier builds set and this one clears. The hook never worked
+/// under the jail; leases are read from the lease file instead.
+const DHCP_STALE_SCRIPT: &str = "/usr/libexec/mjolnir-dhcp-event";
+const DHCP_STALE_HOSTSFILE: &str = "/tmp/mjolnir/reservations";
 
-/// Ingest dnsmasq spool + gossip MAC→IP (LWW) + one dnsmasq conf-dir file.
+/// What the lease-file poll remembers between ticks.
+struct LeaseFileWatch {
+    seen: LeasePoll,
+    /// No successful read yet since start (see [`fresh_acks`]).
+    first_poll: bool,
+}
+
+/// What the dnsmasq projection still owes after a failed attempt.
+#[derive(Default)]
+struct RoamProjection {
+    restart_pending: bool,
+    hup_pending: bool,
+    /// Static config `dnsmasq --test` refused; not retried until it changes.
+    rejected: Option<String>,
+}
+
+/// Ingest dnsmasq's lease file + gossip MAC→IP (LWW) + project the lease book
+/// into dnsmasq so this node confirms addresses other nodes vended.
 async fn dhcp_roam_loop<T: GossipTransport>(
     sync: Arc<GossipSync<T>>,
     lease_book: Arc<Mutex<LeaseBook>>,
     lease_book_file: PathBuf,
     self_id: String,
+    store: ClaimStore,
+    client_iface: String,
 ) {
     reconcile_dhcp_roam_uci().await;
-    let mut last_conf = String::new();
+    let mut watch = LeaseFileWatch {
+        seen: LeasePoll::new(),
+        first_poll: true,
+    };
+    let mut projection = RoamProjection::default();
     let mut ticks: u8 = 0;
     let mut ticker = tokio::time::interval(DHCP_ROAM_INTERVAL);
     loop {
@@ -3706,7 +3784,13 @@ async fn dhcp_roam_loop<T: GossipTransport>(
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let ingested = ingest_dhcp_event_spool(&lease_book, &self_id);
+        let dnsmasq = live_dnsmasq();
+        let lease_file = dnsmasq
+            .as_ref()
+            .and_then(|d| d.lease_file.clone())
+            .unwrap_or_else(|| PathBuf::from(DHCP_LEASE_FILE));
+        let ingested =
+            ingest_dhcp_lease_file(&lease_file, &lease_book, &self_id, &mut watch, now_secs);
         for entry in &ingested {
             if let Err(e) = sync
                 .publish(GossipMessage::LeaseUpdate(entry.clone()))
@@ -3750,119 +3834,226 @@ async fn dhcp_roam_loop<T: GossipTransport>(
         if !ingested.is_empty() || !reaped.is_empty() {
             persist_lease_book(&snapshot, &lease_book_file);
         }
-        let conf = render_roam_conf(&snapshot);
-        if conf != last_conf {
-            project_dhcp_roam_conf(&conf);
-            last_conf = conf;
+        // Until this node owns a subnet there is no telling which /24s are
+        // foreign, so nothing is written.
+        let own_subnet = {
+            let s = store.lock().expect("claim store poisoned");
+            partition_claims(&s, &self_id).0.map(|(net, _)| net)
+        };
+        if let (Some(own_subnet), Some(dnsmasq)) = (own_subnet, dnsmasq) {
+            project_dhcp_roam(
+                &snapshot,
+                &own_subnet,
+                &client_iface,
+                &dnsmasq,
+                &mut projection,
+            )
+            .await;
         }
     }
 }
 
-fn ingest_dhcp_event_spool(lease_book: &Arc<Mutex<LeaseBook>>, self_id: &str) -> Vec<LeaseEntry> {
-    let dir = Path::new(DHCP_EVENT_SPOOL);
-    let rd = match std::fs::read_dir(dir) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
+/// Publish-worthy changes in dnsmasq's lease file since the last tick, applied
+/// to the lease book and stamped with a fresh HLC. An unreadable file (dnsmasq
+/// not up yet) is no poll at all, so the first-poll rule still covers the read
+/// that follows.
+fn ingest_dhcp_lease_file(
+    lease_file: &Path,
+    lease_book: &Arc<Mutex<LeaseBook>>,
+    self_id: &str,
+    watch: &mut LeaseFileWatch,
+    now_secs: u64,
+) -> Vec<LeaseEntry> {
+    let Ok(text) = std::fs::read_to_string(lease_file) else {
+        return Vec::new();
     };
+    // A line dnsmasq has not pruned yet would be inserted, reaped and released
+    // on every tick; an expired lease is not an ACK.
+    let current: Vec<_> = parse_lease_file(&text)
+        .into_iter()
+        .filter(|e| e.expiry > now_secs)
+        .collect();
     let mut applied = Vec::new();
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    for ent in rd.flatten() {
-        let path = ent.path();
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let mut parts = text.split_whitespace();
-        let Some(_action) = parts.next() else {
-            continue;
-        };
-        let Some(mac_s) = parts.next() else { continue };
-        let Some(ip_s) = parts.next() else { continue };
-        let host = parts
-            .next()
-            .map(str::to_string)
-            .filter(|s| !s.is_empty() && s != "*");
-        let Some(mac) = parse_mac(mac_s) else {
-            continue;
-        };
-        let Ok(ip) = ip_s.parse::<std::net::IpAddr>() else {
-            continue;
-        };
-        let incoming = LeaseEntry {
-            mac,
-            ip,
-            hostname: host,
-            router_id: self_id.to_string(),
-            expiry: now_secs.saturating_add(12 * 3600),
-            hlc: now_hlc(self_id),
-        };
-        let keep = {
-            let mut book = lease_book.lock().expect("lease book poisoned");
-            matches!(
+    {
+        let mut book = lease_book.lock().expect("lease book poisoned");
+        for fresh in fresh_acks(&watch.seen, &current, &book, watch.first_poll) {
+            let incoming = LeaseEntry {
+                mac: fresh.mac,
+                ip: IpAddr::V4(fresh.ip),
+                hostname: fresh.hostname,
+                router_id: self_id.to_string(),
+                expiry: fresh.expiry,
+                hlc: now_hlc(self_id),
+            };
+            if matches!(
                 apply_lease(&mut book, incoming.clone()),
                 MergeResult::Inserted | MergeResult::Updated
-            )
-        };
-        if keep {
-            applied.push(incoming);
-        }
-        let _ = std::fs::remove_file(&path);
-    }
-    applied
-}
-
-fn project_dhcp_roam_conf(conf: &str) {
-    let Some(dir) = live_dnsmasq_confdir() else {
-        warn!("dhcp roam: no dnsmasq conf-dir yet; will retry");
-        return;
-    };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        warn!(path = %dir.display(), "dhcp roam: mkdir conf-dir: {e}");
-        return;
-    }
-    let dest = dir.join(DHCP_ROAM_CONF_NAME);
-    let tmp = dir.join(format!("{DHCP_ROAM_CONF_NAME}.tmp"));
-    if let Err(e) = std::fs::write(&tmp, conf.as_bytes()) {
-        warn!("dhcp roam: write conf: {e}");
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp, &dest) {
-        warn!("dhcp roam: rename conf: {e}");
-        return;
-    }
-    match hup_dnsmasq() {
-        Ok(n) if n > 0 => {
-            info!(path = %dest.display(), pids = n, "dhcp roam: projected conf, HUP dnsmasq")
-        }
-        Ok(_) => warn!("dhcp roam: wrote conf but found no dnsmasq pid file"),
-        Err(e) => warn!("dhcp roam: HUP dnsmasq: {e}"),
-    }
-}
-
-/// OpenWrt's generated `conf-dir=` from `/var/etc/dnsmasq.conf.*`. One dir only.
-fn live_dnsmasq_confdir() -> Option<PathBuf> {
-    let rd = std::fs::read_dir("/var/etc").ok()?;
-    for ent in rd.flatten() {
-        let path = ent.path();
-        let name = path.file_name()?.to_string_lossy();
-        if !name.starts_with("dnsmasq.conf") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).ok()?;
-        for line in text.lines() {
-            let line = line.trim();
-            let Some(rest) = line.strip_prefix("conf-dir=") else {
-                continue;
-            };
-            let dir = rest.split(',').next()?.trim();
-            if !dir.is_empty() {
-                return Some(PathBuf::from(dir));
+            ) {
+                applied.push(incoming);
             }
         }
     }
+    watch.first_poll = false;
+    // dnsmasq rewrites the file in place, so one read can miss lines. A MAC is
+    // forgotten when its lease runs out, not when one read lacks it: otherwise
+    // the next full read would re-stamp it as new.
+    watch.seen.retain(|_, (_, expiry)| *expiry > now_secs);
+    watch.seen.extend(
+        current
+            .iter()
+            .map(|e| (mjolnir_mesh::mac_key(&e.mac), (e.ip, e.expiry))),
+    );
+    applied
+}
+
+/// Write the static roam config and the reservations into dnsmasq's
+/// `conf-dir`, then tell dnsmasq the cheapest way that works: a restart when
+/// the static config changed (dnsmasq reads `conf-dir` only at start), SIGHUP
+/// when only the reservations did.
+///
+/// Both files are compared against what is on disk, so a meshd restart with
+/// nothing new neither restarts nor signals dnsmasq.
+async fn project_dhcp_roam(
+    book: &LeaseBook,
+    own_subnet: &Ipv4Net,
+    client_iface: &str,
+    dnsmasq: &LiveDnsmasq,
+    state: &mut RoamProjection,
+) {
+    let dir = &dnsmasq.conf_dir;
+    let hosts_path = dir.join(DHCP_ROAM_HOSTS_NAME);
+    let conf_path = dir.join(DHCP_ROAM_CONF_NAME);
+    let hosts = render_hostsfile(book);
+    let conf = render_roam_static_conf(client_iface, own_subnet, &hosts_path);
+
+    // Reservations first: the static config names this file, so it should
+    // exist before dnsmasq is restarted onto it.
+    if std::fs::read_to_string(&hosts_path).ok().as_deref() != Some(hosts.as_str()) {
+        if let Err(e) = write_dnsmasq_file(dir, DHCP_ROAM_HOSTS_NAME, &hosts) {
+            warn!(path = %hosts_path.display(), "dhcp roam: write hosts file: {e}");
+            return;
+        }
+        state.hup_pending = true;
+    }
+
+    if state.rejected.as_deref() != Some(conf.as_str())
+        && std::fs::read_to_string(&conf_path).ok().as_deref() != Some(conf.as_str())
+    {
+        if let Err(e) = write_dnsmasq_file(dir, DHCP_ROAM_CONF_NAME, &conf) {
+            warn!(path = %conf_path.display(), "dhcp roam: write static conf: {e}");
+            return;
+        }
+        // A config this dnsmasq cannot parse would take DHCP down with the
+        // restart. Check first, and take the file back out if it is refused.
+        if let Err(why) = dnsmasq_accepts(&dnsmasq.conf_file).await {
+            warn!(path = %conf_path.display(), "dhcp roam: dnsmasq refused the static conf, removed it: {why}");
+            let _ = std::fs::remove_file(&conf_path);
+            state.rejected = Some(conf);
+            return;
+        }
+        state.rejected = None;
+        state.restart_pending = true;
+    }
+
+    if state.restart_pending {
+        match restart_dnsmasq().await {
+            Ok(()) => {
+                info!(path = %conf_path.display(), "dhcp roam: static conf changed, dnsmasq restarted");
+                state.restart_pending = false;
+                state.hup_pending = false;
+            }
+            Err(why) => warn!("dhcp roam: dnsmasq restart failed, will retry: {why}"),
+        }
+    } else if state.hup_pending {
+        match hup_dnsmasq() {
+            Ok(n) if n > 0 => {
+                info!(path = %hosts_path.display(), pids = n, "dhcp roam: reservations changed, HUP dnsmasq");
+                state.hup_pending = false;
+            }
+            Ok(_) => debug!("dhcp roam: wrote hosts file but found no dnsmasq pid file; will retry"),
+            Err(e) => warn!("dhcp roam: HUP dnsmasq: {e}"),
+        }
+    }
+}
+
+/// Atomic write into dnsmasq's `conf-dir`. The temp name is a dot-file too, so
+/// a dnsmasq starting mid-write never reads it as config.
+fn write_dnsmasq_file(dir: &Path, name: &str, content: &str) -> std::io::Result<()> {
+    let tmp = dir.join(format!(".{}.tmp", name.trim_start_matches('.')));
+    std::fs::write(&tmp, content.as_bytes())?;
+    std::fs::rename(&tmp, dir.join(name))
+}
+
+/// `dnsmasq --test` against the live generated config, which pulls in
+/// `conf-dir` and so the file just written.
+async fn dnsmasq_accepts(conf_file: &Path) -> Result<(), String> {
+    let run = tokio::process::Command::new("dnsmasq")
+        .arg("--test")
+        .arg("-C")
+        .arg(conf_file)
+        .output();
+    match tokio::time::timeout(Duration::from_secs(10), run).await {
+        Ok(Ok(o)) if o.status.success() => Ok(()),
+        Ok(Ok(o)) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Ok(Err(e)) => Err(format!("could not run dnsmasq --test: {e}")),
+        Err(_) => Err("dnsmasq --test timed out".to_string()),
+    }
+}
+
+async fn restart_dnsmasq() -> Result<(), String> {
+    let run = tokio::process::Command::new("/etc/init.d/dnsmasq")
+        .arg("restart")
+        .output();
+    match tokio::time::timeout(Duration::from_secs(20), run).await {
+        Ok(Ok(o)) if o.status.success() => Ok(()),
+        Ok(Ok(o)) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Ok(Err(e)) => Err(format!("could not run: {e}")),
+        Err(_) => Err("timed out".to_string()),
+    }
+}
+
+/// The running dnsmasq instance, as OpenWrt generated it.
+struct LiveDnsmasq {
+    /// `/var/etc/dnsmasq.conf.<cfg>`.
+    conf_file: PathBuf,
+    conf_dir: PathBuf,
+    lease_file: Option<PathBuf>,
+}
+
+/// OpenWrt's generated `/var/etc/dnsmasq.conf.*`: the first one that names a
+/// `conf-dir=`. One instance only.
+fn live_dnsmasq() -> Option<LiveDnsmasq> {
+    let rd = std::fs::read_dir("/var/etc").ok()?;
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        if !name.starts_with("dnsmasq.conf") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(live) = parse_dnsmasq_conf(path, &text) {
+            return Some(live);
+        }
+    }
     None
+}
+
+fn parse_dnsmasq_conf(conf_file: PathBuf, text: &str) -> Option<LiveDnsmasq> {
+    let value = |key: &str| {
+        text.lines()
+            .filter_map(|line| line.trim().strip_prefix(key))
+            .filter_map(|rest| rest.split(',').next())
+            .map(str::trim)
+            .find(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    Some(LiveDnsmasq {
+        conf_dir: value("conf-dir=")?,
+        lease_file: value("dhcp-leasefile="),
+        conf_file,
+    })
 }
 
 fn hup_dnsmasq() -> std::io::Result<usize> {
@@ -3912,6 +4103,9 @@ fn hup_dnsmasq_pidfile(path: &Path) -> std::io::Result<usize> {
     }
 }
 
+/// Clear the UCI options earlier builds set: the `dhcpscript` hook (it ran
+/// inside dnsmasq's jail and could not reach its spool) and the old
+/// `dhcphostsfile`. Anything an operator pointed elsewhere is left alone.
 async fn reconcile_dhcp_roam_uci() {
     use tokio::process::Command;
     let get = |opt: &str| Command::new("uci").args(["-q", "get", opt]).output();
@@ -3927,18 +4121,21 @@ async fn reconcile_dhcp_roam_uci() {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    if script_now == DHCP_SCRIPT && hosts_now.is_empty() {
+    let mut script = String::new();
+    if script_now == DHCP_STALE_SCRIPT {
+        script.push_str("uci -q delete dhcp.@dnsmasq[0].dhcpscript; ");
+    }
+    if hosts_now == DHCP_STALE_HOSTSFILE {
+        script.push_str("uci -q delete dhcp.@dnsmasq[0].dhcphostsfile; ");
+    }
+    if script.is_empty() {
         return;
     }
-    let script = format!(
-        "uci set dhcp.@dnsmasq[0].dhcpscript='{DHCP_SCRIPT}'; \
-         uci -q delete dhcp.@dnsmasq[0].dhcphostsfile; \
-         uci commit dhcp && /etc/init.d/dnsmasq reload"
-    );
+    script.push_str("uci commit dhcp && /etc/init.d/dnsmasq reload");
     let run = Command::new("sh").args(["-c", &script]).output();
     match tokio::time::timeout(Duration::from_secs(20), run).await {
         Ok(Ok(o)) if o.status.success() => {
-            info!("dhcp roam: dnsmasq dhcp-script UCI set (hostsfile cleared)")
+            info!("dhcp roam: stale dnsmasq dhcp-script / hostsfile UCI cleared")
         }
         Ok(Ok(o)) => warn!(
             "dhcp roam: UCI reconcile failed: {}",
@@ -3967,6 +4164,8 @@ const CLIENT_DATAPLANE_INTERVAL: Duration = Duration::from_secs(3);
 ///   (`10.42.<home>.1`), which we reach over the mesh. Linux does not proxy-ARP
 ///   when the route egresses the interface the request arrived on, so ARP among
 ///   this node's own clients is unaffected.
+/// - `proxy_delay=0` (a `neigh` knob): answer that ARP at once. The kernel
+///   default holds a proxied reply for a random time up to 0.8 s.
 /// - `rp_filter=2` (loose): a guest's packets arrive with a source address that
 ///   is not in our subnet. Under strict RPF the kernel drops them in the window
 ///   before the `/32` is installed; loose mode accepts anything we have *a*
@@ -3986,8 +4185,12 @@ fn ensure_sysctl_value(path: &str, want: &str) -> std::io::Result<bool> {
 
 #[cfg(target_os = "linux")]
 fn enable_roam_sysctls(client_iface: &str) {
-    for (knob, value) in [("proxy_arp", "1"), ("rp_filter", "2")] {
-        let path = format!("/proc/sys/net/ipv4/conf/{client_iface}/{knob}");
+    for (dir, knob, value) in [
+        ("conf", "proxy_arp", "1"),
+        ("conf", "rp_filter", "2"),
+        ("neigh", "proxy_delay", "0"),
+    ] {
+        let path = format!("/proc/sys/net/ipv4/{dir}/{client_iface}/{knob}");
         match ensure_sysctl_value(&path, value) {
             Ok(true) => info!(iface = client_iface, knob, value, "roaming: sysctl set"),
             Ok(false) => {}
@@ -4179,6 +4382,221 @@ async fn flush_mobility_routes(client_iface: &str) {
 
 #[cfg(not(target_os = "linux"))]
 async fn flush_mobility_routes(_client_iface: &str) {}
+
+// --- roam assistance: 802.11k neighbour reports between client APs ----------
+// (change add-client-roam-continuity; parsers and payloads live in
+// `roam_assist.rs`, the entry and its merge in `crdt/neighbour_report.rs`)
+
+const ROAM_ASSIST_INTERVAL: Duration = Duration::from_secs(30);
+/// How long a peer's neighbour report lives without a refresh: four
+/// intervals, so three lost gossip messages do not drop a live neighbour.
+const NEIGHBOUR_REPORT_LIFETIME_SECS: u64 = 120;
+/// Ceiling on the in-memory book. Gossip is unsigned; a peer must not be able
+/// to grow it without bound. Far above any real fleet's client-AP count.
+const NEIGHBOUR_REPORT_BOOK_MAX: usize = 256;
+/// `ubus` waits 30 s by default; hostapd answers these in milliseconds.
+const UBUS_TIMEOUT_SECS: &str = "5";
+
+/// Apply an inbound `NeighbourReportUpdate` to the book.
+///
+/// The stored expiry is restamped from *this* node's clock at receipt, not
+/// taken from the wire: routers without an RTC or an uplink can disagree on
+/// wall time by far more than the report's lifetime, and a peer whose clock
+/// runs behind would otherwise never be a neighbour. "Owner stopped
+/// refreshing" is then measured locally, like the liveness tracker does.
+fn apply_neighbour_report_message(
+    book: &mut mjolnir_mesh::NeighbourReportBook,
+    msg: &GossipMessage,
+    self_id: &str,
+    now_unix: u64,
+) -> MergeResult<mjolnir_mesh::NeighbourReportEntry> {
+    let GossipMessage::NeighbourReportUpdate(entry) = msg else {
+        return MergeResult::Unchanged;
+    };
+    // Own echo: this node's entries are written by `roam_assist_loop`.
+    if entry.node_id == self_id {
+        return MergeResult::Unchanged;
+    }
+    let key = mjolnir_mesh::bssid_key(&entry.bssid);
+    if book.len() >= NEIGHBOUR_REPORT_BOOK_MAX && !book.contains_key(&key) {
+        debug!(bssid = %key, "roam assist: neighbour report book full, dropping");
+        return MergeResult::Unchanged;
+    }
+    let mut entry = entry.clone();
+    entry.expiry = now_unix + NEIGHBOUR_REPORT_LIFETIME_SECS;
+    mjolnir_mesh::apply_neighbour_report(book, entry)
+}
+
+/// What one tick learned about one local client AP.
+struct ApProbe {
+    iface: String,
+    /// This AP's own neighbour report. None: hostapd gave nothing usable.
+    own: Option<mjolnir_mesh::roam_assist::Neighbour>,
+    /// The neighbours hostapd holds now. None: unknown, so do not touch them.
+    installed: Option<Vec<mjolnir_mesh::roam_assist::Neighbour>>,
+}
+
+/// One `ubus call`. None on any failure, logged at debug: a dev box or a
+/// RouterOS container has no `ubus`, and an AP that is still coming up has no
+/// hostapd object yet. Blocking — call from a blocking thread.
+fn ubus_call(object: &str, method: &str, payload: &str) -> Option<String> {
+    let out = std::process::Command::new("ubus")
+        .args(["-t", UBUS_TIMEOUT_SECS, "call", object, method, payload])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => {
+            debug!(
+                object,
+                method,
+                "roam assist: ubus call failed ({}): {}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+            None
+        }
+        Err(e) => {
+            debug!(object, method, "roam assist: could not run ubus: {e}");
+            None
+        }
+    }
+}
+
+/// Enable 802.11k/v on every client AP and read back its own report and its
+/// installed neighbour list. Shells out to `iw` and `ubus`, so it runs on a
+/// blocking thread. Empty on a box with no AP, no `iw` or no hostapd.
+fn probe_client_aps() -> Vec<ApProbe> {
+    use mjolnir_mesh::roam_assist::{
+        bss_mgmt_enable_payload, hostapd_object, parse_nr_list, parse_nr_own,
+    };
+    let iw = match std::process::Command::new("iw").arg("dev").output() {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        Ok(_) => return Vec::new(),
+        Err(e) => {
+            debug!("roam assist: could not run iw: {e}");
+            return Vec::new();
+        }
+    };
+    let mut probes = Vec::new();
+    for iface in mjolnir_mesh::roam::parse_ap_ifaces(&iw) {
+        let object = hostapd_object(&iface);
+        // Idempotent, and re-asserted every tick: hostapd forgets it on
+        // restart. Enabled before the own report is read, since the report's
+        // capability bits follow these flags. An AP that refuses is skipped —
+        // it must not be advertised to peers as a roam target either.
+        if ubus_call(&object, "bss_mgmt_enable", &bss_mgmt_enable_payload()).is_none() {
+            continue;
+        }
+        let own = ubus_call(&object, "rrm_nr_get_own", "{}").and_then(|s| parse_nr_own(&s));
+        let installed = ubus_call(&object, "rrm_nr_list", "{}").and_then(|s| parse_nr_list(&s));
+        probes.push(ApProbe {
+            iface,
+            own,
+            installed,
+        });
+    }
+    probes
+}
+
+/// Roam-assistance loop: every [`ROAM_ASSIST_INTERVAL`], publish this node's
+/// client-AP neighbour reports, age out peers that stopped refreshing theirs,
+/// and make each local AP's hostapd neighbour list equal the same-SSID peers
+/// in the book.
+///
+/// `rrm_nr_set` is only called when the installed list differs from the
+/// desired one. That one comparison covers a new peer, a dead peer, a peer
+/// that changed channel, and a hostapd restart that forgot everything. All of
+/// it is a runtime ubus call: no `wifi reload`, no client drop.
+///
+/// This is advice to the phone. The loop never disassociates a client and
+/// never sends a BSS transition request.
+async fn roam_assist_loop<T: GossipTransport>(
+    sync: Arc<GossipSync<T>>,
+    book: Arc<Mutex<mjolnir_mesh::NeighbourReportBook>>,
+    self_id: String,
+) {
+    use mjolnir_mesh::roam_assist::{
+        desired_neighbours, hostapd_object, neighbours_match, rrm_nr_set_payload,
+    };
+    let mut ticker = tokio::time::interval(ROAM_ASSIST_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let probes = match tokio::task::spawn_blocking(probe_client_aps).await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("roam assist: AP probe task failed: {e}");
+                continue;
+            }
+        };
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Publish (and refresh) this node's own reports.
+        let mut own_bssids: BTreeSet<String> = BTreeSet::new();
+        for own in probes.iter().filter_map(|p| p.own.as_ref()) {
+            own_bssids.insert(mjolnir_mesh::bssid_key(&own.bssid));
+            let entry = own.to_entry(
+                &self_id,
+                now_secs + NEIGHBOUR_REPORT_LIFETIME_SECS,
+                now_hlc(&self_id),
+            );
+            {
+                let mut b = book.lock().expect("neighbour report book poisoned");
+                mjolnir_mesh::apply_neighbour_report(&mut b, entry.clone());
+            }
+            if let Err(e) = sync
+                .publish(GossipMessage::NeighbourReportUpdate(entry))
+                .await
+            {
+                warn!(bssid = %mjolnir_mesh::bssid_key(&own.bssid), "roam assist: gossip publish failed: {e}");
+            }
+        }
+
+        let reaped = {
+            let mut b = book.lock().expect("neighbour report book poisoned");
+            mjolnir_mesh::reap_expired_neighbour_reports(&mut b, now_secs)
+        };
+        for entry in &reaped {
+            info!(
+                bssid = %mjolnir_mesh::bssid_key(&entry.bssid),
+                node = %entry.node_id,
+                "roam assist: neighbour report expired"
+            );
+        }
+
+        for probe in probes {
+            let (Some(own), Some(installed)) = (probe.own, probe.installed) else {
+                continue;
+            };
+            let desired = {
+                let b = book.lock().expect("neighbour report book poisoned");
+                desired_neighbours(&b, &self_id, &own_bssids, &own.ssid, now_secs)
+            };
+            if neighbours_match(&installed, &desired) {
+                continue;
+            }
+            let object = hostapd_object(&probe.iface);
+            let payload = rrm_nr_set_payload(&desired);
+            let set = tokio::task::spawn_blocking(move || {
+                ubus_call(&object, "rrm_nr_set", &payload).is_some()
+            })
+            .await;
+            match set {
+                Ok(true) => info!(
+                    ap = %probe.iface,
+                    ssid = %own.ssid,
+                    neighbours = desired.len(),
+                    was = installed.len(),
+                    "roam assist: neighbour list installed"
+                ),
+                Ok(false) => warn!(ap = %probe.iface, "roam assist: rrm_nr_set failed"),
+                Err(e) => warn!(ap = %probe.iface, "roam assist: rrm_nr_set task failed: {e}"),
+            }
+        }
+    }
+}
 
 /// Apply an inbound service CRDT message to the directory. Returns the
 /// `(name, entry)` newly inserted or updated (so the caller can persist and
@@ -9271,6 +9689,23 @@ config meshd 'meshd'
     }
 
     #[test]
+    fn live_dnsmasq_conf_names_conf_dir_and_lease_file() {
+        let text = "# auto-generated config file from /etc/config/dhcp\n\
+                    dhcp-authoritative\n\
+                    dhcp-leasefile=/tmp/dhcp.leases.custom\n\
+                    conf-dir=/tmp/dnsmasq.cfg01411c.d,*.conf\n";
+        let live = parse_dnsmasq_conf(PathBuf::from("/var/etc/dnsmasq.conf.cfg01411c"), text)
+            .expect("conf-dir present");
+        assert_eq!(live.conf_dir, PathBuf::from("/tmp/dnsmasq.cfg01411c.d"));
+        assert_eq!(
+            live.lease_file,
+            Some(PathBuf::from("/tmp/dhcp.leases.custom"))
+        );
+        // No conf-dir: nowhere to project, so not a usable instance.
+        assert!(parse_dnsmasq_conf(PathBuf::from("x"), "dhcp-authoritative\n").is_none());
+    }
+
+    #[test]
     fn partition_claims_ignores_backhaul_claims() {
         // Own backhaul /32 must not become the senior client claim (or an
         // "extra" to be released); foreign backhaul /32s must not reach the
@@ -11551,5 +11986,122 @@ fe80000000000000000000000000a1b2 04 40 20 80    mjolnir0
         assert_eq!(json["link_local_mesh"], "fe80::bb");
         assert_eq!(json["ula"], mjolnir_mesh::tun::ula_addr("self").to_string());
         assert!(json["ula"].as_str().unwrap().starts_with("fd"));
+    }
+
+    // --- roam assistance (change add-client-roam-continuity) ---
+
+    fn neighbour_report_msg(last: u8, node: &str, wall_clock: u64, expiry: u64) -> GossipMessage {
+        GossipMessage::NeighbourReportUpdate(mjolnir_mesh::NeighbourReportEntry {
+            bssid: [0xd4, 0x0d, 0xab, 0x81, 0xb2, last],
+            ssid: "Lightning Mesh".to_string(),
+            nr_hex: format!("d40dab81b2{last:02x}ef4900005106070603000600"),
+            node_id: node.to_string(),
+            expiry,
+            hlc: HLC {
+                wall_clock,
+                counter: 0,
+                node_id: node.to_string(),
+            },
+        })
+    }
+
+    #[test]
+    fn neighbour_report_is_restamped_on_the_local_clock() {
+        let mut book = mjolnir_mesh::NeighbourReportBook::new();
+        // The peer's clock is years behind: its wire expiry is long past here.
+        let msg = neighbour_report_msg(0xbb, "peer", 1_000, 5);
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &msg, "self", 1_700_000_000),
+            MergeResult::Inserted
+        );
+        assert_eq!(
+            book["d4:0d:ab:81:b2:bb"].expiry,
+            1_700_000_000 + NEIGHBOUR_REPORT_LIFETIME_SECS
+        );
+        // A replay does not extend the lifetime; a real refresh does.
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &msg, "self", 1_700_000_060),
+            MergeResult::Unchanged
+        );
+        let refresh = neighbour_report_msg(0xbb, "peer", 31_000, 35);
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &refresh, "self", 1_700_000_030),
+            MergeResult::Updated
+        );
+        assert_eq!(
+            book["d4:0d:ab:81:b2:bb"].expiry,
+            1_700_000_030 + NEIGHBOUR_REPORT_LIFETIME_SECS
+        );
+        // The owner goes quiet: one lifetime later the entry is reaped.
+        let gone = mjolnir_mesh::reap_expired_neighbour_reports(
+            &mut book,
+            1_700_000_030 + NEIGHBOUR_REPORT_LIFETIME_SECS,
+        );
+        assert_eq!(gone.len(), 1);
+        assert!(book.is_empty());
+    }
+
+    #[test]
+    fn neighbour_report_own_echo_and_other_variants_are_ignored() {
+        let mut book = mjolnir_mesh::NeighbourReportBook::new();
+        let echo = neighbour_report_msg(0xa8, "self", 1_000, 500);
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &echo, "self", 100),
+            MergeResult::Unchanged
+        );
+        let other = GossipMessage::LeaseRelease {
+            mac: [0; 6],
+            hlc: HLC {
+                wall_clock: 1,
+                counter: 0,
+                node_id: "peer".to_string(),
+            },
+        };
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &other, "self", 100),
+            MergeResult::Unchanged
+        );
+        assert!(book.is_empty());
+    }
+
+    #[test]
+    fn neighbour_report_book_is_bounded() {
+        let mut book = mjolnir_mesh::NeighbourReportBook::new();
+        for i in 0..NEIGHBOUR_REPORT_BOOK_MAX {
+            let mut msg = neighbour_report_msg(i as u8, "peer", 1_000, 500);
+            if let GossipMessage::NeighbourReportUpdate(e) = &mut msg {
+                e.bssid[4] = (i >> 8) as u8;
+                e.nr_hex = format!(
+                    "d40dab81{:02x}{:02x}ef4900005106070603000600",
+                    e.bssid[4], e.bssid[5]
+                );
+            }
+            assert_eq!(
+                apply_neighbour_report_message(&mut book, &msg, "self", 100),
+                MergeResult::Inserted
+            );
+        }
+        assert_eq!(book.len(), NEIGHBOUR_REPORT_BOOK_MAX);
+        // A new BSSID is refused once full...
+        let mut extra = neighbour_report_msg(0x01, "peer", 1_000, 500);
+        if let GossipMessage::NeighbourReportUpdate(e) = &mut extra {
+            e.bssid[3] = 0x99;
+            e.nr_hex = "d40dab990001ef4900005106070603000600".to_string();
+        }
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &extra, "self", 100),
+            MergeResult::Unchanged
+        );
+        // ...but a known one still refreshes.
+        let mut refresh = neighbour_report_msg(0x01, "peer", 2_000, 500);
+        if let GossipMessage::NeighbourReportUpdate(e) = &mut refresh {
+            e.bssid[4] = 0x00;
+            e.nr_hex = "d40dab810001ef4900005106070603000600".to_string();
+        }
+        assert_eq!(
+            apply_neighbour_report_message(&mut book, &refresh, "self", 130),
+            MergeResult::Updated
+        );
+        assert_eq!(book.len(), NEIGHBOUR_REPORT_BOOK_MAX);
     }
 }

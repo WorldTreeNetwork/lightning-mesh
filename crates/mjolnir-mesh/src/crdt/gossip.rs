@@ -7,6 +7,7 @@ use crate::crdt::{
     hlc::HLC,
     lease::LeaseEntry,
     leased_name::LeasedName,
+    neighbour_report::NeighbourReportEntry,
     node_name::NodeNameEntry,
     peer_addr::PeerAddrEntry,
     service::{ServiceEntry, ServiceEntryV2},
@@ -143,6 +144,19 @@ pub enum GossipMessage {
         node_id: String,
         entry: CoordinateStamp,
     },
+    /// One client AP's 802.11k neighbour report, keyed by `entry.bssid`
+    /// (change `add-client-roam-continuity`). Only the node that runs the AP
+    /// announces it and refreshes it on a loop; merge is LWW on HLC (see
+    /// [`merge_neighbour_report`](crate::crdt::neighbour_report::merge_neighbour_report))
+    /// and an entry its owner stops refreshing expires. Peers install it in
+    /// hostapd as a roam hint; nothing is persisted.
+    ///
+    /// Appended last so existing discriminants are undisturbed; same mixed-fleet
+    /// caveat as `ServicePublishV2` — a node that predates this variant
+    /// decode-errors on it and the `GossipSync` recv loop log-and-skips (a
+    /// dropped report just means the old node's APs advertise no neighbours,
+    /// as they do today).
+    NeighbourReportUpdate(NeighbourReportEntry),
 }
 
 #[cfg(test)]
@@ -418,6 +432,29 @@ mod tests {
         let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
     }
+
+    #[test]
+    fn postcard_roundtrip_neighbour_report_update() {
+        let entry = crate::crdt::neighbour_report::NeighbourReportEntry {
+            bssid: [0xd4, 0x0d, 0xab, 0x81, 0xb2, 0xa8],
+            ssid: "Lightning Mesh".to_string(),
+            nr_hex: "d40dab81b2a8ef4900005106070603000600".to_string(),
+            node_id: "abcd1234".repeat(8),
+            expiry: 1_700_000_170,
+            hlc: make_hlc(1_700_000_050_000, 0, "abcd1234abcd1234"),
+        };
+        let msg = GossipMessage::NeighbourReportUpdate(entry.clone());
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        // Appended last: discriminant 14, one varint byte. Pinned so a later
+        // reorder of the enum cannot go unnoticed.
+        assert_eq!(bytes[0], 14);
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+        let GossipMessage::NeighbourReportUpdate(got) = decoded else {
+            panic!("decoded to a different variant");
+        };
+        assert_eq!(got, entry);
+    }
 }
 
 /// Mixed-fleet wire-compatibility tests (bead e21.2.2, FLAGGED thorough).
@@ -562,6 +599,20 @@ mod mixed_fleet {
         postcard::to_allocvec(&msg).unwrap()
     }
 
+    fn neighbour_report_update_bytes() -> Vec<u8> {
+        let msg = GossipMessage::NeighbourReportUpdate(
+            crate::crdt::neighbour_report::NeighbourReportEntry {
+                bssid: [0xd4, 0x0d, 0xab, 0x81, 0xb2, 0xa8],
+                ssid: "Lightning Mesh".to_string(),
+                nr_hex: "d40dab81b2a8ef4900005106070603000600".to_string(),
+                node_id: "abcd1234".repeat(8),
+                expiry: 1_700_000_171,
+                hlc: hlc(1_700_000_051_000, 0, "abcd1234abcd1234"),
+            },
+        );
+        postcard::to_allocvec(&msg).unwrap()
+    }
+
     #[test]
     fn old_enum_decode_of_service_publish_v2_bytes_errors() {
         let bytes = service_publish_v2_bytes();
@@ -612,6 +663,20 @@ mod mixed_fleet {
             result.is_err(),
             "expected the old enum to hard-error on the new CoordinateAnnounce \
              discriminant, not silently skip it"
+        );
+    }
+
+    #[test]
+    fn old_enum_decode_of_neighbour_report_update_bytes_errors() {
+        // NeighbourReportUpdate is appended LAST (after CoordinateAnnounce).
+        // Postcard has no forward-compat skip; the recv-loop log-and-skip is
+        // what keeps an un-upgraded node alive.
+        let bytes = neighbour_report_update_bytes();
+        let result: Result<OldGossipMessage, _> = postcard::from_bytes(&bytes);
+        assert!(
+            result.is_err(),
+            "expected the old enum to hard-error on the new \
+             NeighbourReportUpdate discriminant, not silently skip it"
         );
     }
 
@@ -708,6 +773,8 @@ mod mixed_fleet {
             .await;
         a.inject_raw(Bytes::from(node_name_announce_bytes())).await;
         a.inject_raw(Bytes::from(coordinate_announce_bytes())).await;
+        a.inject_raw(Bytes::from(neighbour_report_update_bytes()))
+            .await;
         let old_good_2 = OldGossipMessage::UserUpdate {
             username: "ada".to_string(),
             entry: UserEntry {
