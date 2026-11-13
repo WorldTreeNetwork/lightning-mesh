@@ -135,3 +135,17 @@ gateway on its own client segment SHALL put its hardware MAC back.
 - GIVEN two nodes' LAN ports are cabled to one switch
 - WHEN a node sees the other's gateway address on its client bridge
 - THEN it restores its hardware MAC
+
+### Requirement: A node never answers ARP for a client's own address
+
+A node SHALL NOT reply to an ARP request whose sender and target address
+are the same (a client announcing or defending its own address) on the
+client bridge.
+
+#### Scenario: Phone announces its address after a hop
+
+- GIVEN a phone has just associated to node-b
+- AND node-b still holds node-a's host route for the phone's address
+- WHEN the phone broadcasts an ARP request for its own address
+- THEN node-b sends no reply
+- AND the phone does not send DHCPDECLINE

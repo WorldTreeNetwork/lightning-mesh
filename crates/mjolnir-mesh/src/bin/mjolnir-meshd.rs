@@ -4164,6 +4164,12 @@ const CLIENT_DATAPLANE_INTERVAL: Duration = Duration::from_secs(3);
 ///   (`10.42.<home>.1`), which we reach over the mesh. Linux does not proxy-ARP
 ///   when the route egresses the interface the request arrived on, so ARP among
 ///   this node's own clients is unaffected.
+/// - `drop_gratuitous_arp=1`: never answer a client's announcement of its own
+///   address. While another node's `/32` for a just-arrived phone is still in
+///   the table, the route to that address leaves by the mesh, so proxy ARP
+///   would answer "that address is at the gateway MAC". The phone reads that
+///   as an address conflict, sends DHCPDECLINE and waits 10 s (field capture,
+///   2026-11-13; dnsmasq then disables the reservation and renumbers it).
 /// - `proxy_delay=0` (a `neigh` knob): answer that ARP at once. The kernel
 ///   default holds a proxied reply for a random time up to 0.8 s.
 /// - `rp_filter=2` (loose): a guest's packets arrive with a source address that
@@ -4188,6 +4194,7 @@ fn enable_roam_sysctls(client_iface: &str) {
     for (dir, knob, value) in [
         ("conf", "proxy_arp", "1"),
         ("conf", "rp_filter", "2"),
+        ("conf", "drop_gratuitous_arp", "1"),
         ("neigh", "proxy_delay", "0"),
     ] {
         let path = format!("/proc/sys/net/ipv4/{dir}/{client_iface}/{knob}");

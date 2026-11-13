@@ -122,3 +122,23 @@ a bead.
 
 The kernel does not add a link-local for the new MAC on a MAC-only change,
 so recorded IPv6 recovery addresses are unaffected.
+
+## Field finding: proxy ARP answered the phone's own address
+
+Walk test, 2026-11-13, packet capture on each AP. After every hop the phone
+(iOS) broadcast an ARP request for its own address. The node it had joined
+still had the previous node's `/32` for that address, so its route to the
+address left by the mesh and proxy ARP replied "is at the gateway MAC". The
+phone took that as a conflict: DHCPDECLINE, the 10 s wait RFC 2131 asks for,
+then DISCOVER. dnsmasq disables a declined reservation for 10 minutes, so
+the phone was then renumbered (`.189` to `.188`). Measured gap: 12 to 13 s
+per hop, about 30 s with the renumber.
+
+This path predates this change (`proxy_arp=1` plus mobility `/32`, `sz9`)
+and matches the original complaint of 5 to 10 s of silence.
+
+Fix: `drop_gratuitous_arp=1` on the client bridge. The kernel then discards
+requests whose sender and target match before the proxy decision.
+
+Still open from the same trace: a node kept routing the phone's address to
+the previous node for several seconds after that node withdrew its `/32`.
