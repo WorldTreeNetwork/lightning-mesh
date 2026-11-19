@@ -9,8 +9,11 @@
 #
 #   LIGHTNING_FLEET_FILE=/path/to.conf    explicit file
 #   LIGHTNING_FLEET=name                  deploy/openwrt/fleet.d/name.conf
-#   (unset)                               deploy/openwrt/fleet-nodes.conf
-#   LIGHTNING_FLEET_REACH=/path/to.json   scan result (default below)
+#   (unset)                               ~/.config/lightning-admin/fleet-location
+#                                         (one stem), else fleet-nodes.conf
+#   LIGHTNING_FLEET_REACH=/path/to.json   scan result. A named installation
+#                                         uses fleet-reach.<name>.json so one
+#                                         site's dials are not the other's.
 #
 # Columns: name|ssh_addr|node_id|model|notes|group
 # A member has a name, an SSH address, and a 64-hex node id.
@@ -27,9 +30,51 @@
 # `fleet_print_references <conf> <house-guild-id file>` prints the operator view.
 # Or run: bash deploy/openwrt/fleet-file.sh --reference <house-guild-id file>
 
+# One stem, or empty. LIGHTNING_FLEET_LOCATION_FILE overrides the path
+# (use an empty file to ignore the laptop pin).
+fleet_location_stem() {
+	local f stem
+	if [ -n "${LIGHTNING_FLEET_LOCATION_FILE+x}" ]; then
+		f="$LIGHTNING_FLEET_LOCATION_FILE"
+	else
+		f="${HOME}/.config/lightning-admin/fleet-location"
+	fi
+	[ -n "$f" ] && [ -f "$f" ] || return 1
+	stem="$(head -n 1 "$f" | tr -d '[:space:]')"
+	case "$stem" in
+		'') return 1 ;;
+		*[!A-Za-z0-9._-]*)
+			echo "fleet-location must be a file stem (letters, numbers, '.', '_', '-'): '$stem'" >&2
+			return 2
+			;;
+	esac
+	printf '%s\n' "$stem"
+}
+
+# Named installation, if one is selected. Status 1 when this is the default file.
+fleet_selected_name() {
+	local stem
+	if [ -n "${LIGHTNING_FLEET:-}" ]; then
+		stem="$LIGHTNING_FLEET"
+	else
+		stem="$(fleet_location_stem)" || {
+			rc=$?
+			[ "$rc" -eq 1 ] && return 1
+			return "$rc"
+		}
+	fi
+	case "$stem" in
+		''|*[!A-Za-z0-9._-]*)
+			echo "LIGHTNING_FLEET must be a file stem (letters, numbers, '.', '_', '-'): '$stem'" >&2
+			return 2
+			;;
+	esac
+	printf '%s\n' "$stem"
+}
+
 fleet_conf() {
 	local dir="$1"
-	local name path
+	local name path rc
 	if [ -n "${LIGHTNING_FLEET_FILE:-}" ]; then
 		if [ ! -f "$LIGHTNING_FLEET_FILE" ]; then
 			echo "inventory missing: $LIGHTNING_FLEET_FILE" >&2
@@ -38,14 +83,7 @@ fleet_conf() {
 		printf '%s\n' "$LIGHTNING_FLEET_FILE"
 		return 0
 	fi
-	if [ -n "${LIGHTNING_FLEET:-}" ]; then
-		name="$LIGHTNING_FLEET"
-		case "$name" in
-			''|*[!A-Za-z0-9._-]*)
-				echo "LIGHTNING_FLEET must be a file stem (letters, numbers, '.', '_', '-'): '$name'" >&2
-				return 1
-				;;
-		esac
+	if name="$(fleet_selected_name)"; then
 		path="$dir/fleet.d/${name}.conf"
 		if [ ! -f "$path" ]; then
 			echo "inventory missing: $path" >&2
@@ -53,6 +91,9 @@ fleet_conf() {
 		fi
 		printf '%s\n' "$path"
 		return 0
+	else
+		rc=$?
+		[ "$rc" -eq 1 ] || return "$rc"
 	fi
 	path="$dir/fleet-nodes.conf"
 	if [ ! -f "$path" ]; then
@@ -122,9 +163,16 @@ fleet_peer_ids() {
 }
 
 # Scan file from fleet-scan.sh. Not the working set and not a guild.
+# A named installation keeps its own dial file. The default file stays the
+# other site's pins (the same 10.42.x address is a different radio there).
 fleet_reach_file() {
+	local stem
 	if [ -n "${LIGHTNING_FLEET_REACH:-}" ]; then
 		printf '%s\n' "$LIGHTNING_FLEET_REACH"
+		return 0
+	fi
+	if stem="$(fleet_selected_name 2>/dev/null)"; then
+		printf '%s\n' "${HOME}/.config/lightning-admin/fleet-reach.${stem}.json"
 		return 0
 	fi
 	printf '%s\n' "${HOME}/.config/lightning-admin/fleet-reach.json"
@@ -223,6 +271,8 @@ RS
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	set -euo pipefail
+	# The laptop pin must not change this self-test.
+	export LIGHTNING_FLEET_LOCATION_FILE=/dev/null
 	DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	if [ "${1:-}" = --reference ]; then
 		if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
@@ -290,5 +340,29 @@ EOF
 		echo "path escape was accepted" >&2
 		exit 1
 	fi
+	loc_home="$(mktemp -d)"
+	loc_dir="$(mktemp -d)"
+	mkdir -p "$loc_home/.config/lightning-admin" "$loc_dir/fleet.d"
+	printf 'a|10.254.1.1|%s|model|note|embassy\n' "$id_a" >"$loc_dir/fleet.d/embassy.conf"
+	printf 'embassy\n' >"$loc_home/.config/lightning-admin/fleet-location"
+	unset LIGHTNING_FLEET LIGHTNING_FLEET_REACH
+	saved_location_file="$LIGHTNING_FLEET_LOCATION_FILE"
+	unset LIGHTNING_FLEET_LOCATION_FILE
+	got_loc="$(HOME="$loc_home" fleet_conf "$loc_dir")"
+	[ "$got_loc" = "$loc_dir/fleet.d/embassy.conf" ]
+	reach_default="$(HOME="$loc_home" fleet_reach_file)"
+	[ "$reach_default" = "$loc_home/.config/lightning-admin/fleet-reach.embassy.json" ]
+	reach_explicit="$(HOME="$loc_home" LIGHTNING_FLEET_REACH=/tmp/explicit-reach.json fleet_reach_file)"
+	[ "$reach_explicit" = /tmp/explicit-reach.json ]
+	printf '../x\n' >"$loc_home/.config/lightning-admin/fleet-location"
+	if HOME="$loc_home" fleet_conf "$loc_dir" >/dev/null 2>&1; then
+		echo "location path escape was accepted" >&2
+		exit 1
+	fi
+	: >"$loc_home/.config/lightning-admin/fleet-location"
+	got_empty="$(HOME="$loc_home" fleet_conf "$DIR")"
+	[ "$got_empty" = "$DIR/fleet-nodes.conf" ]
+	export LIGHTNING_FLEET_LOCATION_FILE="$saved_location_file"
+	rm -rf "$loc_home" "$loc_dir"
 	echo "fleet-file ok ($members members, $pending pending in $got)"
 fi

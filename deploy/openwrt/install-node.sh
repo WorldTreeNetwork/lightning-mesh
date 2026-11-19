@@ -247,20 +247,58 @@ pkg_cache_prune "$PKG_CACHE"
 # so packages must be local files before anything disruptive starts. apk names
 # files name-version.apk, opkg names them name_version_arch.ipk.
 echo ">> prefetching packages on the node ($PKGS)"
+# Already-installed packages are left alone. A leaf with no feed (m3000-b at
+# Embassy) otherwise sits in `apk fetch` until every mirror times out, and
+# pkg_ensure treats an installed name as done. A package that is neither
+# staged nor installed gets one bounded fetch: these images have no timeout(1).
 MISSING=$(ssh "$HOST" "
 cd $STAGE/pkgs
-if command -v apk >/dev/null 2>&1; then apk update >/dev/null 2>&1 || true; else opkg update >/dev/null 2>&1 || true; fi
+pkg_installed() {
+	if command -v apk >/dev/null 2>&1; then
+		apk info -e \"\$1\" >/dev/null 2>&1
+	else
+		opkg list-installed 2>/dev/null | grep -q \"^\$1 \"
+	fi
+}
+run_bounded() {
+	\"\$@\" >/dev/null 2>&1 &
+	_pid=\$!
+	_i=0
+	while [ \"\$_i\" -lt 25 ]; do
+		kill -0 \$_pid 2>/dev/null || break
+		_i=\$((_i + 1))
+		sleep 1
+	done
+	if kill -0 \$_pid 2>/dev/null; then
+		kill \$_pid 2>/dev/null || true
+		sleep 1
+		kill -9 \$_pid 2>/dev/null || true
+		wait \$_pid 2>/dev/null || true
+		return 1
+	fi
+	wait \$_pid
+}
 missing=''
+need_fetch=0
 for p in $PKGS; do
 	ls \"\$p\"-[0-9]*.apk \"\$p\"_*.ipk >/dev/null 2>&1 && continue
-	if command -v apk >/dev/null 2>&1; then
-		# -R pulls dependencies too (kmods need their -lib/firmware deps for a
-		# no-network install later); fall back for apk builds without it
-		apk fetch -R -o . \"\$p\" >/dev/null 2>&1 || apk fetch -o . \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
-	else
-		opkg download \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
-	fi
+	pkg_installed \"\$p\" && continue
+	need_fetch=1
 done
+if [ \"\$need_fetch\" = 1 ]; then
+	if command -v apk >/dev/null 2>&1; then run_bounded apk update || true; else run_bounded opkg update || true; fi
+	for p in $PKGS; do
+		ls \"\$p\"-[0-9]*.apk \"\$p\"_*.ipk >/dev/null 2>&1 && continue
+		pkg_installed \"\$p\" && continue
+		if command -v apk >/dev/null 2>&1; then
+			# -R pulls dependencies too (kmods need their -lib/firmware deps for a
+			# no-network install later); fall back for apk builds without it
+			run_bounded apk fetch -R -o . \"\$p\" || run_bounded apk fetch -o . \"\$p\" || missing=\"\$missing \$p\"
+		else
+			run_bounded opkg download \"\$p\" || missing=\"\$missing \$p\"
+		fi
+	done
+fi
 echo \"\$missing\"")
 
 # Top up the node's stage from the local cache: push EVERY cached file the
