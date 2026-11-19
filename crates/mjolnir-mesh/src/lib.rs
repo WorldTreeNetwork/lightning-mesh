@@ -62,6 +62,15 @@ pub use crdt::{
     egress::{DefaultRoute, EXCLUDED_EGRESS_IFACES, EgressAd, ProbeHysteresis, classify_egress},
     gossip::GossipMessage,
     hlc::{HLC, HlcClock, observe_hlc, tick_hlc},
+    iroh_dial::{
+        DIAL_DOMAIN, DialError, DialOutcome, IrohDialBook, IrohDialEntry, MAX_PER_SOURCE,
+        PROJECTION_FILE, RESOLVE_STALE_MS, apply as apply_iroh_dial,
+        ingest_spool as ingest_iroh_dial_spool, lookup_json as lookup_iroh_dial_json,
+        projection_json as iroh_dial_projection_json,
+        projection_source_at_cap as iroh_dial_source_at_cap, reap as reap_iroh_dials,
+        signing_message as iroh_dial_signing_message, unix_now_ms,
+        validate_submission as validate_iroh_dial, write_projection as write_iroh_dial_projection,
+    },
     lease::{
         LeaseBook, LeaseEntry, LeaseFileEntry, LeasePoll, apply_lease, fresh_acks, gateway_v4,
         mac_key, merge_lease, parse_lease_file, parse_mac, reap_expired, render_hostsfile,

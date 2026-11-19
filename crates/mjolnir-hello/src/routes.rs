@@ -7,14 +7,17 @@
 //! translates `RouteResponse` into wire responses.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
 use data_encoding::HEXLOWER;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use mjolnir_mesh::{AppMarker, validate_app_marker};
+use mjolnir_mesh::{
+    AppMarker, IrohDialEntry, iroh_dial_source_at_cap, lookup_iroh_dial_json, unix_now_ms,
+    validate_app_marker, validate_iroh_dial,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
@@ -672,6 +675,100 @@ fn submit_name_claim(body: &[u8], challenges: &ChallengeStore, spool_dir: &Path)
     RouteResponse::json(200, record_json)
 }
 
+const IROH_DIAL_SPOOL_SUBDIR: &str = "iroh-dial";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IrohDialRequest {
+    pubkey: String,
+    sig: String,
+    challenge: String,
+    port: u16,
+    ip: Ipv4Addr,
+    signed_at_ms: u64,
+}
+
+/// `POST /api/iroh-dial` — a client publishes the UDP socket its iroh endpoint
+/// is bound on. The signed IP must be this TCP connection's peer address.
+/// A relay URL is not a field of this request; unknown fields are rejected.
+fn submit_iroh_dial(
+    body: &[u8],
+    challenges: &ChallengeStore,
+    spool_dir: &Path,
+    directory_file: &Path,
+    client_ip: Option<IpAddr>,
+) -> RouteResponse {
+    let req: IrohDialRequest = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(_) => return bad_request("invalid request body"),
+    };
+    let Some(IpAddr::V4(peer)) = client_ip else {
+        return bad_request("no client address");
+    };
+    if req.ip != peer {
+        return bad_request("address does not match the client");
+    }
+    let entry = IrohDialEntry {
+        endpoint_id: req.pubkey,
+        ip: req.ip,
+        port: req.port,
+        signed_at_ms: req.signed_at_ms,
+        sig: req.sig,
+        challenge: req.challenge,
+    };
+    let now = unix_now_ms();
+    if let Err(err) = validate_iroh_dial(&entry, now) {
+        return bad_request(err.as_str());
+    }
+    {
+        let store = challenges.lock().expect("challenge store poisoned");
+        match store.get(&entry.challenge) {
+            Some(issued_at) if issued_at.elapsed() < CHALLENGE_TTL => {}
+            _ => return bad_request("unknown or expired challenge"),
+        }
+    }
+    let projection = directory_file.with_file_name(mjolnir_mesh::PROJECTION_FILE);
+    if let Ok(bytes) = std::fs::read(&projection)
+        && iroh_dial_source_at_cap(&bytes, entry.ip, &entry.endpoint_id, now)
+    {
+        return bad_request(mjolnir_mesh::DialError::Cap.as_str());
+    }
+    {
+        let mut store = challenges.lock().expect("challenge store poisoned");
+        if store.remove(&entry.challenge).is_none() {
+            return bad_request("unknown or expired challenge");
+        }
+    }
+
+    let spool = spool_dir.join(IROH_DIAL_SPOOL_SUBDIR);
+    if let Err(err) = std::fs::create_dir_all(&spool) {
+        tracing::error!(%err, "failed to create iroh dial spool dir");
+        return RouteResponse::json(500, r#"{"error":"spool unavailable"}"#);
+    }
+    let record_json = serde_json::to_string(&entry).expect("dial record serializes");
+    let dest = spool.join(format!("{}.json", entry.endpoint_id));
+    if let Err(err) = std::fs::write(&dest, &record_json) {
+        tracing::error!(%err, path = %dest.display(), "failed to write iroh dial spool entry");
+        return RouteResponse::json(500, r#"{"error":"spool write failed"}"#);
+    }
+    RouteResponse::json(200, record_json)
+}
+
+/// `GET /api/iroh/<endpoint-id>` — one dial hint. The bare collection is not served.
+fn lookup_iroh_dial(directory_file: &Path, endpoint_id: &str) -> RouteResponse {
+    if endpoint_id.len() != 64 || endpoint_id.contains('/') {
+        return RouteResponse::json(404, r#"{"error":"not found"}"#);
+    }
+    let path = directory_file.with_file_name(mjolnir_mesh::PROJECTION_FILE);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return RouteResponse::json(404, r#"{"error":"not found"}"#);
+    };
+    match lookup_iroh_dial_json(&bytes, endpoint_id, unix_now_ms()) {
+        Some(body) => RouteResponse::json(200, body),
+        None => RouteResponse::json(404, r#"{"error":"not found"}"#),
+    }
+}
+
 /// Subdirectory of the identity spool that holds coordinate-stamp submissions
 /// (bead mjolnir-mesh-6hn.5). Sibling of `names/`: meshd's identity sweep is
 /// non-recursive, so `coordinates/` is invisible to it. The coordinate sweep
@@ -988,6 +1085,15 @@ fn route_with_internet_state(
         ("GET", "/api/challenge") => issue_challenge(challenges),
         ("POST", "/api/identity") => submit_identity(body, challenges, spool_dir),
         ("POST", "/api/name-claim") => submit_name_claim(body, challenges, spool_dir),
+        ("POST", "/api/iroh-dial") => {
+            submit_iroh_dial(body, challenges, spool_dir, directory_file, client_ip)
+        }
+        ("GET", "/api/iroh") | ("GET", "/api/iroh/") => {
+            RouteResponse::json(404, r#"{"error":"not found"}"#)
+        }
+        ("GET", p) if p.starts_with("/api/iroh/") => {
+            lookup_iroh_dial(directory_file, &p["/api/iroh/".len()..])
+        }
         ("POST", "/api/coordinate-stamp") => {
             submit_coordinate_stamp(body, challenges, spool_dir, directory_cache, directory_file)
         }
@@ -2504,5 +2610,165 @@ mod tests {
         .unwrap();
         assert_eq!(rec["node_id"], "n2");
         assert_eq!(rec["alt_mm"], alt_mm);
+    }
+
+    fn dial_body(key: &SigningKey, challenge: &str, ip: Ipv4Addr, port: u16) -> String {
+        let pubkey_hex = HEXLOWER.encode(key.verifying_key().as_bytes());
+        let signed_at_ms = unix_now_ms();
+        let sig = key.sign(&mjolnir_mesh::iroh_dial_signing_message(
+            challenge,
+            port,
+            ip,
+            signed_at_ms,
+        ));
+        let sig_hex = HEXLOWER.encode(&sig.to_bytes());
+        format!(
+            r#"{{"pubkey":"{pubkey_hex}","sig":"{sig_hex}","challenge":"{challenge}","port":{port},"ip":"{ip}","signed_at_ms":{signed_at_ms}}}"#
+        )
+    }
+
+    fn post_dial(
+        challenges: &ChallengeStore,
+        spool: &Path,
+        directory: &Path,
+        client: Option<IpAddr>,
+        body: &str,
+    ) -> RouteResponse {
+        route(
+            "POST",
+            "/api/iroh-dial",
+            None,
+            body.as_bytes(),
+            challenges,
+            spool,
+            &DirectoryCache::new(),
+            directory,
+            &RadioCache::new(),
+            Path::new("/nonexistent-radio"),
+            &new_portal_releases(),
+            client,
+        )
+    }
+
+    #[test]
+    fn iroh_dial_spools_when_the_signed_address_is_the_peer() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("directory.json");
+        let key = test_keypair();
+        let ip = Ipv4Addr::new(10, 42, 7, 20);
+        let challenge = fresh_challenge(&challenges, spool.path());
+        let body = dial_body(&key, &challenge, ip, 4000);
+        let resp = post_dial(
+            &challenges,
+            spool.path(),
+            &directory,
+            Some(IpAddr::V4(ip)),
+            &body,
+        );
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        let pubkey = HEXLOWER.encode(key.verifying_key().as_bytes());
+        let spooled = spool
+            .path()
+            .join("iroh-dial")
+            .join(format!("{pubkey}.json"));
+        assert!(spooled.exists());
+    }
+
+    #[test]
+    fn iroh_dial_rejects_a_spoofed_address_a_relay_and_a_listing() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("directory.json");
+        let key = test_keypair();
+        let ip = Ipv4Addr::new(10, 42, 7, 20);
+        let challenge = fresh_challenge(&challenges, spool.path());
+        let body = dial_body(&key, &challenge, ip, 4000);
+        let resp = post_dial(
+            &challenges,
+            spool.path(),
+            &directory,
+            Some(IpAddr::V4(Ipv4Addr::new(10, 42, 7, 21))),
+            &body,
+        );
+        assert_eq!(resp.status, 400);
+        assert!(!spool.path().join("iroh-dial").exists());
+
+        let challenge = fresh_challenge(&challenges, spool.path());
+        let mut with_relay = dial_body(&key, &challenge, ip, 4000);
+        with_relay.pop();
+        with_relay.push_str(r#","relay_url":"https://relay.example/"}"#);
+        let resp = post_dial(
+            &challenges,
+            spool.path(),
+            &directory,
+            Some(IpAddr::V4(ip)),
+            &with_relay,
+        );
+        assert_eq!(resp.status, 400);
+
+        let list = route(
+            "GET",
+            "/api/iroh",
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            &directory,
+            &RadioCache::new(),
+            Path::new("/nonexistent-radio"),
+            &new_portal_releases(),
+            None,
+        );
+        assert_eq!(list.status, 404);
+    }
+
+    #[test]
+    fn iroh_dial_lookup_returns_one_record() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("directory.json");
+        let key = test_keypair();
+        let pubkey = HEXLOWER.encode(key.verifying_key().as_bytes());
+        let ip = Ipv4Addr::new(10, 42, 7, 20);
+        let now = unix_now_ms();
+        let body = format!(
+            r#"{{"version":1,"records":{{"{pubkey}":{{"endpoint_id":"{pubkey}","ip":"{ip}","port":4000,"signed_at_ms":{now},"sig":"{}","challenge":"{}"}}}}}}"#,
+            "ab".repeat(64),
+            "cd".repeat(32),
+        );
+        std::fs::write(dir.path().join("iroh-dial.json"), body).unwrap();
+        let resp = route(
+            "GET",
+            &format!("/api/iroh/{pubkey}"),
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            &directory,
+            &RadioCache::new(),
+            Path::new("/nonexistent-radio"),
+            &new_portal_releases(),
+            None,
+        );
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        assert!(resp.cors);
+        let missing = route(
+            "GET",
+            &format!("/api/iroh/{}", "ee".repeat(32)),
+            None,
+            b"",
+            &challenges,
+            spool.path(),
+            &DirectoryCache::new(),
+            &directory,
+            &RadioCache::new(),
+            Path::new("/nonexistent-radio"),
+            &new_portal_releases(),
+            None,
+        );
+        assert_eq!(missing.status, 404);
     }
 }

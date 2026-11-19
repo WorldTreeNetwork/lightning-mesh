@@ -40,21 +40,22 @@ use mjolnir_mesh::capability_beacon::CapabilityDescriptor;
 use mjolnir_mesh::capability_transport::{CAPABILITY_ALPN, handshake_response_frame};
 use mjolnir_mesh::https_status::{HttpsName, load_https_names};
 use mjolnir_mesh::tun::{
-    DatagramConn, EncapError, NeighborRoutes, Neighbors, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU, Tunnel,
-    UnicastRouter, classify, spawn_overlay_tun, spawn_tunnel,
+    DatagramConn, EncapError, NeighborRoutes, Neighbors, OVERLAY_IFACE, OverlayDest, TUNNEL_MTU,
+    Tunnel, UnicastRouter, classify, spawn_overlay_tun, spawn_tunnel,
 };
 use mjolnir_mesh::{
-    AddrBook, AppMarker, CoordinateBook, CoordinateStamp, GossipError, GossipSync, GossipTransport,
-    HLC, LeaseBook, LeaseEntry, LeasePoll, LeasedName, LeasedNameBook, LivenessTracker, LostNameMap,
-    MergeResult, NodeNameBook, NodeNameEntry, PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome,
-    ServiceBook, ServiceBookV2, ServiceEntry, ServiceEntryV2, ServicePublishError,
-    ServiceTombstone, ServiceTombstoneBook, SubnetClaim, UnpublishOutcome, UserBook, UserEntry,
-    alloc, apply_coordinate, apply_lease, apply_leased_name, fresh_acks, parse_lease_file,
-    render_hostsfile, render_roam_static_conf,
-    apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2, device_service_key,
-    merge_node_name, merge_peer_addr, merge_service, merge_subnet_claim, merge_user, name_owned_by,
-    observe_hlc, parse_host_mac, project_coordinate, publish_service_v2,
-    publish_txt_with_marker, reap_expired, tick_hlc, validate_app_marker,
+    AddrBook, AppMarker, CoordinateBook, CoordinateStamp, DialOutcome, GossipError, GossipSync,
+    GossipTransport, HLC, IrohDialBook, LeaseBook, LeaseEntry, LeasePoll, LeasedName,
+    LeasedNameBook, LivenessTracker, LostNameMap, MergeResult, NodeNameBook, NodeNameEntry,
+    PeerAddrEntry, PeerEntry, PeerRoster, PublishOutcome, ServiceBook, ServiceBookV2, ServiceEntry,
+    ServiceEntryV2, ServicePublishError, ServiceTombstone, ServiceTombstoneBook, SubnetClaim,
+    UnpublishOutcome, UserBook, UserEntry, alloc, apply_coordinate, apply_iroh_dial, apply_lease,
+    apply_leased_name, apply_service_publish_v2_tracking_loss, apply_service_unpublish_v2,
+    device_service_key, fresh_acks, ingest_iroh_dial_spool, merge_node_name, merge_peer_addr,
+    merge_service, merge_subnet_claim, merge_user, name_owned_by, observe_hlc, parse_host_mac,
+    parse_lease_file, project_coordinate, publish_service_v2, publish_txt_with_marker,
+    reap_expired, reap_iroh_dials, render_hostsfile, render_roam_static_conf, tick_hlc,
+    unix_now_ms, validate_app_marker, write_iroh_dial_projection,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -735,6 +736,10 @@ async fn run_mesh(
     let leased_names_file = leased_names_path(&claims_file);
     let leased_names: Arc<Mutex<LeasedNameBook>> =
         Arc::new(Mutex::new(load_leased_names(&leased_names_file)));
+    // Client iroh dial hints. Not restored from disk: a socket older than the
+    // resolve window is not a dial target, and the book must not grow across
+    // reboots from heartbeats that were never deleted.
+    let iroh_dials: Arc<Mutex<IrohDialBook>> = Arc::new(Mutex::new(IrohDialBook::new()));
     if let Ok(b) = leased_names.lock()
         && !b.is_empty()
     {
@@ -1122,6 +1127,8 @@ async fn run_mesh(
                     let service_book_v2_persist_path = service_book_v2_file.clone();
                     let leased_names = leased_names.clone();
                     let leased_names_persist_path = leased_names_file.clone();
+                    let iroh_dials = iroh_dials.clone();
+                    let iroh_dial_directory = directory_file.clone();
                     let liveness = liveness.clone();
                     let neighbour_reports = neighbour_reports.clone();
                     tasks.spawn(async move {
@@ -1175,6 +1182,29 @@ async fn run_mesh(
                             // report. Held in memory for `roam_assist_loop` to
                             // install in hostapd; own echoes and stale (LWW)
                             // refreshes are dropped by the helper.
+                            if let GossipMessage::IrohDialPublish { entry } = &msg {
+                                let now = unix_now_ms();
+                                let snapshot = {
+                                    let mut book = iroh_dials.lock().expect("iroh dial book poisoned");
+                                    let outcome = apply_iroh_dial(&mut book, entry.clone(), now);
+                                    if !matches!(
+                                        outcome,
+                                        DialOutcome::Inserted | DialOutcome::Updated
+                                    ) {
+                                        return;
+                                    }
+                                    mjolnir_mesh::reap_iroh_dials(&mut book, now);
+                                    book.clone()
+                                };
+                                write_iroh_dial_projection(&iroh_dial_directory, &snapshot, now);
+                                info!(
+                                    endpoint = %entry.endpoint_id,
+                                    ip = %entry.ip,
+                                    port = entry.port,
+                                    "gossip: iroh dial updated"
+                                );
+                                return;
+                            }
                             if let GossipMessage::NeighbourReportUpdate(entry) = &msg {
                                 observe_hlc(&entry.hlc);
                                 let now_secs = SystemTime::now()
@@ -1501,6 +1531,20 @@ async fn run_mesh(
                             self_id,
                         )
                         .await
+                    });
+                }
+
+                // Client iroh dial hints. Same cadence as name claims so a
+                // just-submitted socket is gossiped within a few seconds.
+                // Every fourth tick re-announces the live book for a peer that
+                // missed the first broadcast. Nothing is persisted.
+                {
+                    let sync = sync.clone();
+                    let iroh_dials = iroh_dials.clone();
+                    let spool_path = spool_dir.clone();
+                    let directory_path = directory_file.clone();
+                    tasks.spawn(async move {
+                        iroh_dial_sweep_loop(sync, iroh_dials, spool_path, directory_path).await
                     });
                 }
 
@@ -2074,7 +2118,6 @@ fn pick_backhaul_addr(store: &HashMap<String, SubnetClaim>, self_id: &str) -> Ip
     }
     mjolnir_mesh::tun::backhaul_addr(self_id)
 }
-
 
 /// Publish this node's subnet claim. A claim we already own — typically
 /// restored from disk across a restart — is reused and re-published as-is
@@ -2875,6 +2918,63 @@ fn ingest_name_claim_spool(
         }
     }
     applied
+}
+
+/// Ingest spooled iroh dial claims, drop faded sockets, rewrite the lookup
+/// projection, and gossip what changed. Every fourth tick re-announces the
+/// live book so a node that missed a publish converges before the client's
+/// next renewal.
+async fn iroh_dial_sweep_loop<T: GossipTransport>(
+    sync: Arc<GossipSync<T>>,
+    iroh_dials: Arc<Mutex<IrohDialBook>>,
+    spool_dir: PathBuf,
+    directory_file: PathBuf,
+) {
+    let mut ticker = tokio::time::interval(NAME_CLAIM_SWEEP_INTERVAL);
+    let mut ticks: u32 = 0;
+    loop {
+        ticker.tick().await;
+        ticks = ticks.wrapping_add(1);
+        let now = unix_now_ms();
+        let applied = {
+            let mut book = iroh_dials.lock().expect("iroh dial book poisoned");
+            let applied = ingest_iroh_dial_spool(&spool_dir, &mut book, now);
+            reap_iroh_dials(&mut book, now);
+            let snapshot = book.clone();
+            write_iroh_dial_projection(&directory_file, &snapshot, now);
+            applied
+        };
+        for entry in &applied {
+            info!(
+                endpoint = %entry.endpoint_id,
+                ip = %entry.ip,
+                port = entry.port,
+                "iroh dial: ingested claim, broadcasting"
+            );
+            if let Err(err) = sync
+                .publish(GossipMessage::IrohDialPublish {
+                    entry: entry.clone(),
+                })
+                .await
+            {
+                warn!(endpoint = %entry.endpoint_id, "iroh dial: broadcast failed: {err}");
+            }
+        }
+        if ticks % 4 != 0 {
+            continue;
+        }
+        let live = iroh_dials.lock().expect("iroh dial book poisoned").clone();
+        for entry in live.values() {
+            if let Err(err) = sync
+                .publish(GossipMessage::IrohDialPublish {
+                    entry: entry.clone(),
+                })
+                .await
+            {
+                warn!(endpoint = %entry.endpoint_id, "iroh dial: re-announce failed: {err}");
+            }
+        }
+    }
 }
 
 /// How often to sweep the name-claim spool. Shorter than
@@ -3970,7 +4070,9 @@ async fn project_dhcp_roam(
                 info!(path = %hosts_path.display(), pids = n, "dhcp roam: reservations changed, HUP dnsmasq");
                 state.hup_pending = false;
             }
-            Ok(_) => debug!("dhcp roam: wrote hosts file but found no dnsmasq pid file; will retry"),
+            Ok(_) => {
+                debug!("dhcp roam: wrote hosts file but found no dnsmasq pid file; will retry")
+            }
             Err(e) => warn!("dhcp roam: HUP dnsmasq: {e}"),
         }
     }
@@ -4341,7 +4443,10 @@ async fn watch_client_neighbours_once(
         rtnetlink::new_multicast_connection(&[rtnetlink::MulticastGroup::Neigh])
             .context("open neighbour netlink")?;
     let conn_task = tokio::spawn(conn);
-    info!(iface = client_iface, ifindex, "roaming: neighbour events armed");
+    info!(
+        iface = client_iface,
+        ifindex, "roaming: neighbour events armed"
+    );
     while let Some((msg, _addr)) = messages.next().await {
         if client_ipv4_neigh(&msg, ifindex) {
             wake.notify_one();
@@ -5011,7 +5116,10 @@ fn feed_addr_lookup(lookup: &MemoryLookup, entry: &PeerAddrEntry) {
     };
     let mut ep_addr = EndpointAddr::new(id);
     for a in &entry.direct_addrs {
-        if a.ip().is_unspecified() || matches!(a.ip(), IpAddr::V4(v) if v.octets()[..2] == [10,254]) { continue; }
+        if a.ip().is_unspecified() || matches!(a.ip(), IpAddr::V4(v) if v.octets()[..2] == [10,254])
+        {
+            continue;
+        }
         ep_addr = ep_addr.with_ip_addr(*a);
     }
     if let Some(url) = &entry.relay_url {
@@ -5599,7 +5707,10 @@ fn build_self_addr_entry(ctx: &SelfAnnounce, existing: Option<&PeerAddrEntry>) -
     let mut direct: Vec<SocketAddr> = observed.ip_addrs().copied().collect();
     // Include the bound house address even before discovery publishes it.
     direct.extend(ctx.endpoint.bound_sockets());
-    direct.retain(|a| !a.ip().is_unspecified() && !matches!(a.ip(), IpAddr::V4(ip) if ip.octets()[..2] == [10,254]));
+    direct.retain(|a| {
+        !a.ip().is_unspecified()
+            && !matches!(a.ip(), IpAddr::V4(ip) if ip.octets()[..2] == [10,254])
+    });
     let relay_url = if ctx.no_relay {
         None
     } else {
@@ -7046,7 +7157,12 @@ fn bridge_port_mac(client_iface: &str) -> Option<String> {
         .filter_map(|p| {
             let name = p.file_name();
             let path = format!("/sys/class/net/{}/address", name.to_string_lossy());
-            Some(std::fs::read_to_string(path).ok()?.trim().to_ascii_lowercase())
+            Some(
+                std::fs::read_to_string(path)
+                    .ok()?
+                    .trim()
+                    .to_ascii_lowercase(),
+            )
         })
         .filter(|mac| mac != mjolnir_mesh::roam::GATEWAY_MAC)
         .min()
@@ -7060,7 +7176,10 @@ fn bridge_port_mac(client_iface: &str) -> Option<String> {
 #[cfg(target_os = "linux")]
 async fn ensure_bridge_mac(client_iface: &str, want: &str) -> Option<String> {
     let path = format!("/sys/class/net/{client_iface}/address");
-    let current = std::fs::read_to_string(&path).ok()?.trim().to_ascii_lowercase();
+    let current = std::fs::read_to_string(&path)
+        .ok()?
+        .trim()
+        .to_ascii_lowercase();
     if current == want {
         return None;
     }
@@ -8580,16 +8699,27 @@ where
 
 /// Replace the route snapshot on every poll. Withdrawal and command failure
 /// fail closed; route removal never closes the authenticated connection.
-async fn neighbor_route_mirror(iface: String, routes: Arc<Mutex<NeighborRoutes>>, conns: ConnManager) {
+async fn neighbor_route_mirror(
+    iface: String,
+    routes: Arc<Mutex<NeighborRoutes>>,
+    conns: ConnManager,
+) {
     loop {
         conns.prune();
         let mut dumps = [String::new(), String::new()];
         for (slot, family) in ["-4", "-6"].into_iter().enumerate() {
-            if let Ok(out) = tokio::process::Command::new("ip").args([family, "route", "show", "dev", &iface]).output().await {
-                if out.status.success() { dumps[slot] = String::from_utf8_lossy(&out.stdout).into_owned(); }
+            if let Ok(out) = tokio::process::Command::new("ip")
+                .args([family, "route", "show", "dev", &iface])
+                .output()
+                .await
+            {
+                if out.status.success() {
+                    dumps[slot] = String::from_utf8_lossy(&out.stdout).into_owned();
+                }
             }
         }
-        *routes.lock().expect("routes poisoned") = NeighborRoutes::snapshots(&dumps[0], &dumps[1], &iface);
+        *routes.lock().expect("routes poisoned") =
+            NeighborRoutes::snapshots(&dumps[0], &dumps[1], &iface);
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -9092,9 +9222,7 @@ fn check_reachability(endpoint: &Endpoint, no_relay: bool) {
             "reachability OK — peers can connect"
         );
     } else if no_relay && has_nonloopback {
-        warn!(
-            "--no-relay: house peers are reached through physical Babel host routes"
-        );
+        warn!("--no-relay: house peers are reached through physical Babel host routes");
     } else {
         error!(
             "NOT REACHABLE: no iroh relay and no public address. Peers on other networks \

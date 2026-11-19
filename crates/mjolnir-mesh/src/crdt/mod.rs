@@ -3,6 +3,7 @@ pub mod dns;
 pub mod egress;
 pub mod gossip;
 pub mod hlc;
+pub mod iroh_dial;
 pub mod lease;
 pub mod leased_name;
 pub mod liveness;

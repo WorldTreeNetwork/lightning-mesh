@@ -157,6 +157,15 @@ pub enum GossipMessage {
     /// dropped report just means the old node's APs advertise no neighbours,
     /// as they do today).
     NeighbourReportUpdate(NeighbourReportEntry),
+    /// Client iroh dial hint, keyed by `entry.endpoint_id` (the signing key).
+    ///
+    /// Memory-only. Merge is last-writer-wins on the client-signed timestamp,
+    /// and the signature is re-checked on apply. Appended last so existing
+    /// discriminants are undisturbed; a node that predates this variant
+    /// decode-errors and the gossip recv loop log-and-skips it.
+    IrohDialPublish {
+        entry: crate::crdt::iroh_dial::IrohDialEntry,
+    },
 }
 
 #[cfg(test)]
@@ -451,6 +460,30 @@ mod tests {
         let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
         let GossipMessage::NeighbourReportUpdate(got) = decoded else {
+            panic!("decoded to a different variant");
+        };
+        assert_eq!(got, entry);
+    }
+
+    #[test]
+    fn postcard_roundtrip_iroh_dial_publish() {
+        let entry = crate::crdt::iroh_dial::IrohDialEntry {
+            endpoint_id: "ab".repeat(32),
+            ip: Ipv4Addr::new(10, 42, 7, 20),
+            port: 4000,
+            signed_at_ms: 1_700_000_000_000,
+            sig: "cd".repeat(64),
+            challenge: "ef".repeat(32),
+        };
+        let msg = GossipMessage::IrohDialPublish {
+            entry: entry.clone(),
+        };
+        let bytes = postcard::to_allocvec(&msg).unwrap();
+        // Appended last: discriminant 15, one varint byte.
+        assert_eq!(bytes[0], 15);
+        let decoded: GossipMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, postcard::to_allocvec(&decoded).unwrap());
+        let GossipMessage::IrohDialPublish { entry: got } = decoded else {
             panic!("decoded to a different variant");
         };
         assert_eq!(got, entry);
