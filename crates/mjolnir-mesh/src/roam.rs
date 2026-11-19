@@ -8,7 +8,9 @@
 //! When a phone keeps the IP another node vended and associates here, this
 //! node holds a host `/32` on the client bridge so inbound mesh traffic
 //! follows the client. Parsers are pure over `ip neigh` / `iw` text; the
-//! daemon installs the routes.
+//! daemon installs the routes. It reconciles when an IPv4 neighbour changes
+//! on the client bridge (the phone's ARP), and again on a short backstop so
+//! a missed event still converges.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::net::Ipv4Addr;

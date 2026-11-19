@@ -4146,9 +4146,9 @@ async fn reconcile_dhcp_roam_uci() {
     }
 }
 
-/// Reconcile cadence for roamed-client host routes. Faster than
-/// [`RADIO_INTERVAL`] because this is the roam-latency path: it bounds how long
-/// inbound traffic to a just-arrived client keeps following the stale route.
+/// Backstop for [`roam_loop`]. A neighbour event installs a mobility `/32`
+/// as soon as the phone's ARP lands. This interval only catches a missed
+/// event, and a station that left without deleting its neighbour entry.
 const ROAM_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How often to re-assert kernel dataplane state the claim path only sets
@@ -4248,9 +4248,15 @@ fn collect_roam_evidence(
 /// Install or withdraw one mobility `/32`. Stamped with
 /// [`MOBILITY_ROUTE_PROTO`](mjolnir_mesh::roam::MOBILITY_ROUTE_PROTO) so babeld's
 /// static `redistribute proto` line picks it up and nothing else on the box is
-/// mistaken for one. Returns true on success.
+/// mistaken for one. `cause` is `neigh` (a client ARP woke us) or `tick`
+/// (the backstop). Returns true on success.
 #[cfg(target_os = "linux")]
-async fn apply_mobility_route(add: bool, guest: Ipv4Addr, client_iface: &str) -> bool {
+async fn apply_mobility_route(
+    add: bool,
+    guest: Ipv4Addr,
+    client_iface: &str,
+    cause: &'static str,
+) -> bool {
     use tokio::process::Command;
     let proto = mjolnir_mesh::roam::MOBILITY_ROUTE_PROTO.to_string();
     let dst = format!("{guest}/32");
@@ -4261,7 +4267,7 @@ async fn apply_mobility_route(add: bool, guest: Ipv4Addr, client_iface: &str) ->
         .await;
     match out {
         Ok(o) if o.status.success() => {
-            info!(%guest, iface = client_iface, add, "roaming: mobility /32 reconciled");
+            info!(%guest, iface = client_iface, add, cause, "roaming: mobility /32 reconciled");
             true
         }
         Ok(o) => {
@@ -4276,14 +4282,82 @@ async fn apply_mobility_route(add: bool, guest: Ipv4Addr, client_iface: &str) ->
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn apply_mobility_route(_add: bool, _guest: Ipv4Addr, _client_iface: &str) -> bool {
+async fn apply_mobility_route(
+    _add: bool,
+    _guest: Ipv4Addr,
+    _client_iface: &str,
+    _cause: &'static str,
+) -> bool {
     false
 }
 
-/// Roaming loop (mjolnir-mesh-sz9): every [`ROAM_INTERVAL`], hold a `/32` for
-/// each client that is attached to *this* node while carrying an address some
-/// other node vended, so inbound traffic follows it across a roam without the
-/// client ever renumbering.
+/// True when this netlink message is an IPv4 neighbour add or delete on
+/// `ifindex`. Bridge FDB updates share the neighbour group and are ignored
+/// (they are `AF_BRIDGE`, and they fire for every learned MAC).
+#[cfg(target_os = "linux")]
+fn client_ipv4_neigh(
+    msg: &rtnetlink::packet_core::NetlinkMessage<rtnetlink::packet_route::RouteNetlinkMessage>,
+    ifindex: u32,
+) -> bool {
+    use rtnetlink::packet_core::NetlinkPayload;
+    use rtnetlink::packet_route::{AddressFamily, RouteNetlinkMessage};
+    let neigh = match &msg.payload {
+        NetlinkPayload::InnerMessage(
+            RouteNetlinkMessage::NewNeighbour(n) | RouteNetlinkMessage::DelNeighbour(n),
+        ) => n,
+        _ => return false,
+    };
+    neigh.header.family == AddressFamily::Inet && neigh.header.ifindex == ifindex
+}
+
+/// Sit on `RTNLGRP_NEIGH` and wake `wake` for IPv4 neighbour changes on the
+/// client bridge. BusyBox `ip` has no `monitor`, so this is the event path.
+/// Restarts itself: a missing bridge at boot, or a dropped socket, must not
+/// leave roaming on the backstop forever.
+#[cfg(target_os = "linux")]
+async fn watch_client_neighbours(client_iface: String, wake: Arc<tokio::sync::Notify>) {
+    loop {
+        match watch_client_neighbours_once(&client_iface, &wake).await {
+            Ok(()) => warn!(iface = %client_iface, "roaming: neighbour watch ended"),
+            Err(e) => warn!(iface = %client_iface, "roaming: neighbour watch stopped: {e:#}"),
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn watch_client_neighbours_once(
+    client_iface: &str,
+    wake: &tokio::sync::Notify,
+) -> Result<()> {
+    use futures_lite::StreamExt;
+    let raw = std::fs::read_to_string(format!("/sys/class/net/{client_iface}/ifindex"))
+        .with_context(|| format!("ifindex for {client_iface}"))?;
+    let ifindex: u32 = raw
+        .trim()
+        .parse()
+        .with_context(|| format!("ifindex {raw:?} for {client_iface}"))?;
+    let (conn, _handle, mut messages) =
+        rtnetlink::new_multicast_connection(&[rtnetlink::MulticastGroup::Neigh])
+            .context("open neighbour netlink")?;
+    let conn_task = tokio::spawn(conn);
+    info!(iface = client_iface, ifindex, "roaming: neighbour events armed");
+    while let Some((msg, _addr)) = messages.next().await {
+        if client_ipv4_neigh(&msg, ifindex) {
+            wake.notify_one();
+        }
+    }
+    conn_task.abort();
+    Ok(())
+}
+
+/// Roaming loop (mjolnir-mesh-sz9): hold a `/32` for each client that is
+/// attached to *this* node while carrying an address some other node vended,
+/// so inbound traffic follows it across a roam without the client renumbering.
+///
+/// A neighbour event installs the route as soon as the phone's ARP lands.
+/// [`ROAM_INTERVAL`] is only the backstop: station departure often leaves the
+/// neighbour entry `STALE`, so a quiet leave is still noticed within one tick.
 ///
 /// The installed set is tracked in memory rather than read back from the kernel:
 /// it is the set *we* are responsible for, and rebuilding it from `ip route`
@@ -4296,11 +4370,34 @@ async fn roam_loop(store: ClaimStore, self_id: String, client_iface: String) {
     // client's traffic here after it left. Start from a clean slate.
     flush_mobility_routes(&client_iface).await;
 
+    #[cfg(target_os = "linux")]
+    let wake = {
+        let wake = Arc::new(tokio::sync::Notify::new());
+        let notify = wake.clone();
+        let iface = client_iface.clone();
+        tokio::spawn(async move { watch_client_neighbours(iface, notify).await });
+        Some(wake)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let wake: Option<Arc<tokio::sync::Notify>> = None;
+
     let mesh_space = alloc::DEFAULT_MESH_SPACE;
     let mut installed: BTreeSet<Ipv4Addr> = BTreeSet::new();
     let mut ticker = tokio::time::interval(ROAM_INTERVAL);
     loop {
-        ticker.tick().await;
+        let cause = tokio::select! {
+            _ = ticker.tick() => "tick",
+            _ = async {
+                match &wake {
+                    Some(w) => w.notified().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                // One ARP lands as several nud updates. Fold them into one reconcile.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                "neigh"
+            }
+        };
         let own_subnet = {
             let s = store.lock().expect("claim store poisoned");
             partition_claims(&s, &self_id).0.map(|(net, _)| net)
@@ -4322,12 +4419,12 @@ async fn roam_loop(store: ClaimStore, self_id: String, client_iface: String) {
         });
         let (add, del) = mjolnir_mesh::roam::route_delta(&installed, &desired);
         for guest in add {
-            if apply_mobility_route(true, guest, &client_iface).await {
+            if apply_mobility_route(true, guest, &client_iface, cause).await {
                 installed.insert(guest);
             }
         }
         for guest in del {
-            if apply_mobility_route(false, guest, &client_iface).await {
+            if apply_mobility_route(false, guest, &client_iface, cause).await {
                 installed.remove(&guest);
             }
         }
