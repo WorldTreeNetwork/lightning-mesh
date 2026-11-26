@@ -27,8 +27,7 @@ use iroh::endpoint::Connection;
 use iroh::endpoint::presets;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
-use iroh_gossip::api::{Event, GossipReceiver, GossipSender};
-use iroh_gossip::{Gossip, TopicId};
+use iroh_gossip::{Event, Gossip, GossipReceiver, GossipSender, TopicId};
 use iroh_mdns_address_lookup::MdnsAddressLookup;
 use mjolnir_mesh::GossipMessage;
 use mjolnir_mesh::babel::{
