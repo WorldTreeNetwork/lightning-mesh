@@ -133,3 +133,5 @@ log.append("RESULT=predicates hold (no-go still matches this source)")
 pathlib.Path(log_p).write_text("\n".join(log) + "\n")
 print("\n".join(log))
 PY
+# *.log is gitignored. Keep a tracked copy next to the finding.
+cp -f "$OUT/evidence.log" "$OUT/evidence.txt"

@@ -28,7 +28,7 @@ Source read of the dial path, no production edit and no live dial. `Endpoint::co
 
 `Endpoint::connect` docs (`endpoint.rs` 1029–1030) say lookup is used when the remote is not reachable on the supplied direct addresses and there is no `RelayUrl`. That sentence is stricter than `trigger_address_lookup`. Lookup is armed in the same handler as the insert, before any miss can be observed, and it is armed whether or not a relay URL was supplied.
 
-The predicate script printed `RESULT=predicates hold`. Excerpts are in `evidence.code`. The log is `evidence.log`.
+The predicate script printed `RESULT=predicates hold`. Excerpts are in `evidence.code`. The log is `evidence.log`, and the tracked copy is `evidence.txt` because `*.log` is gitignored.
 
 ## Verdict: no-go
 
