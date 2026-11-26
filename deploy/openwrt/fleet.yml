@@ -1,8 +1,7 @@
 # Live RF / LAN snapshot for agents. NOT consumed by update-fleet.sh
 # (that still walks fleet-nodes.conf). Observed 2026-11-26 from IdentiKey
-# Pirate Radio. Node ids below are the inventory ids whose recorded BSSIDs
-# matched this scan. Nothing answered GET /api/node from this vantage.
-# Do not invent a fifth id.
+# Pirate Radio, then confirmed by mjolnir-meshd status over SSH.
+# Do not invent a fifth id. The cabled M3000 stays pending.
 
 observed_at: 2026-11-26
 observer:
@@ -27,7 +26,8 @@ nodes:
     model: Cudy AP3000 v1
     node_id: e9688ef6e872588f64a3025f81871614ab5dd276dc06b5b7629f6ea7b840753e
     overlay: 10.254.61.119
-    lan_gw: 10.42.62.1
+    lan_gw: 10.42.61.1
+    build: 06b2ab9-dirty
     client_bssid: "D4:0D:AB:5C:02:82"
     mesh_bssid: "D6:0D:AB:5C:02:83"
     client_signal_dbm: -31
@@ -38,6 +38,8 @@ nodes:
     model: OpenWrt One
     node_id: 4298275cb60f39582d8c41187494ee01171379184db10f9ebc4885b15e4fbced
     lan_gw: 10.42.58.1
+    build: 06b2ab9-dirty
+    uci_name: ""
     client_bssid: "20:05:B6:02:E2:53"
     extra_ssid: "ZKNode"
     extra_bssid: "20:05:B6:02:E2:52"
@@ -50,6 +52,9 @@ nodes:
     model: Cudy AP3000 Outdoor v1
     node_id: 0d11599454e4fdadcc7ada776120f353fbf2d3b7d9ea618cf85cc2ae963b2a4b
     overlay: 10.254.166.226
+    lan_gw: 10.42.166.1
+    link_local: "fe80::80af:caff:fef2:20f6%br-mesh"
+    build: 06b2ab9-dirty
     client_bssid: "80:AF:CA:F2:20:F5"
     mesh_bssid: "82:AF:CA:F2:20:F6"
     client_signal_dbm: -42
@@ -62,7 +67,8 @@ nodes:
     model: Cudy TR3000 v1
     node_id: 06318b4287049a45395143e20c7a77f82e69c4dcf6d8571eff19faa8dbfb16f3
     overlay: 10.254.61.115
-    lan_gw: 10.42.61.1
+    lan_gw: 10.42.62.1
+    build: 06b2ab9-dirty
     client_bssid: "80:AF:CA:98:FB:0F"
     mesh_bssid: "82:AF:CA:98:FB:10"
     client_heard: false
@@ -71,7 +77,7 @@ nodes:
     wan_mac: "80:af:ca:98:fb:10"
     wan_tcp: "22 and 80 closed; ping about 2 ms"
     group: house
-    role_notes: "WAN on the Pirate Radio router. House jump. Walk last."
+    role_notes: "WAN on the Pirate Radio router. Client LAN is 10.42.62.1. 10.42.61.1 is indoor. House jump. Walk last."
 
   - name: m3000-bench
     model: Cudy M3000 V2.0
