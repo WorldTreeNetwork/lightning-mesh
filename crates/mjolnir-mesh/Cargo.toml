@@ -32,7 +32,7 @@ tracing.workspace = true
 iroh = { workspace = true, optional = true }
 # LAN peer discovery (mDNS) for `--lan` mode — no relay or internet needed.
 # iroh 1.0 moved mDNS out of iroh's feature flags into this standalone crate.
-iroh-mdns-address-lookup = { version = "0.4", optional = true }
+iroh-mdns-address-lookup = { version = "0.6", optional = true }
 # CRDT gossip overlay (the concrete `GossipTransport` impl for crdt::sync).
 iroh-gossip = { workspace = true, optional = true }
 # `StreamExt::next` on the gossip event stream — cross-platform (unlike the

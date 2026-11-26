@@ -13,8 +13,8 @@ license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
 # iroh networking
-iroh = "1.0"
-iroh-gossip = "0.101"
+iroh = "1.5"
+iroh-gossip = "0.103"
 
 # async runtime
 tokio = { version = "1", features = ["full"] }
