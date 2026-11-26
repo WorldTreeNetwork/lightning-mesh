@@ -2675,6 +2675,101 @@ mod tests {
         assert!(spooled.exists());
     }
 
+    fn dial_entry(key: &SigningKey, ip: Ipv4Addr, signed_at_ms: u64) -> IrohDialEntry {
+        let challenge = "cd".repeat(32);
+        let sig = key.sign(&mjolnir_mesh::iroh_dial_signing_message(
+            &challenge, 4000, ip, signed_at_ms,
+        ));
+        IrohDialEntry {
+            endpoint_id: HEXLOWER.encode(key.verifying_key().as_bytes()),
+            ip,
+            port: 4000,
+            signed_at_ms,
+            sig: HEXLOWER.encode(&sig.to_bytes()),
+            challenge,
+        }
+    }
+
+    #[test]
+    fn iroh_dial_cap_refuses_a_move_without_spending_the_challenge() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("directory.json");
+        let projection = directory.with_file_name(mjolnir_mesh::PROJECTION_FILE);
+        let ip = Ipv4Addr::new(10, 42, 2, 20);
+        let now = unix_now_ms();
+        let mut book = mjolnir_mesh::IrohDialBook::new();
+        for seed in 1..=8u8 {
+            let key = SigningKey::from_bytes(&[seed; 32]);
+            assert_eq!(
+                mjolnir_mesh::apply_iroh_dial(&mut book, dial_entry(&key, ip, now), now),
+                mjolnir_mesh::DialOutcome::Inserted,
+            );
+        }
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let elsewhere = Ipv4Addr::new(10, 42, 2, 10);
+        assert_eq!(
+            mjolnir_mesh::apply_iroh_dial(&mut book, dial_entry(&key, elsewhere, now - 1_000), now),
+            mjolnir_mesh::DialOutcome::Inserted,
+        );
+        std::fs::write(&projection, mjolnir_mesh::iroh_dial_projection_json(&book, now)).unwrap();
+        let challenge = fresh_challenge(&challenges, spool.path());
+        let body = dial_body(&key, &challenge, ip, 4000);
+        let resp = post_dial(&challenges, spool.path(), &directory, Some(IpAddr::V4(ip)), &body);
+        assert_eq!(resp.status, 400);
+        let error: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(error["error"], "too many dial records from this address");
+        assert!(challenges.lock().unwrap().contains_key(&challenge));
+        assert!(!spool.path().join("iroh-dial").exists());
+
+        std::fs::remove_file(&projection).unwrap();
+        let resp = post_dial(&challenges, spool.path(), &directory, Some(IpAddr::V4(ip)), &body);
+        assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
+        assert!(!challenges.lock().unwrap().contains_key(&challenge));
+        let pubkey = HEXLOWER.encode(key.verifying_key().as_bytes());
+        assert!(spool.path().join("iroh-dial").join(format!("{pubkey}.json")).exists());
+    }
+
+    #[test]
+    fn iroh_dial_renewal_is_refused_when_the_address_holds_nine() {
+        let (challenges, spool) = no_state();
+        let dir = tempfile::tempdir().unwrap();
+        let directory = dir.path().join("directory.json");
+        let ip = Ipv4Addr::new(10, 42, 2, 20);
+        let now = unix_now_ms();
+        let mut book = mjolnir_mesh::IrohDialBook::new();
+        for seed in 1..=8u8 {
+            let key = SigningKey::from_bytes(&[seed; 32]);
+            assert_eq!(
+                mjolnir_mesh::apply_iroh_dial(&mut book, dial_entry(&key, ip, now), now),
+                mjolnir_mesh::DialOutcome::Inserted,
+            );
+        }
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let elsewhere = Ipv4Addr::new(10, 42, 2, 10);
+        assert_eq!(
+            mjolnir_mesh::apply_iroh_dial(&mut book, dial_entry(&key, elsewhere, now - 2_000), now),
+            mjolnir_mesh::DialOutcome::Inserted,
+        );
+        assert_eq!(
+            mjolnir_mesh::apply_iroh_dial(&mut book, dial_entry(&key, ip, now - 1_000), now),
+            mjolnir_mesh::DialOutcome::Updated,
+        );
+        assert_eq!(book.values().filter(|entry| entry.ip == ip).count(), 9);
+        std::fs::write(
+            directory.with_file_name(mjolnir_mesh::PROJECTION_FILE),
+            mjolnir_mesh::iroh_dial_projection_json(&book, now),
+        ).unwrap();
+        let challenge = fresh_challenge(&challenges, spool.path());
+        let body = dial_body(&key, &challenge, ip, 4000);
+        let resp = post_dial(&challenges, spool.path(), &directory, Some(IpAddr::V4(ip)), &body);
+        assert_eq!(resp.status, 400);
+        let error: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(error["error"], "too many dial records from this address");
+        assert!(challenges.lock().unwrap().contains_key(&challenge));
+        assert!(!spool.path().join("iroh-dial").exists());
+    }
+
     #[test]
     fn iroh_dial_rejects_a_spoofed_address_a_relay_and_a_listing() {
         let (challenges, spool) = no_state();

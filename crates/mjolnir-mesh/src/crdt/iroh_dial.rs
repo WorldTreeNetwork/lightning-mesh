@@ -482,6 +482,40 @@ mod tests {
     }
 
     #[test]
+    fn known_endpoint_moves_onto_a_full_address() {
+        let now = 1_700_000_000_000;
+        let full = Ipv4Addr::new(10, 42, 2, 20);
+        let elsewhere = Ipv4Addr::new(10, 42, 2, 10);
+        let claim = |seed: u8, ip, at| {
+            let key = SigningKey::from_bytes(&[seed; 32]);
+            let challenge = "cd".repeat(32);
+            IrohDialEntry {
+                endpoint_id: hex_encode(key.verifying_key().as_bytes()),
+                ip,
+                port: 4000,
+                signed_at_ms: at,
+                sig: hex_encode(&key.sign(&signing_message(&challenge, 4000, ip, at)).to_bytes()),
+                challenge,
+            }
+        };
+        let mut book = IrohDialBook::new();
+        for seed in 1..=8u8 {
+            assert_eq!(apply(&mut book, claim(seed, full, now), now), DialOutcome::Inserted);
+        }
+        assert_eq!(apply(&mut book, claim(9, elsewhere, now), now), DialOutcome::Inserted);
+        let moved = claim(9, full, now + 1_000);
+        assert_eq!(apply(&mut book, moved.clone(), now + 1_000), DialOutcome::Updated);
+        assert_eq!(book.values().filter(|entry| entry.ip == full && resolves(entry, now + 1_000)).count(), 9);
+
+        let projection = projection_json(&book, now + 1_000);
+        assert!(projection_source_at_cap(projection.as_bytes(), full, &moved.endpoint_id, now + 2_000));
+        for seed in 1..=8u8 {
+            let id = claim(seed, full, now).endpoint_id;
+            assert!(projection_source_at_cap(projection.as_bytes(), full, &id, now + 2_000));
+        }
+    }
+
+    #[test]
     fn lookup_returns_one_live_record() {
         let now = 1_700_000_000_000;
         let (_key, entry) = signed(4000, Ipv4Addr::new(10, 42, 7, 20), now);
