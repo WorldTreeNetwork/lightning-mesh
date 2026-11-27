@@ -39,6 +39,10 @@ impl AppTunOpen {
     /// not authenticate admissions or read a guild log. Own-house prefixes are
     /// excluded using the guild stored at open. Failed deletes or observations
     /// retain ownership so a later sync can retry.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "public API signals that route reconciliation needs a retry"
+    )]
     pub fn sync_admitted_routes(&mut self, prefixes: &[[u8; 6]]) -> Result<(), ()> {
         let Some(session) = &self.inner else {
             return Ok(());

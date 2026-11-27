@@ -1073,13 +1073,12 @@ fn note_mentioning_holder_is_not_a_holder_fact() {
 fn authority_block_without_holder_check_is_refused() {
     let root = KeyPair::new();
     let (sk, hk) = holder();
-    let source = format!(
-        r#"
+    let source = r#"
         right("diagnostics_status");
         issued_at(1000);
         expires_at(100000);
-        "#,
-    );
+        "#
+    .to_string();
     let raw = mint_code(&root, &source);
     let (_, proof) = proof_for(Operation::DiagnosticsStatus, &raw, &sk, &hk, 1);
     let auth = authority(

@@ -289,7 +289,7 @@ fn decode_lower_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
         return None;
     }
     let mut bytes = [0; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
     Some(bytes)
@@ -309,9 +309,7 @@ mod tests {
     use super::*;
 
     const NODE_ID: &str = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
-    const GOLDEN_PAYLOAD: &str = concat!(
-        r#"{"protocol_generation":1,"node_id":"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a","channel_plan":[{"frequency_mhz":5180,"width_mhz":80}],"bootstrap":{"direct_addrs":["10.254.0.1:7000","[fd00::1]:7000"],"relay_url":"https://relay.example/bootstrap"}}"#,
-    );
+    const GOLDEN_PAYLOAD: &str = "{\"protocol_generation\":1,\"node_id\":\"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a\",\"channel_plan\":[{\"frequency_mhz\":5180,\"width_mhz\":80}],\"bootstrap\":{\"direct_addrs\":[\"10.254.0.1:7000\",\"[fd00::1]:7000\"],\"relay_url\":\"https://relay.example/bootstrap\"}}";
 
     fn node() -> SigningKey {
         // RFC 8032 test vector 1, shared with https_issuance.rs fixtures.

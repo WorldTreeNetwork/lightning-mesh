@@ -440,7 +440,9 @@ fn decode_u64(d: &mut Decoder<'_>) -> Result<u64, CodecError> {
         .map_err(|_| CodecError::Malformed("expected an unsigned integer"))
 }
 
-fn decode_state(d: &mut Decoder<'_>) -> Result<(Vec<[u8; 32]>, Vec<Vec<u8>>), CodecError> {
+type IssuersAndRevokedLineage = (Vec<[u8; 32]>, Vec<Vec<u8>>);
+
+fn decode_state(d: &mut Decoder<'_>) -> Result<IssuersAndRevokedLineage, CodecError> {
     let n = d
         .array()
         .map_err(|_| CodecError::Malformed("expected the issuer array"))?
@@ -695,7 +697,7 @@ struct Book {
 
 #[derive(Debug, Clone)]
 enum BookState {
-    Readable(Book),
+    Readable(Box<Book>),
     Unreadable,
 }
 
@@ -722,7 +724,7 @@ impl AuthorityBook {
     pub fn provision(anchor: AuthorityAnchor) -> Self {
         AuthorityBook {
             anchor,
-            state: BookState::Readable(Book::default()),
+            state: BookState::Readable(Box::default()),
         }
     }
 
@@ -730,7 +732,7 @@ impl AuthorityBook {
     /// anchor or re-verification failure yields an unreadable book.
     pub fn restore(anchor: AuthorityAnchor, stored: Option<&[u8]>) -> Self {
         let state = match stored.and_then(|bytes| restore_book(&anchor, bytes)) {
-            Some(book) => BookState::Readable(book),
+            Some(book) => BookState::Readable(Box::new(book)),
             None => BookState::Unreadable,
         };
         AuthorityBook { anchor, state }

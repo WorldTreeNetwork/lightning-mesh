@@ -119,10 +119,10 @@ pub fn parse_associated_macs(dump: &str) -> Vec<String> {
     let mut macs = Vec::new();
     for line in dump.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Station ") {
-            if let Some(mac) = rest.split_whitespace().next() {
-                macs.push(normalize_mac(mac));
-            }
+        if let Some(rest) = trimmed.strip_prefix("Station ")
+            && let Some(mac) = rest.split_whitespace().next()
+        {
+            macs.push(normalize_mac(mac));
         }
     }
     macs

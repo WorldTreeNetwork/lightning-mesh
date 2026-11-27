@@ -47,7 +47,7 @@ pub fn usable_backhaul_binding(
 pub fn on_link_backhaul_route(text: &str, peer: Ipv6Addr, iface: &str) -> bool {
     text.lines().any(|line| {
         let t: Vec<_> = line.split_whitespace().collect();
-        if t.iter().any(|w| *w == "unreachable") {
+        if t.contains(&"unreachable") {
             return false;
         }
         let field = |k| {
