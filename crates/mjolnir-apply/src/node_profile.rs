@@ -1,7 +1,7 @@
 //! Wired node-connection profiles (`add-wired-node-profiles`, bead
 //! `mjolnir-mesh-ai0.6`).
 //!
-//! A pure decider and plan builder. It reads the UCI text it is handed, gives
+//! A pure profile/radioset decider and plan builder. It reads the UCI text it is handed, gives
 //! every port and radio exactly one role, renders the desired allowlisted UCI
 //! files, and returns one revision-checked [`Plan`]. It never reads the node,
 //! writes a file, or talks to a radio. Every refusal happens here, before a
@@ -28,6 +28,95 @@ pub const CLIENT_BRIDGE: &str = "br-lan";
 pub const MESH_BRIDGE: &str = "br-mesh";
 /// Image directory holding per-model port maps, one `<model>.json` each.
 pub const PORT_MAP_DIR: &str = "/usr/share/mjolnir/port-maps";
+/// Image directory holding `<model>.json` radio maps.
+pub const RADIO_MAP_DIR: &str = "/usr/share/mjolnir/radio-maps";
+/// Identity fixture; hardware qualification is deliberately separate.
+pub const OPENWRT_ONE_RADIO_MAP: &str = r#"{"model":"openwrt,one","qualified":false,"phys":[{"id":"radio0","band":"2g","path":"platform/soc/18000000.wifi"},{"id":"radio1","band":"5g","path":"platform/soc/18000000.wifi+1"}]}"#;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadioPhy {
+    pub id: String,
+    pub band: Band,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadioMap {
+    pub model: String,
+    #[serde(default)]
+    pub qualified: bool,
+    pub phys: Vec<RadioPhy>,
+}
+
+impl RadioMap {
+    pub fn parse(text: &str) -> Result<Self, ProfileRefusal> {
+        let map: Self = serde_json::from_str(text)
+            .map_err(|e| ProfileRefusal::InvalidRadioMap(format!("{e}")))?;
+        map.validate()?;
+        Ok(map)
+    }
+
+    fn validate(&self) -> Result<(), ProfileRefusal> {
+        let mut ids = BTreeSet::new();
+        let mut paths = BTreeSet::new();
+        if self.model.is_empty() || self.phys.is_empty() {
+            return Err(ProfileRefusal::InvalidRadioMap(
+                "empty model or phys".into(),
+            ));
+        }
+        for phy in &self.phys {
+            if !is_ifname(&phy.id)
+                || phy.path.is_empty()
+                || !ids.insert(&phy.id)
+                || !paths.insert(&phy.path)
+            {
+                return Err(ProfileRefusal::InvalidRadioMap(
+                    "invalid or duplicate id/path".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Canonical selection. Functions use map ids, never band-based discovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadiosetRecord {
+    pub id: String,
+    pub variant: Option<String>,
+    pub functions: BTreeMap<String, RadioRole>,
+}
+
+impl RadiosetRecord {
+    pub fn from_assignments(
+        id: &str,
+        assignments: &[(String, RadioRole)],
+    ) -> Result<Self, ProfileRefusal> {
+        let mut record = Self::definition(id)?;
+        record.functions = single_roles("radio", assignments)?;
+        Ok(record)
+    }
+
+    pub fn definition(id: &str) -> Result<Self, ProfileRefusal> {
+        let (mesh, client, variant) = match id {
+            "satellite-split" => ("radio1", "radio0", None),
+            "satellite-split-2g" => ("radio0", "radio1", Some("2g".into())),
+            _ => return Err(ProfileRefusal::UnknownRadioset(id.into())),
+        };
+        Ok(Self {
+            id: id.into(),
+            variant,
+            functions: BTreeMap::from([
+                (mesh.into(), RadioRole::Mesh),
+                (client.into(), RadioRole::ClientAp),
+            ]),
+        })
+    }
+}
+
 /// Ethernet recovery address of last resort. Never copied onto another node.
 const RECOVERY_ADDRESS: &str = "192.168.1.1";
 /// netifd interface-name prefix for node-link L3 interfaces.
@@ -159,10 +248,6 @@ impl Band {
             _ => None,
         }
     }
-
-    fn is_client_band(self) -> bool {
-        matches!(self, Self::TwoG | Self::FiveG)
-    }
 }
 
 impl fmt::Display for Band {
@@ -241,6 +326,14 @@ fn is_ifname(name: &str) -> bool {
 pub enum ProfileRefusal {
     #[error("cannot parse {file}: {detail}")]
     Parse { file: &'static str, detail: String },
+    #[error("invalid radio map or inventory: {0}")]
+    InvalidRadioMap(String),
+    #[error("unknown radioset {0}")]
+    UnknownRadioset(String),
+    #[error("profile radio roles must be stored in radio-sets")]
+    ProfileRadioRoles,
+    #[error("invalid radioset: {0}")]
+    InvalidRadioset(String),
     #[error("invalid port map: {0}")]
     InvalidPortMap(String),
     #[error("{kind} {name} has more than one role: {roles}")]
@@ -360,6 +453,7 @@ impl NodeConfig {
 pub struct NodeFacts {
     pub model: String,
     pub port_map: Option<PortMap>,
+    pub radio_map: Option<RadioMap>,
     pub config: NodeConfig,
     /// Current mesh peers whose only path is this node's mesh radio.
     pub wireless_only_peers: Vec<String>,
@@ -371,9 +465,14 @@ pub struct ProfileRequest {
     /// Explicit port roles. Satellites keep today's ports unless overridden;
     /// wired profiles disable every mapped port not named here.
     pub ports: Vec<(String, PortRole)>,
-    /// Explicit radio roles. Unnamed radios take the profile's default role.
+    /// Legacy input: refused; radio roles belong in radio-sets.
     pub radios: Vec<(String, RadioRole)>,
-    /// The mesh backhaul band. Fleet-wide (`setup-wireless.sh BACKHAUL_BAND`).
+    /// Profile reference takes precedence over first-adoption backhaul_band.
+    pub radioset_id: Option<String>,
+    /// Explicit replacement record for a composed radioset transaction.
+    pub radioset: Option<RadiosetRecord>,
+    /// First-adoption hint only; a profile reference or committed set wins.
+    /// Backhaul changes still require fleet coordination and reachability.
     pub backhaul_band: Band,
     /// The radio `add-wifi-internet-uplink` assigns as a station, if any.
     pub uplink_station_radio: Option<String>,
@@ -389,6 +488,8 @@ impl ProfileRequest {
             profile,
             ports: Vec::new(),
             radios: Vec::new(),
+            radioset_id: None,
+            radioset: None,
             backhaul_band: Band::FiveG,
             uplink_station_radio: None,
             acknowledge_stranded_peers: false,
@@ -403,6 +504,8 @@ pub struct ProfileDecision {
     pub cable_loss: Option<CableLoss>,
     pub ports: BTreeMap<String, PortRole>,
     pub radios: BTreeMap<String, RadioRole>,
+    pub radioset: RadiosetRecord,
+    pub uplink_station_radio: Option<String>,
 }
 
 impl ProfileDecision {
@@ -454,6 +557,11 @@ impl ProfilePlan {
 /// vantage. Under `isolate`, mesh reachability means a babel neighbour over the
 /// node-link, not an 802.11s peer (bead `mjolnir-mesh-2mgv`). The OpenWrt
 /// adapter does not implement this, so a profile plan cannot reach it.
+///
+/// ```compile_fail
+/// fn requires_probes<A: mjolnir_apply::ProvesReachability>() {}
+/// requires_probes::<mjolnir_apply::OpenWrtAdapter>();
+/// ```
 pub trait ProvesReachability: ApplyAdapter {}
 
 /// Submit a profile plan as one network-change transaction.
@@ -472,42 +580,38 @@ pub fn decide(
 ) -> Result<ProfileDecision, ProfileRefusal> {
     let docs = Docs::parse(&node.config)?;
     let requested_ports = single_roles("port", &request.ports)?;
-    let requested_radios = single_roles("radio", &request.radios)?;
-
-    let bands = radio_bands(&docs.wireless);
-    for radio in requested_radios.keys() {
-        if !bands.contains_key(radio) {
-            return Err(ProfileRefusal::UnknownRadio(radio.clone()));
+    if !request.radios.is_empty() {
+        return Err(ProfileRefusal::ProfileRadioRoles);
+    }
+    let radioset = resolve_radioset(request, node, &docs)?;
+    let radios = radioset.functions.clone();
+    if request.backhaul_band == Band::FiveG
+        && request.radioset.is_none()
+        && request.radioset_id.is_none()
+        && docs.mjolnir.named("radioset").is_none()
+        && docs
+            .mjolnir
+            .named("profile")
+            .and_then(|s| s.get("radioset"))
+            .is_none()
+    {
+        for (id, roles) in radio_roles(&docs.wireless) {
+            if roles.contains(&RadioRole::Mesh) {
+                let band = node
+                    .radio_map
+                    .as_ref()
+                    .and_then(|m| m.phys.iter().find(|p| p.id == id))
+                    .map(|p| p.band);
+                if let Some(band) = band.filter(|b| *b != request.backhaul_band) {
+                    return Err(ProfileRefusal::BackhaulBandMismatch {
+                        radio: id,
+                        node: band,
+                        backhaul: request.backhaul_band,
+                    });
+                }
+            }
         }
     }
-    let owned_station = request.uplink_station_radio.as_deref();
-    for (radio, role) in &requested_radios {
-        if *role == RadioRole::Station && owned_station != Some(radio.as_str()) {
-            return Err(ProfileRefusal::StationNotOwned(radio.clone()));
-        }
-    }
-    let current_radios = radio_roles(&docs.wireless);
-    for (radio, roles) in &current_radios {
-        // z3th: refuse rather than clobber a live uplink this plan does not own.
-        if roles.contains(&RadioRole::Station) && owned_station != Some(radio.as_str()) {
-            return Err(ProfileRefusal::StationNotOwned(radio.clone()));
-        }
-        // Advise N5: the backhaul band is mesh-wide, not a per-node choice.
-        if roles.contains(&RadioRole::Mesh)
-            && let Some(Some(band)) = bands.get(radio)
-            && *band != request.backhaul_band
-        {
-            return Err(ProfileRefusal::BackhaulBandMismatch {
-                radio: radio.clone(),
-                node: *band,
-                backhaul: request.backhaul_band,
-            });
-        }
-    }
-    let backhaul_radio = bands
-        .iter()
-        .find(|(_, band)| **band == Some(request.backhaul_band))
-        .map(|(radio, _)| radio.clone());
 
     let profile = request.profile;
     let ports = match profile {
@@ -561,51 +665,11 @@ pub fn decide(
         });
     }
 
-    // The radio that stays on mesh: always for satellites, the reserved band
-    // for `reserve-mesh`, none for `isolate`.
-    let mesh_radio = match profile.cable_loss() {
-        Some(CableLoss::Isolate) => None,
-        None | Some(CableLoss::ReserveMesh) => Some(
-            backhaul_radio
-                .clone()
-                .ok_or(ProfileRefusal::NoRadioForBand(request.backhaul_band))?,
-        ),
-    };
-    let mut radios = BTreeMap::new();
-    for (radio, band) in &bands {
-        let role = if mesh_radio.as_deref() == Some(radio.as_str()) {
-            RadioRole::Mesh
-        } else if owned_station == Some(radio.as_str()) {
-            RadioRole::Station
-        } else if band.is_some_and(Band::is_client_band) {
-            RadioRole::ClientAp
-        } else {
-            RadioRole::Disabled
-        };
-        radios.insert(radio.clone(), role);
+    let has_mesh = radios.values().any(|r| *r == RadioRole::Mesh);
+    if profile.cable_loss() == Some(CableLoss::ReserveMesh) && !has_mesh {
+        return Err(ProfileRefusal::NoRadioForBand(request.backhaul_band));
     }
-    for (radio, role) in requested_radios {
-        let is_mesh_radio = mesh_radio.as_deref() == Some(radio.as_str());
-        if is_mesh_radio && role != RadioRole::Mesh {
-            if profile.cable_loss() == Some(CableLoss::ReserveMesh) {
-                return Err(ProfileRefusal::ReservedRadioOnClient(radio));
-            }
-            return Err(ProfileRefusal::RoleNotInProfile {
-                profile,
-                name: radio,
-                role: role.to_string(),
-            });
-        }
-        if !is_mesh_radio && role == RadioRole::Mesh {
-            return Err(ProfileRefusal::RoleNotInProfile {
-                profile,
-                name: radio,
-                role: role.to_string(),
-            });
-        }
-        radios.insert(radio, role);
-    }
-    if mesh_radio.is_none()
+    if profile.cable_loss() == Some(CableLoss::Isolate)
         && !node.wireless_only_peers.is_empty()
         && !request.acknowledge_stranded_peers
     {
@@ -619,7 +683,167 @@ pub fn decide(
         cable_loss: profile.cable_loss(),
         ports,
         radios,
+        radioset,
+        uplink_station_radio: request.uplink_station_radio.clone(),
     })
+}
+
+fn committed_radioset(doc: &UciDoc) -> Result<Option<RadiosetRecord>, ProfileRefusal> {
+    let Some(section) = doc.named("radioset") else {
+        return Ok(None);
+    };
+    let id = section
+        .get("id")
+        .ok_or_else(|| ProfileRefusal::InvalidRadioset("missing id".into()))?;
+    let mut record = RadiosetRecord::definition(id)?;
+    record.variant = section.get("variant").map(str::to_owned);
+    let mut assignments = Vec::new();
+    for entry in section.words("function") {
+        let (id, role) = entry
+            .split_once('=')
+            .ok_or_else(|| ProfileRefusal::InvalidRadioset(entry.into()))?;
+        let role = match role {
+            "mesh" => RadioRole::Mesh,
+            "client-ap" => RadioRole::ClientAp,
+            "station" => RadioRole::Station,
+            "disabled" => RadioRole::Disabled,
+            _ => return Err(ProfileRefusal::InvalidRadioset(entry.into())),
+        };
+        assignments.push((id.into(), role));
+    }
+    if assignments.is_empty() {
+        return Err(ProfileRefusal::InvalidRadioset(
+            "missing resolved functions".into(),
+        ));
+    }
+    record.functions = single_roles("radio", &assignments)?;
+    Ok(Some(record))
+}
+
+fn resolve_radioset(
+    request: &ProfileRequest,
+    node: &NodeFacts,
+    docs: &Docs,
+) -> Result<RadiosetRecord, ProfileRefusal> {
+    let map = node
+        .radio_map
+        .as_ref()
+        .ok_or_else(|| ProfileRefusal::InvalidRadioMap("missing model map".into()))?;
+    map.validate()?;
+    if map.model != node.model {
+        return Err(ProfileRefusal::InvalidRadioMap("wrong model".into()));
+    }
+    let committed = committed_radioset(&docs.mjolnir)?;
+    let reference = request.radioset_id.as_deref().or_else(|| {
+        docs.mjolnir
+            .named("profile")
+            .and_then(|s| s.get("radioset"))
+    });
+    let mut set = if let Some(record) = &request.radioset {
+        RadiosetRecord::definition(&record.id)?;
+        if reference.is_some_and(|id| id != record.id) {
+            return Err(ProfileRefusal::InvalidRadioset(
+                "profile reference differs from replacement".into(),
+            ));
+        }
+        record.clone()
+    } else if let Some(id) = reference {
+        if let Some(record) = committed.as_ref().filter(|r| r.id == id) {
+            record.clone()
+        } else {
+            RadiosetRecord::definition(id)?
+        }
+    } else if let Some(record) = &committed {
+        record.clone()
+    } else {
+        RadiosetRecord::definition(if request.backhaul_band == Band::TwoG {
+            "satellite-split-2g"
+        } else {
+            "satellite-split"
+        })?
+    };
+    let expected_variant = RadiosetRecord::definition(&set.id)?.variant;
+    if set.variant != expected_variant {
+        return Err(ProfileRefusal::InvalidRadioset(
+            "variant does not match definition id".into(),
+        ));
+    }
+    for id in set.functions.keys() {
+        if !map.phys.iter().any(|p| &p.id == id) {
+            return Err(ProfileRefusal::UnknownRadio(id.clone()));
+        }
+    }
+    let mut inventory = BTreeMap::new();
+    for device in docs.wireless.of_kind("wifi-device") {
+        // A device outside the model map remains unmanaged, including one
+        // whose owner does not publish a mac80211 path. Mapped paths below
+        // are still mandatory.
+        let Some(path) = device.get("path") else {
+            continue;
+        };
+        if inventory.insert(path, device).is_some() {
+            return Err(ProfileRefusal::InvalidRadioMap(format!(
+                "duplicate inventory path {path}"
+            )));
+        }
+    }
+    for phy in &map.phys {
+        let dev = inventory
+            .get(phy.path.as_str())
+            .ok_or_else(|| ProfileRefusal::InvalidRadioMap(format!("missing path {}", phy.path)))?;
+        if dev.name.as_deref() != Some(&phy.id)
+            || Band::from_uci(dev.get("band"), dev.get("hwmode")) != Some(phy.band)
+        {
+            return Err(ProfileRefusal::InvalidRadioMap(format!(
+                "id/band mismatch for {}",
+                phy.path
+            )));
+        }
+        set.functions
+            .entry(phy.id.clone())
+            .or_insert(RadioRole::Disabled);
+    }
+    for iface in docs.wireless.of_kind("wifi-iface") {
+        let Some(id) = iface.get("device") else {
+            continue;
+        };
+        if iface.get("mode") == Some("sta") {
+            let owned = request.uplink_station_radio.as_deref() == Some(id)
+                && set.functions.get(id) == Some(&RadioRole::Station)
+                && committed
+                    .as_ref()
+                    .is_some_and(|r| r.functions.get(id) == Some(&RadioRole::Station));
+            if !owned || iface.words("network").any(|n| n == "lan") {
+                return Err(ProfileRefusal::StationNotOwned(id.into()));
+            }
+        }
+        if !set.functions.contains_key(id)
+            && (matches!(
+                iface.name.as_deref(),
+                Some("meshbh" | "clientap" | "clientap2g")
+            ) || (iface.get("mode") == Some("mesh")
+                && iface.words("network").any(|n| n == "mesh")))
+        {
+            return Err(ProfileRefusal::InvalidRadioMap(format!(
+                "managed iface on unmapped {id}"
+            )));
+        }
+    }
+    for (id, role) in &set.functions {
+        if *role == RadioRole::Station
+            && (request.uplink_station_radio.as_deref() != Some(id)
+                || !committed
+                    .as_ref()
+                    .is_some_and(|r| r.functions.get(id) == Some(&RadioRole::Station))
+                || !docs
+                    .wireless
+                    .of_kind("wifi-iface")
+                    .any(|i| i.get("device") == Some(id) && i.get("mode") == Some("sta")))
+        {
+            return Err(ProfileRefusal::StationNotOwned(id.clone()));
+        }
+    }
+    Ok(set)
 }
 
 fn qualified_map(profile: ProfileId, node: &NodeFacts) -> Result<&PortMap, ProfileRefusal> {
@@ -653,6 +877,38 @@ pub fn build_plan(
     render_ports(&mut desired, &decision);
     render_radios(&mut desired.wireless, &decision)?;
     render_mjolnir(&mut desired.mjolnir, &current.mjolnir, &decision);
+    if let Some(id) = &request.radioset_id {
+        desired
+            .mjolnir
+            .section_mut("profile", "profile")
+            .set("radioset", id);
+    }
+    if request.radioset.is_some()
+        || request.radioset_id.is_some()
+        || current.mjolnir.named("radioset").is_some()
+        || current
+            .mjolnir
+            .named("profile")
+            .and_then(|s| s.get("radioset"))
+            .is_some()
+        || decision.radioset.id != "satellite-split"
+    {
+        let section = desired.mjolnir.section_mut("radioset", "radioset");
+        section.set("id", &decision.radioset.id);
+        if let Some(variant) = &decision.radioset.variant {
+            section.set("variant", variant);
+        } else {
+            section.remove("variant");
+        }
+        section.set_list(
+            "function",
+            &decision
+                .radios
+                .iter()
+                .map(|(id, role)| format!("{id}={role}"))
+                .collect::<Vec<_>>(),
+        );
+    }
     check_docs(
         &current,
         &desired,
@@ -903,16 +1159,6 @@ fn port_roles(network: &UciDoc, mjolnir: &UciDoc) -> BTreeMap<String, BTreeSet<P
     roles
 }
 
-fn radio_bands(wireless: &UciDoc) -> BTreeMap<String, Option<Band>> {
-    wireless
-        .of_kind("wifi-device")
-        .filter_map(|dev| {
-            let band = Band::from_uci(dev.get("band"), dev.get("hwmode"));
-            dev.name.clone().map(|name| (name, band))
-        })
-        .collect()
-}
-
 /// Roles the enabled wifi-ifaces give each radio today.
 fn radio_roles(wireless: &UciDoc) -> BTreeMap<String, BTreeSet<RadioRole>> {
     let mut roles: BTreeMap<String, BTreeSet<RadioRole>> = BTreeMap::new();
@@ -1118,7 +1364,19 @@ fn render_ports(docs: &mut Docs, decision: &ProfileDecision) {
 }
 
 fn render_radios(wireless: &mut UciDoc, decision: &ProfileDecision) -> Result<(), ProfileRefusal> {
+    // Move the managed backhaul section as part of the same desired revision.
+    // Station sections are never created, retargeted, or enabled here.
+    if let Some((id, _)) = decision.radios.iter().find(|(_, r)| **r == RadioRole::Mesh)
+        && let Some(section) = wireless.named_mut("meshbh")
+    {
+        section.set("device", id);
+    }
     for (radio, role) in &decision.radios {
+        if *role == RadioRole::Disabled
+            && let Some(dev) = wireless.named_mut(radio)
+        {
+            dev.set("disabled", "1");
+        }
         let wanted_mode = match role {
             RadioRole::Mesh => Some("mesh"),
             RadioRole::ClientAp => Some("ap"),
@@ -1155,7 +1413,7 @@ fn render_radios(wireless: &mut UciDoc, decision: &ProfileDecision) -> Result<()
                 section.set_enabled(false);
             }
         }
-        if *role != RadioRole::Disabled
+        if !matches!(role, RadioRole::Disabled | RadioRole::Station)
             && let Some(dev) = wireless.named_mut(radio)
             && dev.get("disabled") == Some("1")
         {
@@ -1642,10 +1900,17 @@ config zone
         }
     }
 
+    fn test_radio_map(model: &str) -> RadioMap {
+        let mut map = RadioMap::parse(OPENWRT_ONE_RADIO_MAP).unwrap();
+        map.model = model.into();
+        map
+    }
+
     fn gateway() -> NodeFacts {
         NodeFacts {
             model: "test,wired-board".into(),
             port_map: Some(PortMap::parse(TEST_MAP).unwrap()),
+            radio_map: Some(test_radio_map("test,wired-board")),
             config: config(GATEWAY_NETWORK),
             wireless_only_peers: Vec::new(),
         }
@@ -1655,6 +1920,7 @@ config zone
         NodeFacts {
             model: "cudy,ap3000outdoor-v1".into(),
             port_map: Some(PortMap::parse(AP3000_MAP).unwrap()),
+            radio_map: Some(test_radio_map("cudy,ap3000outdoor-v1")),
             config: config(AP3000_NETWORK),
             wireless_only_peers: Vec::new(),
         }
@@ -1669,6 +1935,9 @@ config zone
 
     fn wired_core() -> ProfileRequest {
         let mut request = ProfileRequest::new(ProfileId::WiredCore);
+        let mut set = RadiosetRecord::definition("satellite-split").unwrap();
+        set.functions.insert("radio1".into(), RadioRole::ClientAp);
+        request.radioset = Some(set);
         request.ports = vec![
             ("wan".into(), PortRole::Wan),
             ("lan1".into(), PortRole::Client),
@@ -1784,22 +2053,24 @@ config zone
         ];
         assert!(matches!(
             decide(&request, &gateway()).unwrap_err(),
-            ProfileRefusal::RoleConflict { kind: "radio", .. }
+            ProfileRefusal::ProfileRadioRoles
         ));
     }
 
     #[test]
     fn station_needs_the_uplink_plan() {
         let mut request = ProfileRequest::new(ProfileId::DEFAULT);
-        request.radios = vec![("radio0".into(), RadioRole::Station)];
+        let mut set = RadiosetRecord::definition("satellite-split").unwrap();
+        set.functions.insert("radio0".into(), RadioRole::Station);
+        request.radioset = Some(set);
         assert_eq!(
             decide(&request, &gateway()).unwrap_err(),
             ProfileRefusal::StationNotOwned("radio0".into())
         );
         request.uplink_station_radio = Some("radio0".into());
         assert_eq!(
-            decide(&request, &gateway()).unwrap().radios["radio0"],
-            RadioRole::Station
+            decide(&request, &gateway()).unwrap_err(),
+            ProfileRefusal::StationNotOwned("radio0".into())
         );
     }
 
@@ -1832,6 +2103,7 @@ config zone
 
         let mut other = gateway();
         other.model = "test,other-board".into();
+        other.radio_map.as_mut().unwrap().model = other.model.clone();
         assert!(matches!(
             decide(&request, &other).unwrap_err(),
             ProfileRefusal::UnqualifiedPortMap { .. }
@@ -1986,7 +2258,7 @@ config zone
         request.radios = vec![("radio1".into(), RadioRole::Mesh)];
         assert!(matches!(
             decide(&request, &gateway()).unwrap_err(),
-            ProfileRefusal::RoleNotInProfile { .. }
+            ProfileRefusal::ProfileRadioRoles
         ));
     }
 
@@ -2007,6 +2279,7 @@ config zone
     fn reserve_mesh_keeps_the_reserved_radio_off_client_ap() {
         let mut request = wired_core();
         request.profile = ProfileId::WiredCoreWithFallback;
+        request.radioset = None;
         let mut node = gateway();
         node.wireless_only_peers = vec!["shed".into()];
         let decision = decide(&request, &node).unwrap();
@@ -2018,7 +2291,7 @@ config zone
         request.radios = vec![("radio1".into(), RadioRole::ClientAp)];
         assert_eq!(
             decide(&request, &node).unwrap_err(),
-            ProfileRefusal::ReservedRadioOnClient("radio1".into())
+            ProfileRefusal::ProfileRadioRoles
         );
     }
 
@@ -2236,6 +2509,207 @@ config zone
         doc(MJOLNIR);
     }
 
+    fn record(node: &mut NodeFacts, id: &str, functions: &str) {
+        node.config.mjolnir.as_mut().unwrap().push_str(&format!(
+            "\nconfig radioset 'radioset'\n\toption id '{id}'\n{functions}\n"
+        ));
+    }
+
+    #[test]
+    fn radio_map_parser_rejects_duplicate_identity() {
+        let map = RadioMap::parse(OPENWRT_ONE_RADIO_MAP).unwrap();
+        assert!(!map.qualified);
+        for change_path in [true, false] {
+            let mut bad = map.clone();
+            if change_path {
+                bad.phys[1].path = bad.phys[0].path.clone();
+            } else {
+                bad.phys[1].id = bad.phys[0].id.clone();
+            }
+            assert!(RadioMap::parse(&serde_json::to_string(&bad).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn radioset_rejects_conflicting_functions_and_unknown_ids() {
+        assert!(matches!(
+            RadiosetRecord::from_assignments(
+                "satellite-split",
+                &[
+                    ("radio0".into(), RadioRole::Mesh),
+                    ("radio0".into(), RadioRole::ClientAp)
+                ]
+            ),
+            Err(ProfileRefusal::RoleConflict { .. })
+        ));
+        let mut request = ProfileRequest::new(ProfileId::DEFAULT);
+        request.radioset_id = Some("not-a-set".into());
+        assert!(matches!(
+            decide(&request, &gateway()),
+            Err(ProfileRefusal::UnknownRadioset(_))
+        ));
+        request.radioset_id = None;
+        let mut set = RadiosetRecord::definition("satellite-split").unwrap();
+        set.functions.insert("radio9".into(), RadioRole::Mesh);
+        request.radioset = Some(set);
+        assert!(matches!(
+            decide(&request, &gateway()),
+            Err(ProfileRefusal::UnknownRadio(_))
+        ));
+    }
+
+    #[test]
+    fn map_matches_paths_then_requires_ids_and_bands() {
+        let mut node = gateway();
+        let w = doc(node.config.wireless.as_ref().unwrap());
+        let mut reordered = w.clone();
+        reordered.sections.swap(0, 1);
+        node.config.wireless = Some(reordered.render());
+        assert_eq!(
+            decide(&ProfileRequest::new(ProfileId::DEFAULT), &node)
+                .unwrap()
+                .radios["radio1"],
+            RadioRole::Mesh
+        );
+        for changed in [
+            WIRELESS.replace("option path 'platform/soc/18000000.wifi+1'", ""),
+            WIRELESS.replace("18000000.wifi+1", "missing"),
+            WIRELESS.replace("18000000.wifi+1", "18000000.wifi"),
+            WIRELESS.replace("wifi-device 'radio1'", "wifi-device 'radio9'"),
+            WIRELESS.replace("option band '5g'", "option band '2g'"),
+        ] {
+            node.config.wireless = Some(changed);
+            assert!(matches!(
+                decide(&ProfileRequest::new(ProfileId::DEFAULT), &node),
+                Err(ProfileRefusal::InvalidRadioMap(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn extra_same_band_phy_is_disabled_and_unmapped_dongle_is_untouched() {
+        let mut node = gateway();
+        node.config.wireless.as_mut().unwrap().push_str("\nconfig wifi-device 'radio2'\n\toption path 'usb/extra'\n\toption band '5g'\nconfig wifi-iface 'dongle'\n\toption device 'radio2'\n\toption mode 'ap'\n\toption network 'lan'\n");
+        let request = ProfileRequest::new(ProfileId::DEFAULT);
+        let plan = build_plan(&request, &node, &ids()).unwrap();
+        assert!(plan.is_noop());
+        assert!(!plan.decision.radios.contains_key("radio2"));
+        let mut pathless = node.clone();
+        pathless.config.wireless = Some(
+            pathless
+                .config
+                .wireless
+                .unwrap()
+                .replace("option path 'usb/extra'", ""),
+        );
+        assert!(build_plan(&request, &pathless, &ids()).unwrap().is_noop());
+        node.radio_map.as_mut().unwrap().phys.push(RadioPhy {
+            id: "radio2".into(),
+            band: Band::FiveG,
+            path: "usb/extra".into(),
+        });
+        let plan = build_plan(&request, &node, &ids()).unwrap();
+        assert_eq!(plan.decision.radios["radio2"], RadioRole::Disabled);
+        assert_eq!(
+            doc(plan.desired.wireless.as_ref().unwrap())
+                .named("radio2")
+                .unwrap()
+                .get("disabled"),
+            Some("1")
+        );
+        assert_eq!(
+            doc(plan.desired.wireless.as_ref().unwrap())
+                .named("dongle")
+                .unwrap()
+                .get("disabled"),
+            Some("1")
+        );
+        node.radio_map.as_mut().unwrap().phys.pop();
+        node.config.wireless = Some(
+            node.config
+                .wireless
+                .unwrap()
+                .replace("wifi-iface 'dongle'", "wifi-iface 'clientap2g'"),
+        );
+        assert!(decide(&request, &node).is_err());
+    }
+
+    #[test]
+    fn committed_2g_replays_and_profile_reference_beats_environment() {
+        let mut request = ProfileRequest::new(ProfileId::DEFAULT);
+        request.backhaul_band = Band::TwoG;
+        let mut node = gateway();
+        let plan = build_plan(&request, &node, &ids()).unwrap();
+        assert_eq!(plan.decision.radioset.id, "satellite-split-2g");
+        node.config = plan.desired;
+        let replay = build_plan(&ProfileRequest::new(ProfileId::DEFAULT), &node, &ids()).unwrap();
+        assert!(replay.is_noop());
+        request.radioset_id = Some("satellite-split".into());
+        assert_eq!(
+            decide(&request, &node).unwrap().radios["radio1"],
+            RadioRole::Mesh
+        );
+    }
+
+    #[test]
+    fn owned_station_preserves_secret_and_disabled_state_without_new_association() {
+        let mut node = gateway();
+        node.config.wireless.as_mut().unwrap().push_str("\nconfig wifi-iface 'uplink'\n\toption device 'radio0'\n\toption mode 'sta'\n\toption network 'wwan'\n\toption key_file '/etc/mjolnir/secrets/uplink/owned'\n\toption disabled '1'\n");
+        node.config
+            .mjolnir
+            .as_mut()
+            .unwrap()
+            .push_str("\nconfig uplink 'uplink'\n\toption secret_generation '7'\n");
+        record(
+            &mut node,
+            "satellite-split",
+            "\tlist function 'radio0=station'\n\tlist function 'radio1=mesh'",
+        );
+        let mut request = ProfileRequest::new(ProfileId::DEFAULT);
+        request.uplink_station_radio = Some("radio0".into());
+        let plan = build_plan(&request, &node, &ids()).unwrap();
+        let before = doc(node.config.wireless.as_ref().unwrap());
+        let after = doc(plan.desired.wireless.as_ref().unwrap());
+        assert_eq!(before.named("uplink"), after.named("uplink"));
+        assert!(
+            plan.desired
+                .mjolnir
+                .as_ref()
+                .unwrap()
+                .contains("secret_generation '7'")
+        );
+        assert_eq!(
+            plan.decision.uplink_station_radio.as_deref(),
+            Some("radio0")
+        );
+        node.config = plan.desired;
+        assert!(build_plan(&request, &node, &ids()).unwrap().is_noop());
+        node.config.wireless = Some(
+            node.config
+                .wireless
+                .unwrap()
+                .replace("network 'wwan'", "network 'lan'"),
+        );
+        assert!(matches!(
+            decide(&request, &node),
+            Err(ProfileRefusal::StationNotOwned(_))
+        ));
+    }
+
+    #[test]
+    fn committed_duplicate_functions_are_refused_before_render() {
+        let mut node = gateway();
+        record(
+            &mut node,
+            "satellite-split",
+            "\tlist function 'radio0=mesh'\n\tlist function 'radio0=client-ap'",
+        );
+        assert!(matches!(
+            build_plan(&ProfileRequest::new(ProfileId::DEFAULT), &node, &ids()),
+            Err(ProfileRefusal::RoleConflict { .. })
+        ));
+    }
+
     // ---- transaction on a fake adapter ----------------------------------
 
     struct FakeRuntime;
@@ -2328,10 +2802,17 @@ config zone
     impl ProvesReachability for FakeProbeAdapter {}
 
     fn run_on_fake(reachability: ObservationStatus) -> (Receipt, ProfilePlan, NodeConfig) {
+        run_plan_on_fake(gateway(), wired_core(), reachability)
+    }
+
+    fn run_plan_on_fake(
+        node: NodeFacts,
+        request: ProfileRequest,
+        reachability: ObservationStatus,
+    ) -> (Receipt, ProfilePlan, NodeConfig) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("config");
         fs::create_dir_all(&root).unwrap();
-        let node = gateway();
         for config in UciConfig::ALL {
             fs::write(
                 root.join(config.file_name()),
@@ -2339,7 +2820,7 @@ config zone
             )
             .unwrap();
         }
-        let plan = wired_plan();
+        let plan = build_plan(&request, &node, &ids()).unwrap();
         let engine = Engine::new(TxnPaths::new(temp.path().join("txn"), &root))
             .with_runtime(Arc::new(FakeRuntime));
         let mut adapter = FakeProbeAdapter {
@@ -2365,6 +2846,87 @@ config zone
         assert_eq!(receipt.outcome, Outcome::Restored);
         assert_eq!(receipt.resulting_revision, plan.plan.expected_revision);
         assert_eq!(on_disk, gateway().config);
+    }
+
+    #[test]
+    fn failed_composed_transaction_restores_exact_2g_record_and_profile() {
+        let mut node = gateway();
+        let mut adoption = ProfileRequest::new(ProfileId::DEFAULT);
+        adoption.backhaul_band = Band::TwoG;
+        node.config = build_plan(&adoption, &node, &ids()).unwrap().desired;
+        let previous = node.config.clone();
+        let mut replacement = wired_core();
+        replacement.radioset_id = Some("satellite-split".into());
+        let (receipt, plan, restored) =
+            run_plan_on_fake(node, replacement, ObservationStatus::Unknown);
+        assert_eq!(receipt.outcome, Outcome::Restored);
+        assert_ne!(plan.desired, previous);
+        assert_eq!(restored, previous);
+        let set = committed_radioset(&doc(restored.mjolnir.as_ref().unwrap()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(set.id, "satellite-split-2g");
+        assert_eq!(set.variant.as_deref(), Some("2g"));
+        assert_eq!(set.functions["radio0"], RadioRole::Mesh);
+    }
+
+    #[test]
+    fn shell_resolved_projection_preserves_owned_sta_and_never_commits() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        let temp = tempfile::tempdir().unwrap();
+        let mock = temp.path().join("uci");
+        fs::write(&mock, r#"#!/bin/sh
+[ "$1" != -q ] || shift
+case "$1:$2" in
+show:wireless) printf '%s\n' 'wireless.radio0=wifi-device' 'wireless.radio1=wifi-device' 'wireless.radio2=wifi-device' 'wireless.uplink=wifi-iface' 'wireless.meshbh=wifi-iface' 'wireless.dongle=wifi-iface' ;;
+get:wireless.radio0|get:wireless.radio1|get:wireless.radio2) echo wifi-device ;;
+get:wireless.uplink.device) echo radio0 ;;
+get:wireless.meshbh.device) echo radio1 ;;
+get:wireless.dongle.device) echo radio2 ;;
+get:wireless.uplink.mode) echo sta ;;
+get:wireless.meshbh.mode) echo mesh ;;
+get:wireless.dongle.mode) echo ap ;;
+get:wireless.uplink.network) echo wwan ;;
+get:mjolnir.uplink.radio) echo "${MOCK_OWNER:-radio0}" ;;
+get:*) echo 5g ;;
+set:*) echo "$2" >> "$MOCK_LOG" ;;
+*) echo "unexpected:$*" >> "$MOCK_LOG"; exit 1 ;;
+esac
+"#).unwrap();
+        fs::set_permissions(&mock, fs::Permissions::from_mode(0o755)).unwrap();
+        let log = temp.path().join("writes");
+        let run = |table: &str, owner: &str| {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(include_str!("../../../deploy/openwrt/setup-wireless.sh"))
+                .env("PATH", format!("{}:/usr/bin:/bin", temp.path().display()))
+                .env("RADIOSET_FUNCTIONS", table)
+                .env("MOCK_OWNER", owner)
+                .env("MOCK_LOG", &log)
+                .output()
+                .unwrap()
+        };
+        let output = run("radio0=station radio1=mesh", "radio0");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let writes = fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            writes.trim(),
+            "wireless.radio1.disabled=0\nwireless.meshbh.disabled=0"
+        );
+        fs::remove_file(&log).unwrap();
+        for (table, owner) in [
+            ("radio0=station radio1=mesh", "radio9"),
+            ("radio0=station radio0=client-ap radio1=mesh", "radio0"),
+            ("radio0=disabled radio1=mesh", "radio0"),
+        ] {
+            assert!(!run(table, owner).status.success());
+            assert!(!log.exists(), "refusal staged writes");
+        }
     }
 
     #[test]

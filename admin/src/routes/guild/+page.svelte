@@ -1,5 +1,6 @@
 <script lang="ts">
 	import GuildPanel from '$lib/guild/mock/GuildPanel.svelte';
+	import Roster from '$lib/home/Roster.svelte';
 </script>
 
 <section class="page">
@@ -9,6 +10,7 @@
 		join the guild, and assigning a node does not change who that radio syncs with.
 	</p>
 	<GuildPanel />
+	<Roster />
 </section>
 
 <style>

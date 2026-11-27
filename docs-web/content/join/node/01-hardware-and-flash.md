@@ -44,11 +44,16 @@ live fleet is a Cudy MT7981 box:
 | Cudy M3000 v1/v2 | `cudy_m3000-v1` / `-v2` | yes (two) |
 | Cudy TR3000 v1 | `cudy_tr3000-v1` | yes |
 | Cudy AP3000 Outdoor v1 | `cudy_ap3000outdoor-v1` | yes |
+| OpenWrt One | `openwrt,one` | bench (official 25.12.5 `.itb`) |
 
 Also reasonable, per the hardware research
 ([synthesis](https://github.com/WorldTreeNetwork/lightning-mesh/blob/main/docs/research/openwrt-mesh-hardware/synthesis.md)):
-Banana Pi BPI-R3 (MT7986) and OpenWrt One (MT7981). Avoid Qualcomm
-ath11k/ath12k boards for mesh.
+Banana Pi BPI-R3 (MT7986). Avoid Qualcomm ath11k/ath12k boards for mesh.
+
+The One already runs OpenWrt (NAND production). Skip the Cudy-signed
+intermediate. Flash
+`deploy/openwrt/vendor-firmware/openwrt-one/openwrt-25.12.5-mediatek-filogic-openwrt_one-squashfs-sysupgrade.itb`
+with `sysupgrade -n`. That file is FIT (`.itb`), not a Cudy `.bin`.
 
 **One mt76 limitation to know:** an 802.11s mesh point and a client access
 point on the *same* radio break the mesh join. The installer turns the

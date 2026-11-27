@@ -1,0 +1,10 @@
+source=/home/dorje/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.0.0
+pin=iroh 1.0.0
+checksum=6435544bb3a5c4e6ff7affaa0c0aa0d1bca45bd700226329d5059d3eb54f9dff
+predicate=supplied addrs inserted, then resolve completes, then lookup is armed
+predicate=lookup gate is selected_path or an existing stream, not RelayUrl
+predicate=resolve_remote sends Ok when paths is non-empty
+selected_path writes:
+488:self.state.selected_path = None;
+660:let prev_remote = self.state.selected_path.replace(addr.clone());
+RESULT=predicates hold (no-go still matches this source)

@@ -1,0 +1,79 @@
+# excerpts from /home/dorje/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.0.0
+# Cargo.lock iroh checksum 6435544bb3a5c4e6ff7affaa0c0aa0d1bca45bd700226329d5059d3eb54f9dff
+
+## /home/dorje/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.0.0/src/socket/remote_map/remote_state.rs handle_msg_resolve_remote
+850:     fn handle_msg_resolve_remote(
+851:         &mut self,
+852:         addrs: BTreeSet<TransportAddr>,
+853:         tx: oneshot::Sender<Result<(), AddressLookupFailed>>,
+854:     ) {
+855:         let addrs = to_transports_addr(self.endpoint_id, addrs);
+856:         self.paths.insert_multiple(addrs, Source::App);
+857:         self.paths.resolve_remote(tx);
+858:         // Start Address Lookup if we have no selected path.
+859:         self.trigger_address_lookup();
+860:     }
+861: 
+862:     /// Triggers Address Lookup for the remote endpoint, if needed.
+863:     ///
+864:     /// Does not start Address Lookup if we have a selected path or if Address Lookup is
+865:     /// currently running.
+
+## /home/dorje/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.0.0/src/socket/remote_map/remote_state.rs trigger_address_lookup
+866:     fn trigger_address_lookup(&mut self) {
+867:         if self.selected_path.is_some() || self.address_lookup_stream.is_some() {
+868:             return;
+869:         }
+870:         let stream = self.address_lookup.resolve(self.endpoint_id);
+871:         let stream = stream.filter_map(|item| match item {
+872:             // We don't care about errors from individual services, we just continue.
+873:             // Individual errors are buffered into the final error by `AddressLookupServices::resolve`,
+874:             // and if the lookup fails we return them upstream with the final `AddressLookupFailed` error.
+875:             Ok(Err(_err)) => None,
+876:             Ok(Ok(item)) => Some(Ok(item)),
+877:             Err(err) => Some(Err(err)),
+878:         });
+879:         self.address_lookup_stream = Some(Box::pin(stream));
+880:     }
+881: 
+882:     /// Handles an address lookup result.
+883:     ///
+884:     /// All address lookup results end up being sent here. It takes care of updating the
+885:     /// [`RemotePathState`] with the results.
+
+## selected_path writes
+488:self.state.selected_path = None;
+660:let prev_remote = self.state.selected_path.replace(addr.clone());
+
+## /home/dorje/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.0.0/src/socket/remote_map/remote_state/path_state.rs resolve_remote
+161:     pub(super) fn resolve_remote(&mut self, tx: oneshot::Sender<Result<(), AddressLookupFailed>>) {
+162:         if !self.paths.is_empty() {
+163:             tx.send(Ok(())).ok();
+164:         } else {
+165:             self.pending_resolve_requests.push_back(tx);
+166:         }
+167:     }
+168: 
+169:     /// Returns `true` if there are any queued resolve requests from [`Self::resolve_remote`].
+
+## /home/dorje/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.0.0/src/endpoint.rs Endpoint::connect docs
+1020:     /// [`EndpointAddr`] or an [`EndpointId`].
+1021:     ///
+1022:     /// The [`EndpointAddr`] must contain the [`EndpointId`] to dial and may also contain a [`RelayUrl`]
+1023:     /// and direct addresses. If direct addresses are provided, they will be used to try and
+1024:     /// establish a direct connection without involving a relay server.
+1025:     ///
+1026:     /// If neither a [`RelayUrl`] or direct addresses are configured in the [`EndpointAddr`] it
+1027:     /// may still be possible a connection can be established.  This depends on which, if any,
+1028:     /// [`crate::address_lookup::AddressLookup`]s were configured using [`Builder::address_lookup`].  The Address Lookup
+1029:     /// service will also be used if the remote endpoint is not reachable on the provided direct
+1030:     /// addresses and there is no [`RelayUrl`].
+1031:     ///
+1032:     /// If addresses or relay servers are neither provided nor can be discovered, the
+1033:     /// connection attempt will fail with an error.
+1034:     ///
+1035:     /// The `alpn`, or application-level protocol identifier, is also required. The remote
+1036:     /// endpoint must support this `alpn`, otherwise the connection attempt will fail with
+1037:     /// an error.
+1038:     ///
+1039:     /// [`RelayUrl`]: crate::RelayUrl

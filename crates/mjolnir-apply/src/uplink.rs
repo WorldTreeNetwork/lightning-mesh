@@ -18,9 +18,9 @@
 //! upstream-bound DNS and HTTPS evidence passes. A captive lease exports
 //! nothing.
 //!
-//! The OpenWrt adapter cannot observe the upstream health kinds or reload
-//! inside apply and restore, so [`submit_uplink_plan`] accepts only an adapter
-//! that implements [`ProvesUpstream`]. The OpenWrt adapter does not.
+//! [`submit_uplink_plan`] requires [`ProvesUpstream`]. The OpenWrt adapter
+//! implements it with interface-bound probes, wireless reload, and durable
+//! secret restoration. Probe targets must be configured before admission.
 
 use crate::engine::{ApplyAdapter, Engine, EngineError};
 use crate::model::{
@@ -256,9 +256,26 @@ pub struct UplinkPlan {
 
 /// An adapter that observes the upstream health kinds from a real vantage,
 /// reloads inside apply and restore, snapshots and restores the secret file,
-/// and verifies restoration with [`check_restoration`] only. The OpenWrt
-/// adapter does not implement this, so an uplink plan cannot reach it.
-pub trait ProvesUpstream: ApplyAdapter {}
+/// and verifies restoration with [`check_restoration`] only.
+pub trait ProvesUpstream: ApplyAdapter {
+    /// Stage metadata in memory only; mutation happens under the engine lock.
+    fn prepare_uplink(&mut self, _uplink: &UplinkPlan) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Read the owned station using the same UCI quoting rules as the builder.
+pub(crate) fn station_identity(uplink: &UplinkPlan) -> Result<(String, Option<String>), String> {
+    let parsed = UciText::parse("wireless", uplink.desired.wireless.as_deref())
+        .map_err(|_| "invalid desired wireless configuration".to_owned())?;
+    let station = parsed
+        .named(STATION_IFACE)
+        .ok_or("uplink station is missing")?;
+    let ssid = station
+        .get("ssid")
+        .ok_or("uplink station SSID is missing")?;
+    Ok((ssid.into(), station.get("bssid").map(str::to_owned)))
+}
 
 /// Submit an uplink plan as one network-change transaction.
 pub fn submit_uplink_plan<A: ProvesUpstream>(
@@ -266,6 +283,9 @@ pub fn submit_uplink_plan<A: ProvesUpstream>(
     uplink: &UplinkPlan,
     adapter: &mut A,
 ) -> Result<Receipt, EngineError> {
+    adapter
+        .prepare_uplink(uplink)
+        .map_err(EngineError::Adapter)?;
     engine.apply(&uplink.plan, adapter)
 }
 
@@ -1563,5 +1583,197 @@ config zone
             self.adapter.stage(plan, &self.passphrase);
             submit_uplink_plan(&engine, plan, &mut self.adapter).unwrap()
         }
+    }
+    struct ScriptedProbes {
+        failed: Option<ObservationKind>,
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl crate::OpenWrtProbes for ScriptedProbes {
+        fn reload_wireless(&mut self) -> Result<(), String> {
+            self.calls.lock().unwrap().push("reload".into());
+            Ok(())
+        }
+        fn probe(&mut self, kind: ObservationKind) -> crate::ProbeResult {
+            self.calls.lock().unwrap().push(format!("{kind:?}"));
+            let evidence = obs(kind, ObservationStatus::Passed);
+            crate::ProbeResult {
+                passed: self.failed != Some(kind),
+                vantage: evidence.vantage,
+                interface: evidence.interface,
+                target: evidence.target,
+            }
+        }
+    }
+
+    #[test]
+    fn openwrt_uplink_commits_or_restores_with_injected_probes_and_private_secret() {
+        for (failed, previous_secret) in [
+            (None, Some("previous secret bytes")),
+            (
+                Some(ObservationKind::UpstreamBoundDnsHttps),
+                Some("previous secret bytes"),
+            ),
+            (
+                Some(ObservationKind::UpstreamAssociation),
+                Some("previous secret bytes"),
+            ),
+            (Some(ObservationKind::UpstreamBoundDnsHttps), None),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let config_root = temp.path().join("config");
+            let source = temp.path().join("desired");
+            fs::create_dir_all(&config_root).unwrap();
+            fs::create_dir_all(&source).unwrap();
+            let initial = config();
+            for c in UciConfig::ALL {
+                fs::write(config_root.join(c.file_name()), initial.get(c).unwrap()).unwrap();
+            }
+            let built = build(&request(), &facts()).unwrap();
+            for c in UciConfig::ALL {
+                fs::write(source.join(c.file_name()), built.desired.get(c).unwrap()).unwrap();
+            }
+            let paths = TxnPaths::new(temp.path().join("txn"), &config_root);
+            let secret = paths.uplink_secrets().join(&built.candidate_id);
+            fs::create_dir_all(secret.parent().unwrap()).unwrap();
+            if let Some(previous) = previous_secret {
+                fs::write(&secret, previous).unwrap();
+            }
+            let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut adapter =
+                crate::OpenWrtAdapter::for_apply(paths.clone(), source, built.plan.clone())
+                    .with_probes(ScriptedProbes {
+                        failed,
+                        calls: calls.clone(),
+                    })
+                    .with_uplink_secret(
+                        built.candidate_id.clone(),
+                        Passphrase::new(PASSPHRASE).unwrap(),
+                    );
+            let engine = Engine::new(paths.clone()).with_runtime(Arc::new(FixedRuntime));
+            let receipt = submit_uplink_plan(&engine, &built, &mut adapter).unwrap();
+            let calls = calls.lock().unwrap();
+            assert_eq!(calls.first().unwrap(), "reload");
+            if failed.is_none() {
+                assert_eq!(receipt.outcome, Outcome::Committed);
+                assert_eq!(
+                    adapter.current_revision().unwrap(),
+                    built.plan.proposed_revision
+                );
+                assert_eq!(fs::read_to_string(&secret).unwrap(), PASSPHRASE);
+                assert!(REQUIRED_HEALTH.iter().all(|kind| {
+                    receipt
+                        .observations
+                        .iter()
+                        .any(|o| o.kind == *kind && o.is_qualifying_pass())
+                }));
+            } else {
+                assert_eq!(receipt.outcome, Outcome::Restored);
+                assert_eq!(
+                    adapter.current_revision().unwrap(),
+                    built.plan.expected_revision
+                );
+                assert_eq!(fs::read_to_string(&secret).ok().as_deref(), previous_secret);
+                assert!(
+                    receipt
+                        .observations
+                        .iter()
+                        .all(|o| RESTORATION_HEALTH.contains(&o.kind))
+                );
+                assert_eq!(
+                    &calls[calls.len() - 2..],
+                    &["reload", "ManagementReachability"]
+                );
+            }
+            assert_no_secret(&serde_json::to_string(&receipt).unwrap(), PASSPHRASE);
+            for file in walk(&paths.root().to_path_buf()) {
+                assert_no_secret(
+                    &String::from_utf8_lossy(&fs::read(file).unwrap()),
+                    PASSPHRASE,
+                );
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if secret.exists() {
+                    assert_eq!(
+                        fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                }
+                assert_eq!(
+                    fs::metadata(paths.uplink_secrets())
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+            }
+        }
+    }
+    struct CrashBeforeCommit;
+    impl crate::FaultInjector for CrashBeforeCommit {
+        fn check(&self, point: crate::FaultPoint) -> Result<(), EngineError> {
+            if point == crate::FaultPoint::AfterHealthPass {
+                Err(EngineError::InjectedCrash(point))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn openwrt_restart_restores_secret_before_verification() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_root = temp.path().join("config");
+        let source = temp.path().join("desired");
+        fs::create_dir_all(&config_root).unwrap();
+        fs::create_dir_all(&source).unwrap();
+        let built = build(&request(), &facts()).unwrap();
+        for c in UciConfig::ALL {
+            fs::write(config_root.join(c.file_name()), config().get(c).unwrap()).unwrap();
+            fs::write(source.join(c.file_name()), built.desired.get(c).unwrap()).unwrap();
+        }
+        let paths = TxnPaths::new(temp.path().join("txn"), &config_root);
+        let secret = paths.uplink_secrets().join(&built.candidate_id);
+        fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        fs::write(&secret, "old credential").unwrap();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut adapter =
+            crate::OpenWrtAdapter::for_apply(paths.clone(), source, built.plan.clone())
+                .with_probes(ScriptedProbes {
+                    failed: None,
+                    calls: calls.clone(),
+                })
+                .with_uplink_secret(
+                    built.candidate_id.clone(),
+                    Passphrase::new(PASSPHRASE).unwrap(),
+                );
+        let engine = Engine::new(paths.clone())
+            .with_runtime(Arc::new(FixedRuntime))
+            .with_faults(Arc::new(CrashBeforeCommit));
+        assert!(matches!(
+            submit_uplink_plan(&engine, &built, &mut adapter),
+            Err(EngineError::InjectedCrash(
+                crate::FaultPoint::AfterHealthPass
+            ))
+        ));
+        assert_eq!(fs::read_to_string(&secret).unwrap(), PASSPHRASE);
+        drop(adapter);
+        calls.lock().unwrap().clear();
+        let mut recovered = crate::OpenWrtAdapter::new(paths.clone()).with_probes(ScriptedProbes {
+            failed: Some(ObservationKind::UpstreamBoundDnsHttps),
+            calls: calls.clone(),
+        });
+        let engine = Engine::new(paths).with_runtime(Arc::new(FixedRuntime));
+        let receipt = engine.recover(&mut recovered).unwrap().unwrap();
+        assert_eq!(receipt.outcome, Outcome::Restored);
+        assert_eq!(fs::read_to_string(secret).unwrap(), "old credential");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["reload", "ManagementReachability"]
+        );
+        assert_no_secret(&serde_json::to_string(&receipt).unwrap(), PASSPHRASE);
     }
 }

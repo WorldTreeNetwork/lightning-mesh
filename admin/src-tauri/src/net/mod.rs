@@ -10,6 +10,7 @@ mod hello;
 mod interfaces;
 mod mdns;
 mod merge;
+mod reach;
 mod types;
 
 #[cfg(target_os = "linux")]
@@ -35,11 +36,13 @@ mod neigh {
     }
 }
 
+pub use hello::http_get_json;
 pub use merge::merge_scan;
 pub use types::{LinkLocalInterface, LinkLocalNeighbor, RawNeighbor, ScanResult};
 
 pub async fn scan_link_local() -> Result<ScanResult, String> {
     let interfaces = interfaces::collect_interfaces()?;
+    let iface_index = interfaces.clone();
     let from_neigh = neigh::dump_link_local(&interfaces)
         .await
         .unwrap_or_default();
@@ -48,9 +51,184 @@ pub async fn scan_link_local() -> Result<ScanResult, String> {
     let mut scan = merge_scan(interfaces, from_neigh, from_probe, probe_error, true);
     mdns::apply_names(&mut scan.neighbors, &names);
     let candidates = hello::probe_candidates(&scan.neighbors);
-    let nodes = hello::probe_nodes(&candidates);
+    let mut nodes = probe_all(&candidates);
+    let reach = reach::reach_targets(&iface_index, &candidates);
+    let reach_hits = probe_all(&reach.iter().map(|item| item.target.clone()).collect::<Vec<_>>());
+    for hit in &reach_hits {
+        if let Some(item) = reach.iter().find(|item| item.target.address == hit.address) {
+            ensure_hello_row(&mut scan.neighbors, &hit.address, &item.iface, item.ifindex);
+        }
+    }
+    nodes.extend(reach_hits);
+    let (seeded, heard) = directory_harvest(&nodes, &scan.neighbors);
+    let seed_hits = probe_all(&seeded.iter().map(|item| item.target.clone()).collect::<Vec<_>>());
+    for hit in &seed_hits {
+        if let Some(item) = seeded.iter().find(|item| item.target.address == hit.address) {
+            ensure_hello_row(&mut scan.neighbors, &hit.address, &item.iface, item.ifindex);
+        }
+    }
+    nodes.extend(seed_hits);
     hello::apply_nodes(&mut scan.neighbors, &nodes);
+    // A directory neighbor that did not answer hello is still a published router.
+    insert_unanswered(&mut scan.neighbors, &heard);
     Ok(scan)
+}
+
+fn probe_all(targets: &[hello::ProbeTarget]) -> Vec<hello::HelloNode> {
+    let mut found = Vec::new();
+    for chunk in targets.chunks(64) {
+        found.extend(hello::probe_nodes(chunk));
+    }
+    found
+}
+
+fn ensure_hello_row(neighbors: &mut Vec<types::LinkLocalNeighbor>, address: &str, iface: &str, ifindex: u32) {
+    if neighbors.iter().any(|row| row.address.split('%').next().unwrap_or(&row.address) == address) {
+        return;
+    }
+    let Ok(ip) = address.parse::<std::net::IpAddr>() else {
+        return;
+    };
+    neighbors.push(types::LinkLocalNeighbor::from_ip(
+        iface,
+        ifindex,
+        ip,
+        None,
+        "reachable",
+        "neighbor",
+        "hello",
+    ));
+}
+
+struct HeardDirectory {
+    record: reach::DirectoryRecord,
+    iface: String,
+    ifindex: u32,
+}
+
+fn directory_harvest(
+    nodes: &[hello::HelloNode],
+    neighbors: &[types::LinkLocalNeighbor],
+) -> (Vec<reach::ReachTarget>, Vec<HeardDirectory>) {
+    let known: std::collections::BTreeSet<String> = neighbors
+        .iter()
+        .map(|row| row.address.split('%').next().unwrap_or(&row.address).to_string())
+        .collect();
+    let (fallback_iface, fallback_index) = nodes
+        .first()
+        .and_then(|node| {
+            neighbors
+                .iter()
+                .find(|row| row.address == node.address)
+                .map(|row| (row.iface.clone(), row.ifindex))
+        })
+        .unwrap_or_else(|| ("network".into(), 0));
+    let mut targets = Vec::new();
+    let mut heard = Vec::new();
+    let mut pushed = std::collections::BTreeSet::new();
+    for node in nodes {
+        let Ok(value) = hello::http_get_json(&node.address, 0, "/api/directory") else {
+            continue;
+        };
+        let (iface, ifindex) = neighbors
+            .iter()
+            .find(|row| row.address == node.address)
+            .map(|row| (row.iface.clone(), row.ifindex))
+            .unwrap_or_else(|| (fallback_iface.clone(), fallback_index));
+        for record in reach::directory_records(&value) {
+            heard.push(HeardDirectory {
+                record,
+                iface: iface.clone(),
+                ifindex,
+            });
+        }
+        for ip in reach::directory_addresses(&value) {
+            if matches!(ip, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local()) {
+                continue;
+            }
+            if !hello::is_probeable(ip) {
+                continue;
+            }
+            let address = ip.to_string();
+            if known.contains(&address) || !pushed.insert(address.clone()) {
+                continue;
+            }
+            targets.push(reach::ReachTarget {
+                target: hello::ProbeTarget { address, scope_id: 0 },
+                iface: iface.clone(),
+                ifindex,
+            });
+        }
+    }
+    (targets, heard)
+}
+
+fn bare_addr(address: &str) -> &str {
+    address.split('%').next().unwrap_or(address)
+}
+
+fn paint_directory(row: &mut types::LinkLocalNeighbor, record: &reach::DirectoryRecord) {
+    row.lightning = true;
+    row.kind = "directory".into();
+    row.source = "directory".into();
+    row.state = "announced".into();
+    if !record.name.is_empty() {
+        row.mesh_name = Some(record.name.clone());
+    }
+    if !record.node_id.is_empty() {
+        row.mesh_node_id = Some(record.node_id.clone());
+    }
+    if !record.subnet.is_empty() {
+        row.mesh_subnet = Some(record.subnet.clone());
+    }
+    if !record.backhaul.is_empty() {
+        row.mesh_backhaul = Some(record.backhaul.clone());
+    }
+}
+
+/// Keep a directory neighbor when no hello answer already carries that node id.
+fn insert_unanswered(neighbors: &mut Vec<types::LinkLocalNeighbor>, heard: &[HeardDirectory]) {
+    let mut seen_ids: std::collections::BTreeSet<String> = neighbors
+        .iter()
+        .filter_map(|row| row.mesh_node_id.as_ref())
+        .filter(|id| !id.is_empty())
+        .map(|id| id.to_ascii_lowercase())
+        .collect();
+    for item in heard {
+        let id = item.record.node_id.to_ascii_lowercase();
+        if !id.is_empty() && seen_ids.contains(&id) {
+            continue;
+        }
+        if let Some(row) = neighbors
+            .iter_mut()
+            .find(|row| bare_addr(&row.address) == item.record.address)
+        {
+            if !row.lightning {
+                paint_directory(row, &item.record);
+            }
+            if !id.is_empty() {
+                seen_ids.insert(id);
+            }
+            continue;
+        }
+        let Ok(ip) = item.record.address.parse::<std::net::IpAddr>() else {
+            continue;
+        };
+        let mut row = types::LinkLocalNeighbor::from_ip(
+            item.iface.clone(),
+            item.ifindex,
+            ip,
+            None,
+            "announced",
+            "directory",
+            "directory",
+        );
+        paint_directory(&mut row, &item.record);
+        neighbors.push(row);
+        if !id.is_empty() {
+            seen_ids.insert(id);
+        }
+    }
 }
 
 pub fn scoped_addr(ip: std::net::Ipv6Addr, iface: &str) -> String {
@@ -178,6 +356,61 @@ mod tests {
             assert_eq!(n.base58, ipv6_to_base58(ip));
             assert_eq!(n.scope, ipv6_scope(ip));
         }
+    }
+
+    #[test]
+    fn unanswered_directory_neighbor_stays_in_the_scan() {
+        let mut neighbors = vec![LinkLocalNeighbor::from_ip(
+            "wlp191s0",
+            3,
+            "10.42.203.1".parse().unwrap(),
+            None,
+            "reachable",
+            "neighbor",
+            "hello",
+        )];
+        neighbors[0].lightning = true;
+        neighbors[0].mesh_name = Some("ap3000-indoor-c".into());
+        neighbors[0].mesh_node_id = Some("indoor-c".into());
+        let silent = reach::DirectoryRecord {
+            name: "m3000".into(),
+            node_id: "m3000".into(),
+            subnet: "10.42.243.0/24".into(),
+            backhaul: "10.254.242.172".into(),
+            address: "10.42.243.1".into(),
+        };
+        let heard = vec![
+            HeardDirectory {
+                record: reach::DirectoryRecord {
+                    name: "ap3000-indoor-c".into(),
+                    node_id: "indoor-c".into(),
+                    subnet: "10.42.203.0/24".into(),
+                    backhaul: "10.254.203.27".into(),
+                    address: "10.42.203.1".into(),
+                },
+                iface: "wlp191s0".into(),
+                ifindex: 3,
+            },
+            HeardDirectory {
+                record: silent.clone(),
+                iface: "wlp191s0".into(),
+                ifindex: 3,
+            },
+            HeardDirectory {
+                record: silent,
+                iface: "wlp191s0".into(),
+                ifindex: 3,
+            },
+        ];
+        insert_unanswered(&mut neighbors, &heard);
+        assert_eq!(neighbors.len(), 2);
+        assert_eq!(neighbors[0].state, "reachable");
+        assert_eq!(neighbors[0].kind, "neighbor");
+        assert_eq!(neighbors[1].mesh_name.as_deref(), Some("m3000"));
+        assert_eq!(neighbors[1].state, "announced");
+        assert_eq!(neighbors[1].kind, "directory");
+        assert!(neighbors[1].lightning);
+        assert_eq!(neighbors[1].mesh_backhaul.as_deref(), Some("10.254.242.172"));
     }
 
     #[test]

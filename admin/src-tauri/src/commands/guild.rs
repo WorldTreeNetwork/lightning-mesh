@@ -13,8 +13,21 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 
 #[tauri::command]
-pub fn sign_guild_op(input: GuildSignInput) -> Result<GuildReceipt, String> {
+pub fn sign_guild_op(mut input: GuildSignInput) -> Result<GuildReceipt, String> {
+    if input.actor_seed_hex.trim().is_empty() {
+        input.actor_seed_hex = stored_actor_seed()?;
+    }
     sign_guild_now(&input)
+}
+
+fn stored_actor_seed() -> Result<String, String> {
+    let text = fs::read_to_string(config_dir()?.join("actor-seed"))
+        .map_err(|_| "this computer has no signing key".to_string())?;
+    let seed = text.trim();
+    if seed.len() != 64 || !seed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("this computer has no signing key".into());
+    }
+    Ok(seed.to_string())
 }
 
 #[tauri::command]

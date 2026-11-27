@@ -32,9 +32,8 @@ set -euo pipefail
 pkg_cache_prune() {
 	local dir="$1"
 	[ -d "$dir" ] || return 0
-	local f base name ver rel maxrel top old
-	local -a apks keep
-	local -A best_ver
+	local f base name ver rel maxrel top old n v maxver maxfile
+	local -a apks keep names
 	local nullglob_was=0
 	shopt -q nullglob && nullglob_was=1
 	shopt -s nullglob
@@ -87,30 +86,47 @@ pkg_cache_prune() {
 		keep+=("$f")
 	done
 
+	# bash 3.2 (macOS /bin/bash) has no associative arrays. Unique names,
+	# then keep the highest version of each. kernel stays as-is (vermagic).
+	names=()
 	for f in "${keep[@]}"; do
 		[ -f "$f" ] || continue
 		base=$(basename "$f" .apk)
 		[[ "$base" =~ ^(.+)-([0-9].*)$ ]] || continue
 		name="${BASH_REMATCH[1]}"
-		ver="${BASH_REMATCH[2]}"
-		# Same kernel release, different vermagic hash: keep each file.
 		[ "$name" = kernel ] && continue
-		if [ -z "${best_ver[$name]+x}" ]; then
-			best_ver[$name]="$ver"
-			continue
-		fi
-		top="$(printf '%s\n%s\n' "$ver" "${best_ver[$name]}" | sort -V | tail -n 1)"
-		if [ "$top" = "$ver" ] && [ "$ver" != "${best_ver[$name]}" ]; then
-			for old in "$dir/$name-${best_ver[$name]}.apk"; do
-				[ -f "$old" ] || continue
-				echo "   cache drop $(basename "$old")"
-				rm -f -- "$old"
-			done
-			best_ver[$name]="$ver"
-		elif [ "$ver" != "${best_ver[$name]}" ]; then
-			echo "   cache drop $(basename "$f")"
-			rm -f -- "$f"
-		fi
+		n=0
+		for old in "${names[@]+"${names[@]}"}"; do
+			[ "$old" = "$name" ] && n=1 && break
+		done
+		[ "$n" = 1 ] || names+=("$name")
+	done
+	for name in "${names[@]+"${names[@]}"}"; do
+		maxver=""
+		maxfile=""
+		for f in "${keep[@]}"; do
+			[ -f "$f" ] || continue
+			base=$(basename "$f" .apk)
+			[[ "$base" =~ ^(.+)-([0-9].*)$ ]] || continue
+			n="${BASH_REMATCH[1]}"
+			v="${BASH_REMATCH[2]}"
+			[ "$n" = "$name" ] || continue
+			if [ -z "$maxver" ]; then
+				maxver="$v"
+				maxfile="$f"
+				continue
+			fi
+			top="$(printf '%s\n%s\n' "$v" "$maxver" | sort -V | tail -n 1)"
+			if [ "$top" = "$v" ] && [ "$v" != "$maxver" ]; then
+				echo "   cache drop $(basename "$maxfile")"
+				rm -f -- "$maxfile"
+				maxver="$v"
+				maxfile="$f"
+			elif [ "$v" != "$maxver" ]; then
+				echo "   cache drop $(basename "$f")"
+				rm -f -- "$f"
+			fi
+		done
 	done
 }
 
@@ -119,8 +135,13 @@ pkg_cache_prune() {
 pkg_cache_trim_stage() {
 	local dir="$1" host="$2" stage="$3"
 	[ -d "$dir" ] || return 0
-	find "$dir" -maxdepth 1 -type f -name '*.apk' -printf '%f\n' \
-		| ssh -o BatchMode=yes -o ConnectTimeout=6 "$host" "cat > /tmp/mjolnir-cache-keep
+	{
+		local f
+		for f in "$dir"/*.apk; do
+			[ -f "$f" ] || continue
+			basename "$f"
+		done
+	} | ssh -o BatchMode=yes -o ConnectTimeout=6 "$host" "cat > /tmp/mjolnir-cache-keep
 cd '$stage/pkgs' 2>/dev/null || exit 0
 for f in *; do
   [ -f \"\$f\" ] || continue
@@ -195,7 +216,6 @@ scp -O "$DIR/files/etc/hotplug.d/usb/70-mjolnir-dongle" "$HOST:$STAGE/hotplug-us
 scp -O "$DIR/files/etc/init.d/mjolnir-hello"   "$HOST:$STAGE/init.d-mjolnir-hello"
 scp -O "$DIR/files/etc/init.d/iperf3-server"   "$HOST:$STAGE/init.d-iperf3-server"
 scp -O "$DIR/files/usr/sbin/mjolnir-wan-admin" "$HOST:$STAGE/mjolnir-wan-admin"
-scp -O "$DIR/files/usr/libexec/mjolnir-dhcp-event" "$HOST:$STAGE/mjolnir-dhcp-event"
 scp -O "$DIR/files/etc/rc.wps/00-mjolnir-wan-admin" "$HOST:$STAGE/rc.wps-00-mjolnir-wan-admin"
 scp -O "$DIR/files/etc/dropbear/authorized_keys" "$HOST:$STAGE/authorized_keys"
 ssh "$HOST" "chmod +x $STAGE/mjolnir-apply $STAGE/mjolnir-txn"
@@ -227,20 +247,58 @@ pkg_cache_prune "$PKG_CACHE"
 # so packages must be local files before anything disruptive starts. apk names
 # files name-version.apk, opkg names them name_version_arch.ipk.
 echo ">> prefetching packages on the node ($PKGS)"
+# Already-installed packages are left alone. A leaf with no feed (m3000-b at
+# Embassy) otherwise sits in `apk fetch` until every mirror times out, and
+# pkg_ensure treats an installed name as done. A package that is neither
+# staged nor installed gets one bounded fetch: these images have no timeout(1).
 MISSING=$(ssh "$HOST" "
 cd $STAGE/pkgs
-if command -v apk >/dev/null 2>&1; then apk update >/dev/null 2>&1 || true; else opkg update >/dev/null 2>&1 || true; fi
+pkg_installed() {
+	if command -v apk >/dev/null 2>&1; then
+		apk info -e \"\$1\" >/dev/null 2>&1
+	else
+		opkg list-installed 2>/dev/null | grep -q \"^\$1 \"
+	fi
+}
+run_bounded() {
+	\"\$@\" >/dev/null 2>&1 &
+	_pid=\$!
+	_i=0
+	while [ \"\$_i\" -lt 25 ]; do
+		kill -0 \$_pid 2>/dev/null || break
+		_i=\$((_i + 1))
+		sleep 1
+	done
+	if kill -0 \$_pid 2>/dev/null; then
+		kill \$_pid 2>/dev/null || true
+		sleep 1
+		kill -9 \$_pid 2>/dev/null || true
+		wait \$_pid 2>/dev/null || true
+		return 1
+	fi
+	wait \$_pid
+}
 missing=''
+need_fetch=0
 for p in $PKGS; do
 	ls \"\$p\"-[0-9]*.apk \"\$p\"_*.ipk >/dev/null 2>&1 && continue
-	if command -v apk >/dev/null 2>&1; then
-		# -R pulls dependencies too (kmods need their -lib/firmware deps for a
-		# no-network install later); fall back for apk builds without it
-		apk fetch -R -o . \"\$p\" >/dev/null 2>&1 || apk fetch -o . \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
-	else
-		opkg download \"\$p\" >/dev/null 2>&1 || missing=\"\$missing \$p\"
-	fi
+	pkg_installed \"\$p\" && continue
+	need_fetch=1
 done
+if [ \"\$need_fetch\" = 1 ]; then
+	if command -v apk >/dev/null 2>&1; then run_bounded apk update || true; else run_bounded opkg update || true; fi
+	for p in $PKGS; do
+		ls \"\$p\"-[0-9]*.apk \"\$p\"_*.ipk >/dev/null 2>&1 && continue
+		pkg_installed \"\$p\" && continue
+		if command -v apk >/dev/null 2>&1; then
+			# -R pulls dependencies too (kmods need their -lib/firmware deps for a
+			# no-network install later); fall back for apk builds without it
+			run_bounded apk fetch -R -o . \"\$p\" || run_bounded apk fetch -o . \"\$p\" || missing=\"\$missing \$p\"
+		else
+			run_bounded opkg download \"\$p\" || missing=\"\$missing \$p\"
+		fi
+	done
+fi
 echo \"\$missing\"")
 
 # Top up the node's stage from the local cache: push EVERY cached file the

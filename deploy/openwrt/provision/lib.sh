@@ -163,12 +163,21 @@ provision_parse_neigh() {
 	local mac
 	mac="$(printf '%s' "$1" | tr 'A-F' 'a-f')"
 	awk -v mac="$mac" '
-	BEGIN { mac = tolower(mac) }
+	function canon(s,    n, a, i, out) {
+		n = split(tolower(s), a, ":")
+		out = ""
+		for (i = 1; i <= n; i++) {
+			if (length(a[i]) == 1) a[i] = "0" a[i]
+			out = out (i > 1 ? ":" : "") a[i]
+		}
+		return out
+	}
+	BEGIN { mac = canon(mac) }
 	{
 		ip = ""
 		ll = ""
 		if ($1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ip = $1
-		for (i = 1; i <= NF; i++) if ($i == "lladdr" && i < NF) ll = tolower($(i + 1))
+		for (i = 1; i <= NF; i++) if ($i == "lladdr" && i < NF) ll = canon($(i + 1))
 		if (ll != mac || ip == "") next
 		n = split(ip, o, ".")
 		if (n == 4 && o[1] == 10 && o[2] == 42 && o[4] == 1) {
@@ -206,15 +215,62 @@ provision_cable_renew_allowed() {
 }
 
 provision_route_iface() {
-	ip -4 route get "$1" 2>/dev/null | awk '{
-		for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }
-	}'
+	if command -v ip >/dev/null 2>&1; then
+		ip -4 route get "$1" 2>/dev/null | awk '{
+			for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }
+		}'
+		return 0
+	fi
+	route -n get "$1" 2>/dev/null | awk '/interface:/{ print $2; exit }'
 }
 
 provision_default_iface() {
-	ip -4 route show default 2>/dev/null | awk '{
-		for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }
-	}'
+	if command -v ip >/dev/null 2>&1; then
+		ip -4 route show default 2>/dev/null | awk '{
+			for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }
+		}'
+		return 0
+	fi
+	route -n get default 2>/dev/null | awk '/interface:/{ print $2; exit }'
+}
+
+# Local IPv4 lines for provision_parse_local_gateways. Linux `ip -4 -o addr`
+# or macOS ifconfig rewritten to the same `inet a.b.c.d/24` shape.
+provision_local_ipv4() {
+	if command -v ip >/dev/null 2>&1; then
+		ip -4 -o addr show 2>/dev/null
+		return 0
+	fi
+	ifconfig -a 2>/dev/null | awk '
+		$1 == "inet" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {
+			print "inet " $2 "/24"
+		}
+	'
+}
+
+# Neighbor lines for provision_parse_neigh. Linux `ip neigh` or macOS arp.
+provision_neigh_lines() {
+	local dev="${1:-}"
+	if command -v ip >/dev/null 2>&1; then
+		if [ -n "$dev" ]; then
+			ip -4 neigh show dev "$dev" 2>/dev/null
+		else
+			ip -4 neigh show 2>/dev/null
+		fi
+		return 0
+	fi
+	if [ -n "$dev" ]; then
+		arp -an -i "$dev" 2>/dev/null
+	else
+		arp -an 2>/dev/null
+	fi | awk '
+		$2 ~ /^\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)$/ && $4 ~ /:/ {
+			ip = $2
+			gsub(/[()]/, "", ip)
+			mac = $4
+			print ip " lladdr " mac
+		}
+	'
 }
 
 provision_renew_cable() {
@@ -234,6 +290,12 @@ provision_renew_cable() {
 	fi
 	if command -v networkctl >/dev/null 2>&1; then
 		networkctl renew "$iface"
+		return $?
+	fi
+	# macOS: the cable NIC is not NetworkManager. ipconfig renews only that
+	# service and does not touch the Wi-Fi default route.
+	if command -v ipconfig >/dev/null 2>&1; then
+		ipconfig set "$iface" DHCP
 		return $?
 	fi
 	echo "no DHCP client to renew $iface" >&2
@@ -261,17 +323,17 @@ provision_resolve_host() {
 	found=""
 	if [ -n "${PROVISION_LAN_MAC:-}" ]; then
 		if [ -n "$iface" ]; then
-			found="$(ip -4 neigh show dev "$iface" 2>/dev/null | provision_parse_neigh "$PROVISION_LAN_MAC" || true)"
+			found="$(provision_neigh_lines "$iface" | provision_parse_neigh "$PROVISION_LAN_MAC" || true)"
 		fi
 		if [ -z "$found" ]; then
-			found="$(ip -4 neigh show 2>/dev/null | provision_parse_neigh "$PROVISION_LAN_MAC" || true)"
+			found="$(provision_neigh_lines | provision_parse_neigh "$PROVISION_LAN_MAC" || true)"
 		fi
 	fi
 	if [ -z "$found" ]; then
-		found="$(ip -4 -o addr show 2>/dev/null | provision_parse_local_gateways | grep -vx "$addr" | head -n 1 || true)"
+		found="$(provision_local_ipv4 | provision_parse_local_gateways | grep -vx "$addr" | head -n 1 || true)"
 		# More than one local 10.42 gateway is ambiguous. Use it only when unique.
 		local count
-		count="$(ip -4 -o addr show 2>/dev/null | provision_parse_local_gateways | grep -vx "$addr" | wc -l | tr -d ' ')"
+		count="$(provision_local_ipv4 | provision_parse_local_gateways | grep -vx "$addr" | wc -l | tr -d ' ')"
 		if [ "$count" != 1 ]; then
 			found=""
 		fi
@@ -282,12 +344,12 @@ provision_resolve_host() {
 		if [ "$renew_ok" = 1 ]; then
 			sleep 3
 			if [ -n "${PROVISION_LAN_MAC:-}" ]; then
-				found="$(ip -4 neigh show dev "$iface" 2>/dev/null | provision_parse_neigh "$PROVISION_LAN_MAC" || true)"
+				found="$(provision_neigh_lines "$iface" | provision_parse_neigh "$PROVISION_LAN_MAC" || true)"
 			fi
 			if [ -z "$found" ]; then
-				count="$(ip -4 -o addr show 2>/dev/null | provision_parse_local_gateways | grep -vx "$addr" | wc -l | tr -d ' ')"
+				count="$(provision_local_ipv4 | provision_parse_local_gateways | grep -vx "$addr" | wc -l | tr -d ' ')"
 				if [ "$count" = 1 ]; then
-					found="$(ip -4 -o addr show 2>/dev/null | provision_parse_local_gateways | grep -vx "$addr")"
+					found="$(provision_local_ipv4 | provision_parse_local_gateways | grep -vx "$addr")"
 				fi
 			fi
 		fi
@@ -403,6 +465,10 @@ EOF
 	printf '%s\n' '10.42.149.1 dev enp0 lladdr d4:0d:ab:46:2f:e8 REACHABLE' \
 		'192.168.1.1 dev enp0 lladdr d4:0d:ab:46:2f:e8 STALE' \
 		| provision_parse_neigh 'D4:0D:AB:46:2F:E8' | grep -qx '10.42.149.1'
+	printf '%s\n' '? (10.42.149.1) at d4:d:ab:46:2f:e8 on en15 ifscope [ethernet]' \
+		| provision_neigh_lines >/dev/null
+	printf '%s\n' '10.42.149.1 lladdr d4:0d:ab:46:2f:e8' \
+		| provision_parse_neigh 'd4:0d:ab:46:2f:e8' | grep -qx '10.42.149.1'
 	printf '%s\n' '3: enp0 inet 10.42.149.246/24 brd 10.42.149.255 scope global dynamic enp0' \
 		| provision_parse_local_gateways | grep -qx '10.42.149.1'
 	provision_cable_renew_allowed enp0 wlp0

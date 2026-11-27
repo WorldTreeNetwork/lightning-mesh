@@ -1,16 +1,16 @@
 # Live RF / LAN snapshot for agents. NOT consumed by update-fleet.sh
-# (that still walks fleet-nodes.conf). Observed from IdentiKey Pirate Radio
-# (192.168.0.108/24) on 2026-08-31. Overlay 10.254.x was unreachable from here.
-#
-# Update this file when you can actually SSH a node (WAN SSH is closed on the
-# Pirate Radio lease). Do not invent node_ids.
+# (that still walks fleet-nodes.conf). Observed 2026-11-26 from IdentiKey
+# Pirate Radio, then confirmed by mjolnir-meshd status over SSH.
+# Do not invent a fifth id. The cabled M3000 stays pending.
 
-observed_at: 2026-08-31
+observed_at: 2026-11-26
 observer:
   ssid: "IdentiKey Pirate Radio"
   ipv4: 192.168.0.108/24
   gateway: 192.168.0.1
-  note: "Do not join Lightning Mesh from the agent laptop — that SSID had no internet."
+  gateway_mac: "68:7f:f0:52:de:d8"
+  ethernet: enp196s0f0u1
+  ethernet_note: "Link up at 100 Mb/s. Neighbor is stock Cudy M3000 V2.0, not a Lightning node."
 
 radio:
   client_ssid: "Lightning Mesh"
@@ -20,75 +20,69 @@ radio:
   backhaul_channel: 36
   backhaul_band: 5g
 
-# Inventory from fleet-nodes.conf plus radios seen on the air this session.
+# Four Lightning radios. The cabled M3000 is a fifth Cudy and is not enrolled.
 nodes:
+  - name: ap3000-indoor
+    model: Cudy AP3000 v1
+    node_id: e9688ef6e872588f64a3025f81871614ab5dd276dc06b5b7629f6ea7b840753e
+    overlay: 10.254.61.119
+    lan_gw: 10.42.61.1
+    build: 06b2ab9-dirty
+    client_bssid: "D4:0D:AB:5C:02:82"
+    mesh_bssid: "D6:0D:AB:5C:02:83"
+    client_signal_dbm: -31
+    mesh_heard: false
+    group: house
+
+  - name: openwrt-one
+    model: OpenWrt One
+    node_id: 4298275cb60f39582d8c41187494ee01171379184db10f9ebc4885b15e4fbced
+    lan_gw: 10.42.58.1
+    build: 06b2ab9-dirty
+    uci_name: ""
+    client_bssid: "20:05:B6:02:E2:53"
+    extra_ssid: "ZKNode"
+    extra_bssid: "20:05:B6:02:E2:52"
+    client_signal_dbm: -27
+    mesh_heard: false
+    group: house
+    role_notes: "Both VAPs are 2.4 GHz channel 6. 5 GHz mjolnir-mesh was not heard."
+
   - name: ap3000-outdoor
     model: Cudy AP3000 Outdoor v1
     node_id: 0d11599454e4fdadcc7ada776120f353fbf2d3b7d9ea618cf85cc2ae963b2a4b
     overlay: 10.254.166.226
     lan_gw: 10.42.166.1
+    link_local: "fe80::80af:caff:fef2:20f6%br-mesh"
+    build: 06b2ab9-dirty
     client_bssid: "80:AF:CA:F2:20:F5"
     mesh_bssid: "82:AF:CA:F2:20:F6"
-    previous_wan: 10.0.0.239   # Origami Springs; UNREACHABLE from Pirate Radio
-    overlay_reachable_from_observer: false
-    rf_signal_pct: 49
-    role_notes: "Was house gateway (gateway=auto, babel 0.0.0.0/0 metric 128). Do not strip that export when it HAS a live WAN. Do not put 192.168.1.1/24 on br-lan."
-
-  - name: m3000
-    model: Cudy M3000 v1
-    node_id: 7faf041cb7c26749f54da72779593ab42e1cc25effb4619834d2f56e6a99d213
-    overlay: 10.254.242.172
-    lan_gw: 10.42.242.1
-    client_bssid: "80:AF:CA:E7:BD:00"
-    mesh_bssid: "82:AF:CA:E7:BD:01"
-    overlay_reachable_from_observer: false
-    rf_signal_pct: 60
-    role_notes: "DWeb field box. Did not export default; learned internet via AP3000."
-
-  - name: wr3000s-a
-    model: Cudy WR3000S v1
-    node_id: f7cb77dceeed19233c6c67fe7aa3a547c526378e036611ba6b0ada7f62177252
-    overlay: 10.254.242.84
-    overlay_reachable_from_observer: false
-    client_bssid: null
-    role_notes: "Inventory only — BSSID not confirmed this session."
+    client_signal_dbm: -42
+    mesh_signal_dbm: -52
+    mesh_heard: true
+    group: house
+    role_notes: "Only steady mjolnir-mesh beacon. No 192.168.0.0/24 lease."
 
   - name: tr3000
     model: Cudy TR3000 v1
     node_id: 06318b4287049a45395143e20c7a77f82e69c4dcf6d8571eff19faa8dbfb16f3
     overlay: 10.254.61.115
-    overlay_reachable_from_observer: false
-    client_bssid: null
-    role_notes: "Inventory only — BSSID not confirmed this session."
+    lan_gw: 10.42.62.1
+    build: 06b2ab9-dirty
+    client_bssid: "80:AF:CA:98:FB:0F"
+    mesh_bssid: "82:AF:CA:98:FB:10"
+    client_heard: false
+    mesh_heard: once
+    wan_ipv4: 192.168.0.48/24
+    wan_mac: "80:af:ca:98:fb:10"
+    wan_tcp: "22 and 80 closed; ping about 2 ms"
+    group: house
+    role_notes: "WAN on the Pirate Radio router. Client LAN is 10.42.62.1. 10.42.61.1 is indoor. House jump. Walk last."
 
-  - name: m3000-b
-    model: Cudy M3000 v1/v2
-    node_id: 2b26d88630e0989625e2cf0d2c980d9e114d0566022d0005cac83056ad73d250
-    overlay: 10.254.12.214
-    lan_gw: 10.42.12.1
-    recovery_ipv4: 192.168.1.1
-    overlay_reachable_from_observer: false
-    recovery_ipv4_reachable: false
-    role_notes: "Wired jump/transit in fleet-nodes.conf. 192.168.1.1 did not answer. LAST in update-fleet.sh order."
-
-  # Seen on RF + Pirate Radio LAN, not yet bound to a node_id.
-  - name: unknown-close-m3000-class
-    model: Cudy (OUI 80:AF:CA, MAC next to m3000)
+  - name: m3000-bench
+    model: Cudy M3000 V2.0
     node_id: null
-    client_bssid: "80:AF:CA:E7:BA:9C"
-    mesh_bssid: null
-    pirate_radio_wan_lease: 192.168.0.118
-    ipv6_ll: "fe80::82af:caff:fee7:ba9c%wlp191s0"
-    rf_signal_pct: 100
-    wan_tcp: "all closed (22/80/8080) — ping ok"
-    overlay_reachable_from_observer: false
-    role_notes: "THIS is what a laptop in the room associates to. Almost certainly the intended Pirate Radio gateway. Cannot SSH from WAN."
-
-  - name: unknown-d9
-    model: Cudy
-    node_id: null
-    client_bssid: "80:AF:CA:D9:85:AE"
-    mesh_bssid: "82:AF:CA:D9:85:AF"
-    rf_signal_pct: 35
-    overlay_reachable_from_observer: false
-    role_notes: "Fourth radio on the air. Candidate wr3000s-a or tr3000. Confirm before adding a fleet-nodes.conf line."
+    eth_mac: "80:af:ca:92:a6:79"
+    ipv6_ll: "fe80::82af:caff:fe92:a679%enp196s0f0u1"
+    group: bench
+    role_notes: "The cabled box. Stock LuCI titled M3000, HW M3000 V2.0, copyright 2024. SSH refused. No DHCPv4. Pending line only."

@@ -217,6 +217,42 @@ names as convenient, not as proof of identity.
    republish loop (`src/lib/server/mesh.ts` in that app) is a working
    server-side example.
 
+## Dialing another iroh endpoint on the mesh
+
+A client iroh endpoint publishes its own UDP socket. This is not a `.mesh`
+name and not a service-directory row. The record is keyed by the endpoint id,
+which is the lowercase hex of the Ed25519 public key the app uses as its
+`iroh::SecretKey`.
+
+The signed bytes are exactly:
+
+```
+mjolnir-iroh-dial:v1\n<challenge_hex>\n<port>\n<ip>\n<signed_at_ms>
+```
+
+`<ip>` is the client's `10.42` address, dotted decimal. It must be the TCP
+address hello sees for the POST. `<port>` is the iroh UDP port, never `0`.
+`<signed_at_ms>` is the client's unix time in milliseconds, within two minutes
+of the router. There is no relay field. An unknown JSON field is a `400`.
+
+```
+GET  http://<lan-gateway>/api/challenge
+POST http://<lan-gateway>/api/iroh-dial
+GET  http://<lan-gateway>/api/iroh/<endpoint-id>
+```
+
+The POST body is `pubkey`, `sig`, `challenge`, `port`, `ip`, `signed_at_ms`.
+The GET returns one record (`ip`, `port`, `signed_at_ms`, `sig`, `challenge`)
+or `404`. It does not list the book. Renew well inside 90 seconds. A quiet
+endpoint drops out of lookup.
+
+Build the app endpoint with `RelayMode::Staging` and two address lookups: this
+GET for the `10.42` socket, and pkarr/DNS for the home relay. Dial the endpoint
+id with the socket and no relay URL. iroh tries the socket first. If it does
+not answer, address lookup supplies the relay. The handshake still checks the
+endpoint key. On a client SSID with no internet the relay cannot be reached,
+and the signed socket is the only path.
+
 This endpoint only authenticates the request; it never holds your key.
 Losing the key means the name fades and frees up after the lease lapses —
 no permanent lock, no support ticket required.

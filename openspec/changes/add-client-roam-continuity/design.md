@@ -1,0 +1,144 @@
+# Design: client roam continuity
+
+## Shape kept
+
+One routed `/24` per node. Client L2 is never bridged across nodes. A roamed
+phone keeps its address; the node it is on holds a mobility `/32` (proto 158)
+that babel carries mesh-wide (`sz9`). This change repairs the DHCP and radio
+edges of that design. It does not replace it.
+
+## DHCP: leaderless, by reservation
+
+Address *allocation* stays local: a node only picks new addresses from its
+own `/24`, so two nodes can never hand out the same address. Address
+*confirmation* is mesh-wide: any node confirms a `MAC → IP` pair found in the
+gossiped lease book. That split is why no leader is needed.
+
+dnsmasq config, proven in a network-namespace sandbox on 2.93 (2026-11-13):
+
+Static part, `mjolnir-roam.conf` in dnsmasq's `conf-dir`. Written when the
+node's own subnet is known. Changing it needs a dnsmasq restart.
+
+```
+dhcp-hostsfile=<conf-dir>/.mjolnir-roam.hosts
+# for every x in 1..=254 except the node's own third octet:
+shared-network=br-lan,10.42.x.0
+dhcp-range=set:gx,10.42.x.0,static,255.255.255.0,12h
+dhcp-option=tag:gx,option:router,10.42.x.1
+dhcp-option=tag:gx,option:dns-server,10.42.x.1
+```
+
+Dynamic part, `.mjolnir-roam.hosts`, one `mac,ip` line per lease-book entry
+in `10.42.0.0/16`. Own-subnet entries are listed too: a phone that keeps
+renewing on another node outlives its lease at home, and the reservation
+stops the home node handing that address to someone else. dnsmasq re-reads it on SIGHUP. The leading dot
+makes `conf-dir` skip it as a config file. It lives in `conf-dir` because
+that directory is already mounted into the dnsmasq jail.
+
+Sandbox results:
+
+| Case | Today | With this config |
+|---|---|---|
+| REQUEST for a reserved foreign address | NAK, 20 ms | ACK same address, 40 ms |
+| DISCOVER from a MAC with a foreign reservation | own-subnet offer, 3.0 s | foreign address offered, 17 ms |
+| New reservation added, SIGHUP only | — | honoured |
+| DISCOVER from an unknown MAC | own-subnet offer | own-subnet offer (unchanged) |
+| REQUEST for a foreign address with no reservation | NAK | NAK |
+
+The last row is the accepted limit: a node that has not yet heard the lease
+renumbers the phone. Gossip publishes within one poll of the original ACK and
+the lease book is persisted, so the window is a node that was offline for the
+phone's whole stay.
+
+The gateway and DNS a roamed phone is told stay `10.42.<home>.1`. Proxy ARP
+answers for that address on the node the phone is on.
+
+## Lease ingest: read the lease file
+
+meshd polls `/tmp/dhcp.leases` (`<expiry> <mac> <ip> <hostname> <client-id>`).
+An entry is published when it is new to the book, or when its expiry has
+advanced since the last poll (a fresh ACK). On the first poll after start, an
+entry already in the book with the same address is not re-stamped: a restart
+must not make an old lease look newer than a later one elsewhere.
+
+The hook is removed and the `dhcpscript` UCI option is cleared. A hook that
+OpenWrt sources inside a jail is the wrong tool for a daemon that can read
+the file.
+
+LWW on HLC stays: the latest ACK anywhere is the address every node confirms.
+
+## Roam assistance
+
+Each node reads its own neighbour report per client AP
+(`ubus call hostapd.<ap> rrm_nr_get_own` → `[bssid, ssid, nr_hex]`) and
+gossips it keyed by BSSID. Each node installs every peer report whose SSID
+matches the AP (`rrm_nr_set`) and turns on neighbour report, beacon report
+and BSS transition (`bss_mgmt_enable`). Both calls are runtime ubus calls:
+no `wifi reload`, no client drop. A reconcile loop re-asserts them, since a
+hostapd restart forgets them.
+
+Entries expire if their owner stops refreshing them, so a dead node leaves
+the neighbour list.
+
+This is advice to the phone. It shortens scans and helps a phone leave a weak
+AP sooner. It does not steer or kick clients; no `usteer`/`dawn`.
+
+Works on an open SSID. 802.11r stays off there: there is no key handshake to
+shorten.
+
+## Shared gateway MAC
+
+Phones check their gateway after a hop by unicast ARP to the gateway's
+*remembered MAC* (RFC 4436; iOS does this). On a new node that MAC is absent,
+the check fails, and the phone falls back to DHCP plus a fresh ARP.
+
+Every node therefore sets its client bridge to one MAC,
+`02:4c:6d:65:73:68` (locally administered, a constant: nothing to converge).
+The same gateway *IP* is not needed, because proxy ARP already answers for
+every `10.42.x.1`, and it now answers from the same MAC everywhere. This is
+the anycast-gateway technique (VRRP virtual MAC, EVPN distributed gateway).
+Client L2 is per node, so the MAC never appears twice in one broadcast
+domain.
+
+It is set with `ip link`, not UCI: no netifd reload. The client-dataplane
+loop re-asserts it every 3 s.
+
+A client that cached the bridge's old MAC is not guaranteed to keep working.
+The bridge keeps a local entry for each port's own MAC, but a frame for a
+MAC owned by a *different* port than it arrived on is marked other-host and
+IPv4 drops it. Where the AP port owns the old MAC (wr3000s-bench: every port
+shares one) nothing breaks; elsewhere the client stalls until it re-ARPs.
+This happens once, when the MAC first goes on, and after a reboot for
+clients that associated before meshd started. A gratuitous ARP would close
+it; the nodes have no `arping`. Sol review, 2026-11-13.
+
+Shared copper (two nodes' LAN ports on one switch) is where the MAC would
+collide. `heal::foreign_gateway_on_bridge` detaches the copper ports, turns
+proxy ARP off, and now restores a hardware MAC (taken from a bridge port, so
+it survives a meshd restart). That detector is passive: it needs a neighbour
+entry for the other node's gateway, and nothing guarantees one. Until an
+active check exists, a cabled pair can share the MAC undetected. Tracked as
+a bead.
+
+The kernel does not add a link-local for the new MAC on a MAC-only change,
+so recorded IPv6 recovery addresses are unaffected.
+
+## Field finding: proxy ARP answered the phone's own address
+
+Walk test, 2026-11-13, packet capture on each AP. After every hop the phone
+(iOS) broadcast an ARP request for its own address. The node it had joined
+still had the previous node's `/32` for that address, so its route to the
+address left by the mesh and proxy ARP replied "is at the gateway MAC". The
+phone took that as a conflict: DHCPDECLINE, the 10 s wait RFC 2131 asks for,
+then DISCOVER. dnsmasq disables a declined reservation for 10 minutes, so
+the phone was then renumbered (`.189` to `.188`). Measured gap: 12 to 13 s
+per hop, about 30 s with the renumber.
+
+This path predates this change (`proxy_arp=1` plus mobility `/32`, `sz9`)
+and matches the original complaint of 5 to 10 s of silence.
+
+Fix: `drop_gratuitous_arp=1` on the client bridge. The kernel then discards
+requests whose sender and target match before the proxy decision.
+
+Still open from the same trace: a node kept routing the phone's address to
+the previous node for several seconds after that node withdrew its `/32`.

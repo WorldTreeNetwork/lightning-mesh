@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { guildSnapshot, guildRename, guildAssign, guildAdmit } from '../api';
+	import { guildSnapshot, guildRename, guildAssign, guildAdmit, signGuildOp } from '../api';
+	import { guildSignInput } from '../sign-input';
 	import type { GuildActor, GuildRecord } from './types';
 	import IdentityCard from './IdentityCard.svelte';
 	import GuildList from './GuildList.svelte';
@@ -17,7 +18,7 @@
 
 	onMount(() => { void reload(); });
 
-	async function reload() {
+	async function reload(focusHex?: string) {
 		loading = true;
 		error = '';
 		try {
@@ -42,7 +43,9 @@
 				ops: snapshot.ops.filter((op) => op.about === g.keyspaceId || op.hex === g.keyspaceId),
 				appAddress: g.appAddress
 			}));
-			if (!guilds.some((g) => g.id === selectedId)) {
+			const focused = focusHex ? guilds.find((g) => g.hex === focusHex) : undefined;
+			if (focused) selectedId = focused.id;
+			else if (!guilds.some((g) => g.id === selectedId)) {
 				selectedId = guilds.find((g) => g.workplace)?.id ?? guilds.find((g) => g.outer === null)?.id ?? '';
 			}
 		} catch (cause) {
@@ -100,6 +103,21 @@
 		}
 	}
 
+	async function onSign(verb: 'join' | 'change' | 'nest') {
+		if (loading) return;
+		if (verb !== 'join' && !selected) return;
+		if (verb === 'nest' && !selected?.workplace) return;
+		loading = true;
+		error = '';
+		try {
+			const receipt = await signGuildOp(guildSignInput(verb, selected?.hex));
+			await reload(receipt.keyspaceId);
+		} catch (cause) {
+			error = String(cause);
+			loading = false;
+		}
+	}
+
 	function openGuild(id: string) {
 		if (guilds.some((g) => g.id === id)) selectedId = id;
 	}
@@ -123,10 +141,13 @@
 				/>
 				<GuildEditors
 					guildName={selected.name}
+					workplace={selected.workplace}
+					busy={loading}
 					showAdmit={selected.profile === 'access-node'}
 					{onLocalName}
 					{onAssign}
 					{onAdmit}
+					{onSign}
 				/>
 			{/key}
 		{:else}

@@ -28,6 +28,8 @@ export interface LinkLocalNeighbor {
 	router?: boolean;
 	/** mDNS hostname, such as `edgebox.local`. */
 	hostname?: string | null;
+	/** `GET /api/node` answered as Mjolnir hello, including an unpublished `{}`. */
+	lightning?: boolean;
 	/** Present when `GET /api/node` on this address answered as a Lightning node. */
 	mesh_name?: string | null;
 	mesh_node_id?: string | null;

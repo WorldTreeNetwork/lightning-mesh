@@ -1,5 +1,7 @@
 # Household hardware inventory
 
+Bench reference: [OpenWrt One and Heltec WiFi LoRa 32 V4](NOTES-openwrt-one-heltec.md) (specifications, device identities, and mikroBUS wiring).
+
 Evidence-only inventory for planning an upstream receiver and a safe wired
 management arrangement. Every line is either **observed** (dated, with the repo
 file or bead it came from), **documented default** (what a repo file specifies,

@@ -3,15 +3,18 @@ use crate::{
     ApplyAdapter, EngineError, Observation, ObservationKind, ObservationStatus, Outcome, Plan,
     Receipt, TxnPaths, UciConfig, Vantage,
 };
+use crate::{Passphrase, ProvesUpstream, UplinkPlan, check_restoration};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// Strict OpenWrt adapter for the v1 mutation allowlist. It copies desired UCI
 /// files; it never runs package operations, swaps wpad, or replaces binaries.
 pub struct OpenWrtAdapter {
     paths: TxnPaths,
     source: Option<PathBuf>,
-    plan: Option<Plan>,
+    probes: Box<dyn OpenWrtProbes>,
+    secret: Option<(String, Passphrase)>,
 }
 
 impl OpenWrtAdapter {
@@ -19,16 +22,52 @@ impl OpenWrtAdapter {
         Self {
             paths,
             source: None,
-            plan: None,
+            probes: Box::new(LiveProbes::default()),
+            secret: None,
         }
     }
 
-    pub fn for_apply(paths: TxnPaths, source: impl Into<PathBuf>, plan: Plan) -> Self {
+    pub fn for_apply(paths: TxnPaths, source: impl Into<PathBuf>, _plan: Plan) -> Self {
         Self {
             paths,
             source: Some(source.into()),
-            plan: Some(plan),
+            probes: Box::new(LiveProbes::default()),
+            secret: None,
         }
+    }
+
+    /// Inject probes and reload operations for offline tests.
+    pub fn with_probes(mut self, probes: impl OpenWrtProbes + 'static) -> Self {
+        self.probes = Box::new(probes);
+        self
+    }
+
+    /// Configure the interfaces and peer targets used by real probes.
+    pub fn with_probe_targets(self, targets: ProbeTargets) -> Self {
+        self.with_probes(LiveProbes { targets })
+    }
+
+    /// Keep credentials in memory until apply holds the transaction lock.
+    pub fn with_uplink_secret(mut self, candidate_id: String, passphrase: Passphrase) -> Self {
+        self.secret = Some((candidate_id, passphrase));
+        self
+    }
+
+    fn probe(&mut self, kind: ObservationKind) -> Observation {
+        let result = self.probes.probe(kind);
+        let mut observation = self.observation(
+            kind,
+            if result.passed {
+                ObservationStatus::Passed
+            } else {
+                ObservationStatus::Failed
+            },
+            None,
+        );
+        observation.vantage = result.vantage;
+        observation.target = result.target;
+        observation.interface = result.interface;
+        observation
     }
 
     fn revision(&self) -> Result<String, String> {
@@ -103,6 +142,38 @@ impl ApplyAdapter for OpenWrtAdapter {
             .source
             .as_ref()
             .ok_or_else(|| "apply source directory was not provided".to_owned())?;
+        if let Some((name, passphrase)) = &self.secret {
+            crate::storage::secret_name(name).map_err(|e| e.to_string())?;
+            let target = self.paths.uplink_secrets().join(name);
+            let previous = match fs::read(&target) {
+                Ok(bytes) => Some(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return Err("cannot read previous uplink secret".into()),
+            };
+            crate::storage::atomic_json(
+                &self
+                    .paths
+                    .snapshot(&plan.transaction_id)
+                    .join("uplink-secret.json"),
+                &crate::storage::SecretSnapshot {
+                    name: name.clone(),
+                    previous,
+                },
+            )
+            .map_err(|_| "cannot snapshot uplink secret".to_owned())?;
+            crate::storage::ensure_dir(&self.paths.uplink_secrets()).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(
+                    self.paths.uplink_secrets(),
+                    fs::Permissions::from_mode(0o700),
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            atomic_bytes(&target, passphrase.expose().as_bytes())
+                .map_err(|_| "cannot write uplink secret".to_owned())?;
+        }
         for config in &plan.resources {
             let desired = source.join(config.file_name());
             let missing = source.join(format!("{}.missing", config.file_name()));
@@ -137,42 +208,27 @@ impl ApplyAdapter for OpenWrtAdapter {
                 plan.proposed_revision
             ));
         }
-        Ok(())
+        self.probes.reload_wireless()
     }
 
     fn check_health(&mut self, plan: &Plan) -> Result<Vec<Observation>, String> {
         let mut observations = vec![self.revision_observation(&plan.proposed_revision)?];
         for required in &plan.required_health {
             if *required != ObservationKind::AppliedRevision {
-                observations.push(self.observation(
-                    *required,
-                    ObservationStatus::Unknown,
-                    Some("no target/vantage was supplied for this reachability probe".into()),
-                ));
+                observations.push(self.probe(*required));
             }
         }
         Ok(observations)
     }
 
     fn verify_restoration(&mut self, previous_revision: &str) -> Result<Vec<Observation>, String> {
-        let revision = self.revision_observation(previous_revision)?;
-        if revision.status != ObservationStatus::Passed {
-            return Err(revision
-                .detail
-                .clone()
-                .unwrap_or_else(|| "restored revision does not match".into()));
-        }
-        let mut observations = vec![revision];
-        if let Some(plan) = &self.plan {
-            for required in &plan.required_health {
-                if *required != ObservationKind::AppliedRevision {
-                    return Err(format!(
-                        "required {required:?} reachability cannot be proved without a target and vantage"
-                    ));
-                }
-            }
-        }
-        observations.shrink_to_fit();
+        self.probes.reload_wireless()?;
+        let observations = vec![
+            self.revision_observation(previous_revision)?,
+            self.probe(ObservationKind::ManagementReachability),
+        ];
+        check_restoration(&observations)
+            .map_err(|kind| format!("restoration did not prove {kind:?}"))?;
         Ok(observations)
     }
 }
@@ -201,4 +257,172 @@ pub fn write_result_from_receipt(path: &Path, receipt: &Receipt) -> Result<(), E
         ),
     };
     atomic_bytes(path, line.as_bytes())
+}
+
+impl ProvesUpstream for OpenWrtAdapter {
+    fn prepare_uplink(&mut self, uplink: &UplinkPlan) -> Result<(), String> {
+        let (ssid, bssid) = crate::uplink::station_identity(uplink)?;
+        self.probes.bind_candidate(&ssid, bssid.as_deref());
+        match (&uplink.secret, &self.secret) {
+            (Some(expected), Some((name, _)))
+                if expected.path == format!("{}/{}", crate::SECRET_DIR, name)
+                    && *name == uplink.candidate_id =>
+            {
+                Ok(())
+            }
+            (None, None) => Ok(()),
+            _ => Err("uplink secret was not staged for this candidate".into()),
+        }
+    }
+}
+
+/// A probe returns evidence metadata, never command output or credentials.
+pub struct ProbeResult {
+    pub passed: bool,
+    pub vantage: Vantage,
+    pub target: String,
+    pub interface: String,
+}
+
+pub trait OpenWrtProbes {
+    fn reload_wireless(&mut self) -> Result<(), String>;
+    fn probe(&mut self, kind: ObservationKind) -> ProbeResult;
+    fn bind_candidate(&mut self, _ssid: &str, _bssid: Option<&str>) {}
+}
+
+/// Explicit targets prevent a probe from silently using the management uplink.
+/// DNS and HTTPS use curl with both --interface and --dns-interface; a curl
+/// build without interface-bound DNS support fails closed.
+#[derive(Default)]
+pub struct ProbeTargets {
+    pub upstream_interface: String,
+    pub upstream_ssid: String,
+    pub upstream_bssid: Option<String>,
+    pub dns_server: String,
+    pub https_url: String,
+    pub mesh_interface: String,
+    pub mesh_peer: String,
+    pub management_interface: String,
+    pub management_peer: String,
+}
+
+#[derive(Default)]
+struct LiveProbes {
+    targets: ProbeTargets,
+}
+
+// OpenWrt's timeout bounds every command, including reload. Output is never
+// reflected into a receipt. No shell interpolation is involved.
+fn command(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new("timeout")
+        .arg("10")
+        .arg(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+impl OpenWrtProbes for LiveProbes {
+    fn bind_candidate(&mut self, ssid: &str, bssid: Option<&str>) {
+        self.targets.upstream_ssid = ssid.into();
+        self.targets.upstream_bssid = bssid.map(str::to_owned);
+    }
+    fn reload_wireless(&mut self) -> Result<(), String> {
+        command("wifi", &["reload"])
+            .map(|_| ())
+            .ok_or_else(|| "wireless reload failed".into())
+    }
+
+    fn probe(&mut self, kind: ObservationKind) -> ProbeResult {
+        use ObservationKind::*;
+        let t = &self.targets;
+        let (interface, target, vantage) = match kind {
+            MeshReachability => (&t.mesh_interface, &t.mesh_peer, Vantage::MeshPeer),
+            ManagementReachability => (
+                &t.management_interface,
+                &t.management_peer,
+                Vantage::ManagementPeer,
+            ),
+            _ => (
+                &t.upstream_interface,
+                &t.https_url,
+                Vantage::UpstreamInterface,
+            ),
+        };
+        let passed = !interface.is_empty()
+            && match kind {
+                UpstreamAssociation => {
+                    command("iw", &["dev", interface, "link"]).is_some_and(|out| {
+                        !t.upstream_ssid.is_empty()
+                            && out
+                                .lines()
+                                .any(|line| line.trim() == format!("SSID: {}", t.upstream_ssid))
+                            && out.lines().any(|line| {
+                                line.starts_with("Connected to ")
+                                    && t.upstream_bssid.as_ref().is_none_or(|bssid| {
+                                        line.split_whitespace()
+                                            .nth(2)
+                                            .is_some_and(|seen| seen.eq_ignore_ascii_case(bssid))
+                                    })
+                            })
+                    })
+                }
+                UpstreamAddress => command(
+                    "ip",
+                    &[
+                        "-4", "-o", "addr", "show", "dev", interface, "scope", "global",
+                    ],
+                )
+                .is_some_and(|out| out.split_whitespace().any(|word| word == "inet")),
+                UpstreamRoute => {
+                    command("ip", &["-4", "route", "show", "default", "dev", interface])
+                        .is_some_and(|out| out.lines().any(|line| line.starts_with("default ")))
+                }
+                UpstreamBoundDnsHttps => {
+                    !t.dns_server.is_empty()
+                        && target.starts_with("https://")
+                        && command(
+                            "curl",
+                            &[
+                                "--silent",
+                                "--fail",
+                                "--noproxy",
+                                "*",
+                                "--max-time",
+                                "8",
+                                "--interface",
+                                interface,
+                                "--dns-interface",
+                                interface,
+                                "--dns-servers",
+                                &t.dns_server,
+                                "--output",
+                                "/dev/null",
+                                "--write-out",
+                                "%{http_code}",
+                                target,
+                            ],
+                        )
+                        .is_some_and(|code| code.trim() == "204")
+                }
+                MeshReachability | ManagementReachability => {
+                    !target.is_empty()
+                        && command("ping", &["-c", "1", "-W", "2", "-I", interface, target])
+                            .is_some()
+                }
+                _ => false,
+            };
+        ProbeResult {
+            passed,
+            vantage,
+            target: target.clone(),
+            interface: interface.clone(),
+        }
+    }
 }

@@ -1,16 +1,22 @@
 <script lang="ts">
   let {
     guildName,
+    workplace = false,
+    busy = false,
     showAdmit = false,
     onLocalName,
     onAssign,
     onAdmit,
+    onSign,
   }: {
     guildName: string;
+    workplace?: boolean;
+    busy?: boolean;
     showAdmit?: boolean;
     onLocalName: (name: string) => void;
     onAssign: (nodeName: string, nodeId: string) => void;
     onAdmit?: (recipient: string) => void;
+    onSign?: (verb: 'join' | 'change' | 'nest') => void;
   } = $props();
 
   const NODE_ID = /^[0-9a-fA-F]{64}$/;
@@ -61,7 +67,14 @@
         Admit someone
       </button>
     {/if}
+    <button type="button" disabled={busy} onclick={() => onSign?.('join')}>Join</button>
+    <button type="button" disabled={busy} onclick={() => onSign?.('change')}>Change</button>
+    <button type="button" disabled={busy || !workplace} onclick={() => onSign?.('nest')}>Nest</button>
   </div>
+  <p class="hint">Join starts a house guild. Change records this computer as an admin of the selected guild. Nest signs an access-node guild, and only for a workplace guild.</p>
+  {#if !workplace}
+    <p class="hint">Select a workplace guild to nest.</p>
+  {/if}
 
   {#if task === 'rename'}
     <form onsubmit={(e) => { e.preventDefault(); saveName(); }}>
@@ -131,7 +144,14 @@
 
   .tasks {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .hint {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
   }
 
   button.on {

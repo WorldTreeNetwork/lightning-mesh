@@ -15,6 +15,7 @@
   },
   "license": "AGPL-3.0-or-later",
   "dependencies": {
+    "@lucide/svelte": "^1.67.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "bits-ui": "^2.19.3",

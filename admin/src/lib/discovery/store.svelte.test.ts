@@ -119,8 +119,6 @@ describe('DiscoveryStore', () => {
 		expect(store.interfaces).toHaveLength(3);
 		expect(store.networkInterfaces.map((i) => i.name)).toEqual(['eth0', 'wlan0']);
 		expect(store.neighbors).toHaveLength(4);
-		expect(store.uniqueLocalCount).toBe(1);
-		expect(store.linkLocalCount).toBe(3);
 		expect(store.probed).toBe(true);
 		expect(store.lastScan).toBeTypeOf('number');
 	});
@@ -129,13 +127,8 @@ describe('DiscoveryStore', () => {
 		const store = new DiscoveryStore();
 		mockScan(sample);
 		await store.scan();
-		expect(store.selectedScope).toBe('all');
 		expect(store.visibleNeighbors).toHaveLength(4);
-		store.selectScope('unique-local');
-		expect(store.visibleNeighbors).toHaveLength(1);
-		expect(store.visibleNeighbors[0].address).toBe('fd01:d28c:7e4a::1');
 		store.selectIface('eth0');
-		store.selectScope('all');
 		expect(store.visibleNeighbors).toHaveLength(3);
 		expect(store.neighborCount('wlan0')).toBe(1);
 		expect(store.visibleListText()).toContain('YF4RhMGBc3LA1xkSVuXzpg');

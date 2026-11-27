@@ -23,9 +23,9 @@ e2e_log dhcp "$dhcp_log"
 
 [ "$ipv4_after" = "$ipv4" ] || e2e_fail "B offered different IP '$ipv4_after' want '$ipv4'"
 
-roam=$(remote "$B" "cat /tmp/dnsmasq.cfg01411c.d/mjolnir-roam.conf 2>/dev/null || cat /tmp/dnsmasq*.d/mjolnir-roam.conf 2>/dev/null || true")
-echo "$roam" | grep -qi "${sta_mac}" || e2e_fail "B mjolnir-roam.conf lacks STA MAC $sta_mac (LeaseBook/hostsfile empty?)"
-echo "$roam" | grep -q "$ipv4" || e2e_fail "B mjolnir-roam.conf lacks IP $ipv4"
-e2e_log hostsfile "B roam.conf has $sta_mac $ipv4"
+roam=$(remote "$B" "cat /tmp/dnsmasq.cfg01411c.d/.mjolnir-roam.hosts 2>/dev/null || cat /tmp/dnsmasq*.d/.mjolnir-roam.hosts 2>/dev/null || true")
+echo "$roam" | grep -qi "${sta_mac}" || e2e_fail "B .mjolnir-roam.hosts lacks STA MAC $sta_mac (LeaseBook/hostsfile empty?)"
+echo "$roam" | grep -q "$ipv4" || e2e_fail "B .mjolnir-roam.hosts lacks IP $ipv4"
+e2e_log hostsfile "B .mjolnir-roam.hosts has $sta_mac $ipv4"
 e2e_log pass "dhcp-crdt"
 echo "PASS dhcp-crdt"

@@ -124,6 +124,48 @@ export function demoScan(): ScanResult {
 				source: 'addr'
 			},
 			{
+				iface: 'eth0',
+				ifindex: 3,
+				address: 'fd01:d28c:7e4a::31',
+				scoped: 'fd01:d28c:7e4a::31',
+				base58: 'YMeshAp3000Example001',
+				scope: 'unique-local',
+				mac: 'b2:10:00:00:00:31',
+				state: 'reachable',
+				kind: 'neighbor',
+				source: 'neigh',
+				mesh_name: 'ap3000',
+				mesh_node_id: 'aa'
+			},
+			{
+				iface: 'eth0',
+				ifindex: 3,
+				address: 'fd01:d28c:7e4a::32',
+				scoped: 'fd01:d28c:7e4a::32',
+				base58: 'YMeshTr3000Example001',
+				scope: 'unique-local',
+				mac: 'b2:10:00:00:00:32',
+				state: 'reachable',
+				kind: 'neighbor',
+				source: 'neigh',
+				mesh_name: 'tr3000',
+				mesh_node_id: 'bb'
+			},
+			{
+				iface: 'eth0',
+				ifindex: 3,
+				address: 'fd01:d28c:7e4a::33',
+				scoped: 'fd01:d28c:7e4a::33',
+				base58: 'YMeshMt3000Example001',
+				scope: 'unique-local',
+				mac: 'b2:10:00:00:00:33',
+				state: 'reachable',
+				kind: 'neighbor',
+				source: 'neigh',
+				mesh_name: 'mt3000',
+				mesh_node_id: 'cc'
+			},
+			{
 				iface: 'br-4fbd877829e3',
 				ifindex: 6,
 				address: 'fe80::42:acff:fe11:1',
