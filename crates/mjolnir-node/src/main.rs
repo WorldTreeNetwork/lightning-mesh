@@ -15,12 +15,12 @@
 
 use std::collections::HashSet;
 use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use data_encoding::HEXLOWER;
 use futures_lite::StreamExt;
@@ -29,12 +29,13 @@ use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use iroh_gossip::Gossip;
-use iroh_gossip::api::{Event, GossipReceiver, GossipSender};
+use iroh_gossip::api::{ApiError, Event};
 use iroh_mdns_address_lookup::MdnsAddressLookup;
 use mjolnir_mesh::crdt::gossip::GossipMessage;
-use mjolnir_mesh::crdt::sync::{GossipError, GossipSync, GossipTransport};
+use mjolnir_mesh::crdt::sync::decode;
 use mjolnir_mesh::roster::PeerRoster;
-use tokio::sync::Mutex;
+use serde_json::{Value, json};
+
 use tracing::{error, info, warn};
 
 /// Standalone iroh mesh node — gossip-only observer.
@@ -67,6 +68,10 @@ struct Cli {
     #[arg(long, global = true)]
     peer: Vec<String>,
 
+    /// Emit versioned newline-delimited JSON on stdout. Diagnostics go to stderr.
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -76,7 +81,17 @@ enum Command {
     /// Print this node's EndpointId and a shareable address blob.
     Id,
     /// Join the gossip swarm and print received messages (default).
-    Listen,
+    Listen(Capture),
+}
+
+#[derive(clap::Args, Default)]
+struct Capture {
+    /// Stop after this many successfully decoded gossip messages.
+    #[arg(long)]
+    count: Option<NonZeroU64>,
+    /// Stop after this many seconds of listening, including time without peers.
+    #[arg(long)]
+    timeout_secs: Option<NonZeroU64>,
 }
 
 /// The fixed gossip topic for a mesh's CRDT overlay.
@@ -88,7 +103,14 @@ fn mesh_topic_id() -> iroh_gossip::TopicId {
 #[tokio::main]
 async fn main() -> Result<()> {
     use std::io::IsTerminal;
+    let mut cli = Cli::parse();
+    let writer = if cli.json {
+        tracing_subscriber::fmt::writer::BoxMakeWriter::new(io::stderr)
+    } else {
+        tracing_subscriber::fmt::writer::BoxMakeWriter::new(io::stdout)
+    };
     tracing_subscriber::fmt()
+        .with_writer(writer)
         .with_ansi(std::io::stderr().is_terminal())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -96,29 +118,22 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let cli = Cli::parse();
-    let cmd = cli.command.unwrap_or(Command::Listen);
-
     let secret = load_or_create_secret(cli.secret_file.as_deref())?;
     let no_relay = cli.no_relay || cli.lan;
 
-    match cmd {
+    match cli
+        .command
+        .take()
+        .unwrap_or(Command::Listen(Capture::default()))
+    {
         Command::Id => {
             let endpoint = build_endpoint(secret, no_relay, cli.lan, &cli.relay).await?;
             wait_until_addressable(&endpoint, no_relay).await;
-            print_identity(&endpoint)?;
+            print_identity(&endpoint, cli.json)?;
             endpoint.close().await;
         }
-        Command::Listen => {
-            run_listen(
-                secret,
-                no_relay,
-                cli.lan,
-                &cli.relay,
-                cli.roster.as_deref(),
-                &cli.peer,
-            )
-            .await?;
+        Command::Listen(capture) => {
+            run_listen(secret, &cli, &capture).await?;
         }
     }
 
@@ -167,7 +182,6 @@ fn write_new_secret(path: &Path, hex: &str) -> Result<()> {
     let mut file = opts
         .open(path)
         .with_context(|| format!("create {}", path.display()))?;
-    use std::io::Write;
     file.write_all(hex.as_bytes())
         .context("write secret file")?;
     Ok(())
@@ -232,44 +246,25 @@ async fn wait_until_addressable(endpoint: &Endpoint, no_relay: bool) {
 }
 
 /// Print this node's identity for sharing with peers.
-fn print_identity(endpoint: &Endpoint) -> Result<()> {
-    println!("node id: {}", endpoint.id());
+fn record(event: &str, data: Value) -> Result<()> {
+    let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?;
+    let line =
+        json!({"version": 1, "time_ms": time.as_millis() as u64, "event": event, "data": data});
+    writeln!(io::stdout().lock(), "{line}").context("write observer event")
+}
+
+fn print_identity(endpoint: &Endpoint, json_output: bool) -> Result<()> {
     let bytes = postcard::to_allocvec(&endpoint.addr()).context("encode endpoint address")?;
-    println!("address: {}", data_encoding::BASE32_NOPAD.encode(&bytes));
-    Ok(())
-}
-
-/// Iroh-backed GossipTransport implementation.
-struct IrohGossipTransport {
-    sender: GossipSender,
-    receiver: Mutex<GossipReceiver>,
-}
-
-#[async_trait]
-impl GossipTransport for IrohGossipTransport {
-    async fn broadcast(&self, payload: bytes::Bytes) -> Result<(), GossipError> {
-        self.sender
-            .broadcast(payload)
-            .await
-            .map_err(|e| GossipError::Transport(e.to_string()))
-    }
-
-    async fn recv(&self) -> Result<bytes::Bytes, GossipError> {
-        let mut rx = self.receiver.lock().await;
-        loop {
-            match rx.next().await {
-                Some(Ok(Event::Received(msg))) => return Ok(msg.content),
-                Some(Ok(Event::NeighborUp(id))) => {
-                    info!(peer = %id, "gossip: neighbor up");
-                }
-                Some(Ok(Event::NeighborDown(id))) => {
-                    info!(peer = %id, "gossip: neighbor down");
-                }
-                Some(Ok(Event::Lagged)) => warn!("observer lagged and missed gossip messages"),
-                Some(Err(e)) => return Err(GossipError::Transport(e.to_string())),
-                None => return Err(GossipError::Closed),
-            }
-        }
+    let ticket = data_encoding::BASE32_NOPAD.encode(&bytes);
+    if json_output {
+        record(
+            "identity",
+            json!({"node_id": endpoint.id().to_string(), "ticket": ticket}),
+        )
+    } else {
+        println!("node id: {}", endpoint.id());
+        println!("address: {ticket}");
+        Ok(())
     }
 }
 
@@ -325,23 +320,17 @@ fn resolve_peers(roster_path: Option<&Path>, peer_args: &[String]) -> Vec<String
 }
 
 /// Run the gossip listen loop: join the topic and print received messages.
-async fn run_listen(
-    secret: SecretKey,
-    no_relay: bool,
-    lan: bool,
-    relays: &[String],
-    roster_path: Option<&Path>,
-    peer_args: &[String],
-) -> Result<()> {
-    let endpoint = build_endpoint(secret, no_relay, lan, relays).await?;
+async fn run_listen(secret: SecretKey, cli: &Cli, capture: &Capture) -> Result<()> {
+    let no_relay = cli.no_relay || cli.lan;
+    let endpoint = build_endpoint(secret, no_relay, cli.lan, &cli.relay).await?;
     wait_until_addressable(&endpoint, no_relay).await;
-    print_identity(&endpoint)?;
+    print_identity(&endpoint, cli.json)?;
 
     let self_id = endpoint.id();
     info!(node = %self_id, "starting gossip listen loop");
 
     // Resolve peer list
-    let peer_ids = resolve_peers(roster_path, peer_args);
+    let peer_ids = resolve_peers(cli.roster.as_deref(), &cli.peer);
     info!(peers = peer_ids.len(), "resolved peer list");
 
     // Gossip dials out. The router is what accepts inbound iroh-gossip connections.
@@ -368,6 +357,7 @@ async fn run_listen(
     let topic = mesh_topic_id();
     info!(topic = %topic, bootstrap = bootstrap.len(), "joining mesh topic");
 
+    let bootstrap_count = bootstrap.len();
     let mesh = match gossip
         .subscribe(topic, bootstrap.into_iter().collect())
         .await
@@ -380,158 +370,226 @@ async fn run_listen(
         }
     };
 
-    let (sender, receiver) = mesh.split();
-    let transport = IrohGossipTransport {
-        sender,
-        receiver: Mutex::new(receiver),
-    };
-    let sync = GossipSync::new(transport);
-
-    // Message handler: decode and print each received gossip message.
-    // GossipSync calls this synchronously inside the recv loop.
-    let message_count = AtomicU64::new(0);
-
-    info!("listening for gossip messages (Ctrl-C to stop)");
-
-    let handler = move |msg: GossipMessage| {
-        let count = message_count.fetch_add(1, Ordering::Relaxed) + 1;
-        match &msg {
-            GossipMessage::LeaseUpdate(entry) => {
-                info!(
-                    msg_count = count,
-                    mac = ?entry.mac,
-                    ip = ?entry.ip,
-                    hostname = ?entry.hostname,
-                    "lease update"
-                );
-            }
-            GossipMessage::LeaseRelease { mac, hlc: _ } => {
-                info!(msg_count = count, mac = ?mac, "lease release");
-            }
-            GossipMessage::DnsUpdate { hostname, entry } => {
-                info!(
-                    msg_count = count,
-                    hostname,
-                    ip = ?entry.ip,
-                    "dns update"
-                );
-            }
-            GossipMessage::ServiceUpdate { name, entry } => {
-                info!(
-                    msg_count = count,
-                    name,
-                    ip = ?entry.ip,
-                    port = entry.port,
-                    "service update"
-                );
-            }
-            GossipMessage::SubnetClaimUpdate { cidr, entry } => {
-                info!(
-                    msg_count = count,
-                    cidr,
-                    owner = %entry.owner_node_id,
-                    "subnet claim update"
-                );
-            }
-            GossipMessage::SubnetClaimRelease { cidr, hlc: _ } => {
-                info!(msg_count = count, cidr, "subnet claim release");
-            }
-            GossipMessage::PeerAddrUpdate { node_id, entry } => {
-                info!(
-                    msg_count = count,
-                    node_id,
-                    addrs = ?entry.direct_addrs,
-                    "peer address update"
-                );
-            }
-            GossipMessage::UserUpdate { username, entry } => {
-                info!(
-                    msg_count = count,
-                    username,
-                    display = %entry.display_name,
-                    "user update"
-                );
-            }
-            GossipMessage::ServicePublishV2 { name, entry } => {
-                info!(
-                    msg_count = count,
-                    name,
-                    owner = %entry.owner_node_id,
-                    "service publish v2"
-                );
-            }
-            GossipMessage::ServiceUnpublishV2 {
-                name,
-                owner_node_id,
-                hlc: _,
-            } => {
-                info!(
-                    msg_count = count,
-                    name,
-                    owner = owner_node_id,
-                    "service unpublish v2"
-                );
-            }
-            GossipMessage::LivenessBeacon {
-                node_id,
-                incarnation,
-                counter,
-                egress,
-            } => {
-                info!(
-                    msg_count = count,
-                    node_id,
-                    incarnation,
-                    counter,
-                    egress = ?egress,
-                    "liveness beacon"
-                );
-            }
-            GossipMessage::NodeNameAnnounce { node_id, entry } => {
-                info!(
-                    msg_count = count,
-                    node_id,
-                    name = %entry.name,
-                    "node name announce"
-                );
-            }
-            GossipMessage::LeasedNamePublish { name, entry: _ } => {
-                info!(msg_count = count, name, "leased name publish");
-            }
-            GossipMessage::NeighbourReportUpdate(entry) => {
-                info!(msg_count = count, node_id = %entry.node_id, ssid = %entry.ssid, bssid = ?entry.bssid, "neighbour report");
-            }
-            GossipMessage::IrohDialPublish { entry } => {
-                info!(msg_count = count, endpoint = %entry.endpoint_id, ip = %entry.ip, port = entry.port, "iroh dial publish");
-            }
-            GossipMessage::CoordinateAnnounce { node_id, entry } => {
-                info!(
-                    msg_count = count,
-                    node_id,
-                    lat = entry.lat_e7,
-                    lon = entry.lon_e7,
-                    "coordinate announce"
-                );
-            }
-        }
-    };
-
-    let result = tokio::select! {
-        received = sync.run(handler) => match received {
-            Ok(()) => Err(anyhow::anyhow!("gossip receive stream closed")),
-            Err(error) => Err(error).context("gossip receive loop failed"),
-        },
-        signal = tokio::signal::ctrl_c() => signal.context("wait for Ctrl-C"),
-    };
-
+    let result = observe(mesh, cli.json, bootstrap_count, capture).await;
     info!("shutting down...");
     router.shutdown().await.context("gossip router shutdown")?;
     result
 }
 
+async fn observe(
+    mut mesh: impl futures_lite::Stream<Item = Result<Event, ApiError>> + Unpin,
+    json_output: bool,
+    bootstrap_count: usize,
+    capture: &Capture,
+) -> Result<()> {
+    if json_output {
+        record("listening", json!({"bootstrap_count": bootstrap_count}))?;
+    }
+    info!("listening for gossip messages (Ctrl-C to stop)");
+    let deadline = async {
+        match capture.timeout_secs {
+            Some(seconds) => tokio::time::sleep(Duration::from_secs(seconds.get())).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::pin!(deadline);
+    let interrupt = tokio::signal::ctrl_c();
+    tokio::pin!(interrupt);
+    let mut count = 0u64;
+    let reason = loop {
+        let event = tokio::select! {
+            biased;
+            signal = &mut interrupt => {
+                signal.context("wait for Ctrl-C")?;
+                break "interrupt";
+            }
+            _ = &mut deadline => break "timeout",
+            event = mesh.next() => event.context("gossip receive stream closed")?.context("gossip receive loop failed")?,
+        };
+        match event {
+            Event::NeighborUp(peer) | Event::NeighborDown(peer) => {
+                let up = matches!(event, Event::NeighborUp(_));
+                if json_output {
+                    record(
+                        if up { "neighbor_up" } else { "neighbor_down" },
+                        json!({"peer": peer.to_string()}),
+                    )?;
+                } else {
+                    info!(%peer, "gossip: neighbor {}", if up { "up" } else { "down" });
+                }
+            }
+            Event::Lagged => {
+                warn!("observer lagged and missed gossip messages");
+                if json_output {
+                    record("lagged", json!({}))?;
+                }
+            }
+            Event::Received(raw) => match decode(&raw.content) {
+                Ok(message) => {
+                    count += 1;
+                    if json_output {
+                        record(
+                            "message",
+                            json!({"count": count, "delivered_from": raw.delivered_from.to_string(), "message": message}),
+                        )?;
+                    } else {
+                        log_message(&message, count);
+                    }
+                    if capture.count.is_some_and(|limit| limit.get() == count) {
+                        break "count";
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, "skipping malformed gossip payload");
+                    if json_output {
+                        record(
+                            "decode_error",
+                            json!({"delivered_from": raw.delivered_from.to_string(), "error": error.to_string()}),
+                        )?;
+                    }
+                }
+            },
+        }
+    };
+    if json_output {
+        record("stopped", json!({"reason": reason, "count": count}))?;
+    }
+    Ok(())
+}
+
+fn log_message(msg: &GossipMessage, count: u64) {
+    match msg {
+        GossipMessage::LeaseUpdate(entry) => {
+            info!(
+                msg_count = count,
+                mac = ?entry.mac,
+                ip = ?entry.ip,
+                hostname = ?entry.hostname,
+                "lease update"
+            );
+        }
+        GossipMessage::LeaseRelease { mac, hlc: _ } => {
+            info!(msg_count = count, mac = ?mac, "lease release");
+        }
+        GossipMessage::DnsUpdate { hostname, entry } => {
+            info!(
+                msg_count = count,
+                hostname,
+                ip = ?entry.ip,
+                "dns update"
+            );
+        }
+        GossipMessage::ServiceUpdate { name, entry } => {
+            info!(
+                msg_count = count,
+                name,
+                ip = ?entry.ip,
+                port = entry.port,
+                "service update"
+            );
+        }
+        GossipMessage::SubnetClaimUpdate { cidr, entry } => {
+            info!(
+                msg_count = count,
+                cidr,
+                owner = %entry.owner_node_id,
+                "subnet claim update"
+            );
+        }
+        GossipMessage::SubnetClaimRelease { cidr, hlc: _ } => {
+            info!(msg_count = count, cidr, "subnet claim release");
+        }
+        GossipMessage::PeerAddrUpdate { node_id, entry } => {
+            info!(
+                msg_count = count,
+                node_id,
+                addrs = ?entry.direct_addrs,
+                "peer address update"
+            );
+        }
+        GossipMessage::UserUpdate { username, entry } => {
+            info!(
+                msg_count = count,
+                username,
+                display = %entry.display_name,
+                "user update"
+            );
+        }
+        GossipMessage::ServicePublishV2 { name, entry } => {
+            info!(
+                msg_count = count,
+                name,
+                owner = %entry.owner_node_id,
+                "service publish v2"
+            );
+        }
+        GossipMessage::ServiceUnpublishV2 {
+            name,
+            owner_node_id,
+            hlc: _,
+        } => {
+            info!(
+                msg_count = count,
+                name,
+                owner = owner_node_id,
+                "service unpublish v2"
+            );
+        }
+        GossipMessage::LivenessBeacon {
+            node_id,
+            incarnation,
+            counter,
+            egress,
+        } => {
+            info!(
+                msg_count = count,
+                node_id,
+                incarnation,
+                counter,
+                egress = ?egress,
+                "liveness beacon"
+            );
+        }
+        GossipMessage::NodeNameAnnounce { node_id, entry } => {
+            info!(
+                msg_count = count,
+                node_id,
+                name = %entry.name,
+                "node name announce"
+            );
+        }
+        GossipMessage::LeasedNamePublish { name, entry: _ } => {
+            info!(msg_count = count, name, "leased name publish");
+        }
+        GossipMessage::NeighbourReportUpdate(entry) => {
+            info!(msg_count = count, node_id = %entry.node_id, ssid = %entry.ssid, bssid = ?entry.bssid, "neighbour report");
+        }
+        GossipMessage::IrohDialPublish { entry } => {
+            info!(msg_count = count, endpoint = %entry.endpoint_id, ip = %entry.ip, port = entry.port, "iroh dial publish");
+        }
+        GossipMessage::CoordinateAnnounce { node_id, entry } => {
+            info!(
+                msg_count = count,
+                node_id,
+                lat = entry.lat_e7,
+                lon = entry.lon_e7,
+                "coordinate announce"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn closed_stream_ends_listener_with_error() {
+        let error = observe(futures_lite::stream::empty(), false, 0, &Capture::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "gossip receive stream closed");
+    }
 
     const HEX64: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 

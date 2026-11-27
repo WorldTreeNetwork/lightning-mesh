@@ -2543,9 +2543,7 @@ name = "mjolnir-node"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "blake3",
- "bytes",
  "clap",
  "data-encoding",
  "futures-lite",
@@ -2554,6 +2552,7 @@ dependencies = [
  "iroh-mdns-address-lookup",
  "mjolnir-mesh",
  "postcard",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
