@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use data_encoding::HEXLOWER;
 use futures_lite::StreamExt;
+use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
@@ -34,7 +35,7 @@ use mjolnir_mesh::crdt::gossip::GossipMessage;
 use mjolnir_mesh::crdt::sync::{GossipError, GossipSync, GossipTransport};
 use mjolnir_mesh::roster::PeerRoster;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Standalone iroh mesh node — gossip-only observer.
 #[derive(Parser)]
@@ -44,7 +45,7 @@ struct Cli {
     #[arg(long, global = true)]
     secret_file: Option<PathBuf>,
 
-    /// Disable iroh relays (direct/LAN only). Implies --lan.
+    /// Disable iroh relays and dial peers directly.
     #[arg(long, global = true)]
     no_relay: bool,
 
@@ -154,8 +155,7 @@ fn write_new_secret(path: &Path, hex: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
@@ -234,22 +234,9 @@ async fn wait_until_addressable(endpoint: &Endpoint, no_relay: bool) {
 /// Print this node's identity for sharing with peers.
 fn print_identity(endpoint: &Endpoint) -> Result<()> {
     println!("node id: {}", endpoint.id());
-    let blob = encode_addr(endpoint);
-    println!("address: {}", blob);
+    let bytes = postcard::to_allocvec(&endpoint.addr()).context("encode endpoint address")?;
+    println!("address: {}", data_encoding::BASE32_NOPAD.encode(&bytes));
     Ok(())
-}
-
-/// Encode an endpoint's address into a shareable string.
-fn encode_addr(endpoint: &Endpoint) -> String {
-    let mut parts = Vec::new();
-    parts.push(format!("node:{}", endpoint.id()));
-    for ip in endpoint.addr().ip_addrs() {
-        parts.push(format!("ip:{}", ip));
-    }
-    for relay in endpoint.addr().relay_urls() {
-        parts.push(format!("relay:{}", relay));
-    }
-    parts.join(",")
 }
 
 /// Iroh-backed GossipTransport implementation.
@@ -273,12 +260,12 @@ impl GossipTransport for IrohGossipTransport {
             match rx.next().await {
                 Some(Ok(Event::Received(msg))) => return Ok(msg.content),
                 Some(Ok(Event::NeighborUp(id))) => {
-                    debug!(peer = %id, "gossip: neighbor up");
+                    info!(peer = %id, "gossip: neighbor up");
                 }
                 Some(Ok(Event::NeighborDown(id))) => {
-                    debug!(peer = %id, "gossip: neighbor down");
+                    info!(peer = %id, "gossip: neighbor down");
                 }
-                Some(Ok(_)) => continue,
+                Some(Ok(Event::Lagged)) => warn!("observer lagged and missed gossip messages"),
                 Some(Err(e)) => return Err(GossipError::Transport(e.to_string())),
                 None => return Err(GossipError::Closed),
             }
@@ -288,20 +275,20 @@ impl GossipTransport for IrohGossipTransport {
 
 /// Accept a 64-hex node id (any case) or a base32-nopad postcard `EndpointAddr`.
 /// A pipe-separated `fleet-nodes.conf` line is not a peer token.
-fn parse_bootstrap_token(token: &str) -> Result<EndpointId> {
+fn parse_bootstrap_token(token: &str) -> Result<EndpointAddr> {
     let token = token.trim();
     if token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
         let id: EndpointId = token
             .to_ascii_lowercase()
             .parse()
             .context("parsing node id")?;
-        return Ok(id);
+        return Ok(EndpointAddr::new(id));
     }
     let bytes = data_encoding::BASE32_NOPAD
         .decode(token.to_uppercase().as_bytes())
         .context("address blob is not valid base32")?;
     let addr: EndpointAddr = postcard::from_bytes(&bytes).context("deserializing address")?;
-    Ok(addr.id)
+    Ok(addr)
 }
 
 /// Resolve the peer list from --roster file and --peer args.
@@ -348,7 +335,7 @@ async fn run_listen(
 ) -> Result<()> {
     let endpoint = build_endpoint(secret, no_relay, lan, relays).await?;
     wait_until_addressable(&endpoint, no_relay).await;
-    let _ = print_identity(&endpoint);
+    print_identity(&endpoint)?;
 
     let self_id = endpoint.id();
     info!(node = %self_id, "starting gossip listen loop");
@@ -363,10 +350,15 @@ async fn run_listen(
         .accept(iroh_gossip::ALPN, gossip.clone())
         .spawn();
 
-    let mut bootstrap = Vec::new();
+    let lookup = MemoryLookup::new();
+    endpoint.address_lookup()?.add(lookup.clone());
+    let mut bootstrap = HashSet::new();
     for token in &peer_ids {
         match parse_bootstrap_token(token) {
-            Ok(id) if id != self_id => bootstrap.push(id),
+            Ok(addr) if addr.id != self_id => {
+                bootstrap.insert(addr.id);
+                lookup.add_endpoint_info(addr);
+            }
             Ok(_) => {}
             Err(e) => warn!(token, "skipping unparseable roster entry: {e}"),
         }
@@ -376,7 +368,10 @@ async fn run_listen(
     let topic = mesh_topic_id();
     info!(topic = %topic, bootstrap = bootstrap.len(), "joining mesh topic");
 
-    let mesh = match gossip.subscribe(topic, bootstrap.clone()).await {
+    let mesh = match gossip
+        .subscribe(topic, bootstrap.into_iter().collect())
+        .await
+    {
         Ok(mesh) => mesh,
         Err(e) => {
             error!(error = %e, "failed to subscribe to gossip topic");
@@ -503,6 +498,12 @@ async fn run_listen(
             GossipMessage::LeasedNamePublish { name, entry: _ } => {
                 info!(msg_count = count, name, "leased name publish");
             }
+            GossipMessage::NeighbourReportUpdate(entry) => {
+                info!(msg_count = count, node_id = %entry.node_id, ssid = %entry.ssid, bssid = ?entry.bssid, "neighbour report");
+            }
+            GossipMessage::IrohDialPublish { entry } => {
+                info!(msg_count = count, endpoint = %entry.endpoint_id, ip = %entry.ip, port = entry.port, "iroh dial publish");
+            }
             GossipMessage::CoordinateAnnounce { node_id, entry } => {
                 info!(
                     msg_count = count,
@@ -515,22 +516,17 @@ async fn run_listen(
         }
     };
 
-    // Run the receive loop in a separate task
-    let recv_handle = tokio::spawn(async move {
-        if let Err(e) = sync.run(handler).await {
-            error!(error = %e, "gossip receive loop error");
-        }
-    });
-
-    // Keep the main task alive until Ctrl-C
-    tokio::signal::ctrl_c().await?;
+    let result = tokio::select! {
+        received = sync.run(handler) => match received {
+            Ok(()) => Err(anyhow::anyhow!("gossip receive stream closed")),
+            Err(error) => Err(error).context("gossip receive loop failed"),
+        },
+        signal = tokio::signal::ctrl_c() => signal.context("wait for Ctrl-C"),
+    };
 
     info!("shutting down...");
-    recv_handle.abort();
-    // Router::shutdown closes the endpoint. Do not close it again.
     router.shutdown().await.context("gossip router shutdown")?;
-
-    Ok(())
+    result
 }
 
 #[cfg(test)]
@@ -702,26 +698,14 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // print_identity — address encoding
-    // ---------------------------------------------------------------------------
-
-    // We cannot easily test print_identity without a real Endpoint, but we can
-    // test encode_addr's logic indirectly via the mock endpoint patterns
-    // already tested in the mesh module. The encode_addr function is a simple
-    // string builder — the real test surface is the CLI integration.
-
-    // ---------------------------------------------------------------------------
-    // mesh_topic_id — uniqueness from seed
-    // ---------------------------------------------------------------------------
-
     #[test]
     fn parse_bootstrap_token_accepts_node_id_any_case() {
         let id = SecretKey::generate().public();
         let hex = id.to_string();
         assert_eq!(hex.len(), 64);
-        assert_eq!(parse_bootstrap_token(&hex).unwrap(), id);
+        assert_eq!(parse_bootstrap_token(&hex).unwrap().id, id);
         assert_eq!(
-            parse_bootstrap_token(&hex.to_ascii_uppercase()).unwrap(),
+            parse_bootstrap_token(&hex.to_ascii_uppercase()).unwrap().id,
             id
         );
     }
