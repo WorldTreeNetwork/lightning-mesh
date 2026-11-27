@@ -22,6 +22,8 @@ export default defineConfig({
 	use: {
 		baseURL: `http://hello.mesh:${PORT}`,
 		headless: true,
+		trace: 'retain-on-failure',
+		screenshot: 'only-on-failure',
 		// Chromium-only knob: send hello.mesh at loopback without touching
 		// /etc/hosts, while the page origin stays the insecure hostname.
 		launchOptions: {
