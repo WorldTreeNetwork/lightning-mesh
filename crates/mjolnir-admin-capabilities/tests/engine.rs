@@ -145,7 +145,9 @@ fn owner_verified(
 }
 
 fn authority(issuer: PublicKey, class: GrantClass, profile: SecurityProfile) -> VerifiedAuthority {
-    owner_verified(&issuer, class, profile, 1).authority().clone()
+    owner_verified(&issuer, class, profile, 1)
+        .authority()
+        .clone()
 }
 
 fn time(now: u64, verified_at: u64) -> TimeEvidence {

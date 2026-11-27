@@ -873,7 +873,11 @@ async fn run_mesh(
             }
         });
         // Mirror babeld's mjolnir0 routes into the FIB (demux next hops).
-        tasks.spawn(neighbor_route_mirror(link.iface_name.clone(), routes.clone(), conns.clone()));
+        tasks.spawn(neighbor_route_mirror(
+            link.iface_name.clone(),
+            routes.clone(),
+            conns.clone(),
+        ));
         // Reader task: mjolnir0 -> route unicast / flood multicast to peers.
         let router = OverlayRouter {
             routes,
@@ -1686,9 +1690,8 @@ async fn run_mesh(
         // per-peer interfaces means the config never churns (qz9 by construction).
         let claims = claims.clone();
         let me = self_id_str.clone();
-        tasks.spawn(
-            async move { babel_reconciler_overlay(claims, me, babel_config, gateway).await },
-        )
+        tasks
+            .spawn(async move { babel_reconciler_overlay(claims, me, babel_config, gateway).await })
     } else {
         let registry = registry.clone();
         let claims = claims.clone();
@@ -1782,7 +1785,9 @@ async fn run_mesh(
         "mesh up — holding (Ctrl-C to exit)"
     );
 
-    if !*shutdown.borrow() { let _ = shutdown.changed().await; }
+    if !*shutdown.borrow() {
+        let _ = shutdown.changed().await;
+    }
     info!("shutting down mesh");
     for d in &dialers {
         d.abort();
