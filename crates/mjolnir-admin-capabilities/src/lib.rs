@@ -22,8 +22,8 @@ pub use engine::{
 pub use record::{
     AuthorityAnchor, AuthorityBook, Evidence, FactClass, Ingested, MAX_LINEAGE_BYTES,
     MAX_RECORD_BYTES, MAX_RECORD_ISSUERS, MAX_RECORD_LINEAGE, NodeVouched, OwnerVerified,
-    RECORD_DOMAIN_PREFIX, RECORD_VERSION, Record, RecordBody, RecordDeny, RecordHeader,
-    RecordType, SignedRecord, decode_record,
+    RECORD_DOMAIN_PREFIX, RECORD_VERSION, Record, RecordBody, RecordDeny, RecordHeader, RecordType,
+    SignedRecord, decode_record,
 };
 
 use ed25519_dalek::{Signature, VerifyingKey};

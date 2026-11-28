@@ -129,7 +129,7 @@ pub fn parse_if_inet6(body: &str) -> Vec<IfInet6Addr> {
         };
         let mut bytes = [0u8; 16];
         let mut ok = true;
-        for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        for (i, chunk) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             match std::str::from_utf8(chunk)
                 .ok()
                 .and_then(|s| u8::from_str_radix(s, 16).ok())

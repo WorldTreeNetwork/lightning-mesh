@@ -448,9 +448,7 @@ fn reject_reserved_facts(token: &Biscuit) -> Result<(), AuthzError> {
     let mut authorizer = token.authorizer().map_err(token_err)?;
     for reserved in RESERVED_FACTS {
         let rule = format!("data($x) <- {reserved}($x)");
-        let hits: Vec<(i64,)> = authorizer
-            .query_all(rule.as_str())
-            .unwrap_or_default();
+        let hits: Vec<(i64,)> = authorizer.query_all(rule.as_str()).unwrap_or_default();
         if !hits.is_empty() {
             return Err(AuthzError::ReservedSymbol(reserved));
         }

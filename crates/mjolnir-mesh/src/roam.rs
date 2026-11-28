@@ -119,10 +119,10 @@ pub fn parse_associated_macs(dump: &str) -> Vec<String> {
     let mut macs = Vec::new();
     for line in dump.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Station ") {
-            if let Some(mac) = rest.split_whitespace().next() {
-                macs.push(normalize_mac(mac));
-            }
+        if let Some(rest) = trimmed.strip_prefix("Station ")
+            && let Some(mac) = rest.split_whitespace().next()
+        {
+            macs.push(normalize_mac(mac));
         }
     }
     macs
@@ -316,9 +316,11 @@ pub struct IslandJoin {
 /// we own, no peers → stay the unique-`/24` node, do not stitch. Two or more
 /// owners, or a single foreign claim → join the winner and stitch L2.
 pub fn join_island(self_id: &str, claims: &[IslandClaim<'_>]) -> Option<IslandJoin> {
-    let winner = claims
-        .iter()
-        .min_by(|a, b| a.claimed_at.cmp(&b.claimed_at).then(a.owner_id.cmp(b.owner_id)))?;
+    let winner = claims.iter().min_by(|a, b| {
+        a.claimed_at
+            .cmp(&b.claimed_at)
+            .then(a.owner_id.cmp(b.owner_id))
+    })?;
     let owners: BTreeSet<&str> = claims.iter().map(|c| c.owner_id).collect();
     let stitch_l2 = owners.len() >= 2 || winner.owner_id != self_id;
     let run_dhcp = winner.owner_id == self_id;
@@ -500,7 +502,10 @@ mod island_tests {
         let got = join_island("indoor-b", &claims).unwrap();
         assert!(got.stitch_l2);
         assert!(!got.run_dhcp);
-        assert_eq!(got.local_addr, island_member_addr(got.subnet, "indoor-b", "wr3000s-a"));
+        assert_eq!(
+            got.local_addr,
+            island_member_addr(got.subnet, "indoor-b", "wr3000s-a")
+        );
     }
 
     #[test]

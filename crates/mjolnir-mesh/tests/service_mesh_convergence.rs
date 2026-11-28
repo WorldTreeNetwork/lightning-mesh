@@ -152,12 +152,7 @@ impl Network {
     /// Flush every message currently queued on link (from, to) to node `to`,
     /// in FIFO order, then clear the queue (the message has been "delivered").
     fn flush_link(&mut self, from: usize, to: usize) {
-        let queued = self
-            .links
-            .get_mut(&(from, to))
-            .unwrap()
-            .drain(..)
-            .collect::<Vec<_>>();
+        let queued = std::mem::take(self.links.get_mut(&(from, to)).unwrap());
         self.deliver(to, &queued);
     }
 

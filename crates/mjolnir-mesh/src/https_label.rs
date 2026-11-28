@@ -66,7 +66,9 @@ mod tests {
             "fixture hex must have byte pairs"
         );
         hex.as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let pair = std::str::from_utf8(pair).expect("fixture hex must be UTF-8");
                 u8::from_str_radix(pair, 16).expect("fixture key must be hexadecimal")

@@ -310,7 +310,10 @@ mod tests {
         let home = lease(mac, "10.42.242.243", "wr3000s-a", 100);
         let current = lease(mac, "10.42.203.246", "indoor-c", 200);
         let mut book = LeaseBook::new();
-        assert!(matches!(apply_lease(&mut book, home), MergeResult::Inserted));
+        assert!(matches!(
+            apply_lease(&mut book, home),
+            MergeResult::Inserted
+        ));
         assert!(matches!(
             apply_lease(&mut book, current),
             MergeResult::Updated
@@ -354,10 +357,7 @@ mod tests {
         let b = lease(mac, "10.42.203.146", "wr3000s-a", 200);
         let mut book = LeaseBook::new();
         apply_lease(&mut book, a);
-        assert!(matches!(
-            apply_lease(&mut book, b),
-            MergeResult::Updated
-        ));
+        assert!(matches!(apply_lease(&mut book, b), MergeResult::Updated));
         assert_eq!(book[&mac_key(&mac)].router_id, "wr3000s-a");
     }
 
@@ -402,11 +402,28 @@ mod tests {
     #[test]
     fn hostsfile_lists_every_mesh_guest_lease() {
         let mut book = LeaseBook::new();
-        apply_lease(&mut book, lease([0xde, 0x45, 0x53, 0xf5, 0xf7, 0x74], "10.42.203.146", "c", 1));
-        apply_lease(&mut book, lease([0xaa, 0, 0, 0, 0, 1], "10.42.61.106", "a", 1));
+        apply_lease(
+            &mut book,
+            lease(
+                [0xde, 0x45, 0x53, 0xf5, 0xf7, 0x74],
+                "10.42.203.146",
+                "c",
+                1,
+            ),
+        );
+        apply_lease(
+            &mut book,
+            lease([0xaa, 0, 0, 0, 0, 1], "10.42.61.106", "a", 1),
+        );
         // Off-mesh v4 and v6 are left out.
-        apply_lease(&mut book, lease([0xaa, 0, 0, 0, 0, 2], "10.42.242.100", "me", 1));
-        apply_lease(&mut book, lease([0xaa, 0, 0, 0, 0, 3], "192.168.1.42", "x", 1));
+        apply_lease(
+            &mut book,
+            lease([0xaa, 0, 0, 0, 0, 2], "10.42.242.100", "me", 1),
+        );
+        apply_lease(
+            &mut book,
+            lease([0xaa, 0, 0, 0, 0, 3], "192.168.1.42", "x", 1),
+        );
         let mut v6 = lease([0xaa, 0, 0, 0, 0, 4], "10.42.9.9", "x", 1);
         v6.ip = "fd00::1".parse().unwrap();
         apply_lease(&mut book, v6);
@@ -513,7 +530,12 @@ not a lease line
     fn fresh_ack_is_a_changed_address() {
         let prev = poll_of(&[file_entry(1, "10.42.61.106", 1000)]);
         let moved = file_entry(1, "10.42.61.150", 1000);
-        let got = fresh_acks(&prev, std::slice::from_ref(&moved), &LeaseBook::new(), false);
+        let got = fresh_acks(
+            &prev,
+            std::slice::from_ref(&moved),
+            &LeaseBook::new(),
+            false,
+        );
         assert_eq!(got, vec![moved]);
     }
 
@@ -548,7 +570,10 @@ not a lease line
         let first = fresh_acks(&LeasePoll::new(), &current, &book, true);
         assert_eq!(first, vec![unknown]);
         // Past the first poll the same line is an ordinary new MAC...
-        assert_eq!(fresh_acks(&LeasePoll::new(), &current, &book, false).len(), 3);
+        assert_eq!(
+            fresh_acks(&LeasePoll::new(), &current, &book, false).len(),
+            3
+        );
         // ...and a renewal after the restart is published as usual.
         let prev = poll_of(&current);
         let renewed = file_entry(1, "10.42.61.106", 1600);

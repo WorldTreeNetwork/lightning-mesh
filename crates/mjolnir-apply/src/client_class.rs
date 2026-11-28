@@ -187,7 +187,10 @@ pub fn build_class_plan(request: &ClassRequest) -> Result<ClassPlan, ClassRefusa
 
     let mut classes = BTreeMap::new();
     for flow in &request.flows {
-        if classes.insert(flow.id.clone(), classify(flow, &request.verified_members)).is_some() {
+        if classes
+            .insert(flow.id.clone(), classify(flow, &request.verified_members))
+            .is_some()
+        {
             return Err(ClassRefusal::DuplicateFlow(flow.id.clone()));
         }
     }
@@ -404,7 +407,11 @@ mod tests {
         let mut request = request();
         request.verified_members.clear();
         let plan = build_class_plan(&request).unwrap();
-        assert!(plan.classes.values().all(|class| *class == ClientClass::Unidentified));
+        assert!(
+            plan.classes
+                .values()
+                .all(|class| *class == ClientClass::Unidentified)
+        );
     }
 
     #[test]

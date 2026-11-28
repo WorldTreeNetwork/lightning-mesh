@@ -40,7 +40,11 @@ pub enum LoginMembership {
 
 /// Read the node's access-node id. Missing file means this node has not been
 /// nested into a guild. A `house` profile is refused.
-pub fn decide(spool_dir: &Path, actor_hex: &str, recipient_hex: Option<&str>) -> Result<LoginMembership, String> {
+pub fn decide(
+    spool_dir: &Path,
+    actor_hex: &str,
+    recipient_hex: Option<&str>,
+) -> Result<LoginMembership, String> {
     let Some(recipient_hex) = recipient_hex.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(LoginMembership::None);
     };
@@ -55,9 +59,7 @@ pub fn decide(spool_dir: &Path, actor_hex: &str, recipient_hex: Option<&str>) ->
     }
     let text = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
-    let keyspace = lines
-        .next()
-        .ok_or("access-node keyspace file is empty")?;
+    let keyspace = lines.next().ok_or("access-node keyspace file is empty")?;
     let _ = parse_hex32(keyspace, "access-node keyspace id")?;
     let profile = lines.next().unwrap_or("access-node");
     if profile != "access-node" {

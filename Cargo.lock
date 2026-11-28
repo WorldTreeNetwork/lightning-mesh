@@ -2539,6 +2539,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-node"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "data-encoding",
+ "futures-lite",
+ "iroh",
+ "iroh-gossip",
+ "iroh-mdns-address-lookup",
+ "mjolnir-mesh",
+ "postcard",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4428,8 +4449,6 @@ dependencies = [
 [[package]]
 name = "tiny_http"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "389915df6413a2e74fb181895f933386023c71110878cd0825588928e64cdc82"
 dependencies = [
  "ascii",
  "chunked_transfer",

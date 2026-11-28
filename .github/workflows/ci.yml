@@ -77,4 +77,12 @@ jobs:
         run: cargo build -p mjolnir-hello
         working-directory: .
       - name: Insecure-origin smoke
+        id: smoke
         run: bun run test:smoke
+      - name: Upload smoke failure diagnostics
+        if: ${{ failure() && steps.smoke.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-mesh-smoke-failure
+          path: hello-mesh-web/node_modules/.playwright-results/
+          include-hidden-files: true

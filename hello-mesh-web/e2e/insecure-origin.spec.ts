@@ -58,9 +58,8 @@ test('hello.mesh works over an insecure origin, without crypto.subtle', async ({
 	await expect(chip).toBeVisible();
 	await chip.click();
 
-	const nameInput = page.locator('#identity-name');
+	const nameInput = page.getByRole('textbox', { name: 'Introduce yourself', exact: true });
 	await expect(nameInput).toBeVisible();
-	await expect(page.getByText('Introduce yourself')).toBeVisible();
 
 	expect(failures, `page failures before identity:\n${failures.join('\n')}`).toEqual([]);
 

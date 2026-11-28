@@ -127,10 +127,7 @@ pub fn pick_subnet_or_smaller(
         }
         // Step toward a smaller subnet; `None` means we've hit the /30 floor
         // and nothing fits.
-        match bump_smaller_subnet(prefix) {
-            Some(next) => prefix = next,
-            None => return None,
-        }
+        prefix = bump_smaller_subnet(prefix)?;
     }
 }
 

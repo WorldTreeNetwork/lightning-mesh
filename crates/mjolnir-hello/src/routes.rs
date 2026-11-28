@@ -2678,7 +2678,10 @@ mod tests {
     fn dial_entry(key: &SigningKey, ip: Ipv4Addr, signed_at_ms: u64) -> IrohDialEntry {
         let challenge = "cd".repeat(32);
         let sig = key.sign(&mjolnir_mesh::iroh_dial_signing_message(
-            &challenge, 4000, ip, signed_at_ms,
+            &challenge,
+            4000,
+            ip,
+            signed_at_ms,
         ));
         IrohDialEntry {
             endpoint_id: HEXLOWER.encode(key.verifying_key().as_bytes()),
@@ -2712,10 +2715,20 @@ mod tests {
             mjolnir_mesh::apply_iroh_dial(&mut book, dial_entry(&key, elsewhere, now - 1_000), now),
             mjolnir_mesh::DialOutcome::Inserted,
         );
-        std::fs::write(&projection, mjolnir_mesh::iroh_dial_projection_json(&book, now)).unwrap();
+        std::fs::write(
+            &projection,
+            mjolnir_mesh::iroh_dial_projection_json(&book, now),
+        )
+        .unwrap();
         let challenge = fresh_challenge(&challenges, spool.path());
         let body = dial_body(&key, &challenge, ip, 4000);
-        let resp = post_dial(&challenges, spool.path(), &directory, Some(IpAddr::V4(ip)), &body);
+        let resp = post_dial(
+            &challenges,
+            spool.path(),
+            &directory,
+            Some(IpAddr::V4(ip)),
+            &body,
+        );
         assert_eq!(resp.status, 400);
         let error: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(error["error"], "too many dial records from this address");
@@ -2723,11 +2736,23 @@ mod tests {
         assert!(!spool.path().join("iroh-dial").exists());
 
         std::fs::remove_file(&projection).unwrap();
-        let resp = post_dial(&challenges, spool.path(), &directory, Some(IpAddr::V4(ip)), &body);
+        let resp = post_dial(
+            &challenges,
+            spool.path(),
+            &directory,
+            Some(IpAddr::V4(ip)),
+            &body,
+        );
         assert_eq!(resp.status, 200, "{}", String::from_utf8_lossy(&resp.body));
         assert!(!challenges.lock().unwrap().contains_key(&challenge));
         let pubkey = HEXLOWER.encode(key.verifying_key().as_bytes());
-        assert!(spool.path().join("iroh-dial").join(format!("{pubkey}.json")).exists());
+        assert!(
+            spool
+                .path()
+                .join("iroh-dial")
+                .join(format!("{pubkey}.json"))
+                .exists()
+        );
     }
 
     #[test]
@@ -2759,10 +2784,17 @@ mod tests {
         std::fs::write(
             directory.with_file_name(mjolnir_mesh::PROJECTION_FILE),
             mjolnir_mesh::iroh_dial_projection_json(&book, now),
-        ).unwrap();
+        )
+        .unwrap();
         let challenge = fresh_challenge(&challenges, spool.path());
         let body = dial_body(&key, &challenge, ip, 4000);
-        let resp = post_dial(&challenges, spool.path(), &directory, Some(IpAddr::V4(ip)), &body);
+        let resp = post_dial(
+            &challenges,
+            spool.path(),
+            &directory,
+            Some(IpAddr::V4(ip)),
+            &body,
+        );
         assert_eq!(resp.status, 400);
         let error: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(error["error"], "too many dial records from this address");

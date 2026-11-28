@@ -35,7 +35,22 @@ const spool = join(state, 'pending');
 mkdirSync(spool, { recursive: true });
 writeFileSync(
 	join(state, 'directory.json'),
-	JSON.stringify({ version: 1, node: null, neighbors: [], identities: [], services: [] })
+	JSON.stringify({
+		version: 1,
+		node: null,
+		neighbors: [],
+		identities: [],
+		services: [
+			{
+				name: 'keyed',
+				ip: '10.42.12.165',
+				port: 3000,
+				protocol: 'http',
+				txt: { app: 'v1', path: '/app' }
+			},
+			{ name: 'library', ip: '10.42.12.5', port: 8080, protocol: 'http' }
+		]
+	})
 );
 writeFileSync(join(state, 'radio.json'), JSON.stringify({ version: 1 }));
 

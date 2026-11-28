@@ -64,7 +64,7 @@ impl HardwareMap {
 
     /// Brightness for one drive lamp. `phase_on` is false on the dark half of a flash.
     pub fn lamp_on(&self, tone: LedTone, name: &str, phase_on: bool) -> bool {
-        phase_on && self.lit(tone).iter().any(|n| *n == name)
+        phase_on && self.lit(tone).contains(&name)
     }
 }
 
@@ -149,14 +149,14 @@ pub fn detect_hardware(
     board: Option<&str>,
     brightness_exists: impl Fn(&str) -> bool,
 ) -> Option<&'static HardwareMap> {
-    if let Some(b) = board.map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(m) = HARDWARE.iter().find(|m| m.boards.iter().any(|x| *x == b)) {
-            return Some(m);
-        }
+    if let Some(b) = board.map(str::trim).filter(|s| !s.is_empty())
+        && let Some(m) = HARDWARE.iter().find(|m| m.boards.contains(&b))
+    {
+        return Some(m);
     }
     HARDWARE
         .iter()
-        .find(|m| m.probe.iter().copied().all(|n| brightness_exists(n)))
+        .find(|m| m.probe.iter().copied().all(&brightness_exists))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -491,8 +491,8 @@ mod tests {
         );
         assert_eq!(m.lit(LedTone::ViaMesh), &["white:wan-online"]);
         assert_eq!(m.lit(LedTone::Egress), &["white:wan-online"]);
-        assert!(!m.drive.iter().any(|n| *n == "white:wps"));
-        assert!(!m.silence.iter().any(|n| *n == "white:wps"));
+        assert!(!m.drive.contains(&"white:wps"));
+        assert!(!m.silence.contains(&"white:wps"));
     }
 
     #[test]
@@ -536,10 +536,10 @@ Station 82:af:ca:e7:bd:01 (on phy1-mesh0)
             oif: "br-mesh".into(),
             proto_babel: true,
         };
-        assert!(!default_via_mesh(&[wan.clone()]));
-        assert!(is_local_egress(&[wan.clone()]));
-        assert!(default_via_mesh(&[babel.clone()]));
-        assert!(!is_local_egress(&[babel.clone()]));
+        assert!(!default_via_mesh(std::slice::from_ref(&wan)));
+        assert!(is_local_egress(std::slice::from_ref(&wan)));
+        assert!(default_via_mesh(std::slice::from_ref(&babel)));
+        assert!(!is_local_egress(std::slice::from_ref(&babel)));
         assert!(is_local_egress(&[wan, babel]));
     }
 
