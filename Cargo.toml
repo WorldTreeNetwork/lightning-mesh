@@ -42,3 +42,7 @@ bytes = "1"
 
 # meshctl operator tool (host-native; not built into the container image)
 toml = "0.8"
+
+[patch.crates-io]
+# tiny_http 0.12.0 can strand burst connections behind idle keep-alives.
+tiny_http = { path = "vendor/tiny_http" }

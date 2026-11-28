@@ -155,10 +155,10 @@ impl NeighborRoutes {
         Self(routes)
     }
     pub fn via(&self, dest: IpAddr) -> Option<Ipv6Addr> {
-        if let IpAddr::V6(v6) = dest {
-            if link_local(v6) {
-                return Some(v6);
-            }
+        if let IpAddr::V6(v6) = dest
+            && link_local(v6)
+        {
+            return Some(v6);
         }
         let max = self
             .0

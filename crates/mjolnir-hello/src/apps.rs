@@ -651,15 +651,14 @@ mod tests {
         serde_json::json!({ "version": 1, "services": services }).to_string()
     }
 
-    fn serve(
-        responses: Vec<Vec<u8>>,
-        delay: Duration,
-    ) -> (
+    type TestServer = (
         SocketAddr,
         Arc<AtomicUsize>,
         Arc<Mutex<Vec<String>>>,
         std::thread::JoinHandle<()>,
-    ) {
+    );
+
+    fn serve(responses: Vec<Vec<u8>>, delay: Duration) -> TestServer {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -751,7 +750,7 @@ mod tests {
             let connection = rustls::ServerConnection::new(Arc::new(config)).unwrap();
             let mut stream = rustls::StreamOwned::new(connection, stream);
             let mut request = [0_u8; 2048];
-            stream.read(&mut request).unwrap();
+            assert!(stream.read(&mut request).unwrap() > 0, "expected a request");
             stream.write_all(&response).unwrap();
         });
         (addr, handle)

@@ -60,8 +60,9 @@ pub(super) fn oneshot_bind(
         anyhow::ensure!(!addr.ip().is_unspecified(), "wildcard --bind is forbidden");
         return Ok(addr);
     }
-    let (addr, _) = mjolnir_mesh::tun::underlay::usable_backhaul_binding(node, kernel, iface, index)
-        .context("identity ULA is not usable on br-mesh")?;
+    let (addr, _) =
+        mjolnir_mesh::tun::underlay::usable_backhaul_binding(node, kernel, iface, index)
+            .context("identity ULA is not usable on br-mesh")?;
     Ok(SocketAddr::new(IpAddr::V6(addr), MESH_IROH_PORT))
 }
 

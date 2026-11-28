@@ -159,7 +159,7 @@ fn decode_lower_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
         return None;
     }
     let mut out = [0_u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let text = std::str::from_utf8(pair).ok()?;
         out[index] = u8::from_str_radix(text, 16).ok()?;
     }

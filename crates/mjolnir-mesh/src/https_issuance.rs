@@ -284,7 +284,7 @@ fn decode_lower_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
         return None;
     }
     let mut bytes = [0; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
     Some(bytes)

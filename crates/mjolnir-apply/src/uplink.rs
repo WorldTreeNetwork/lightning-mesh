@@ -1686,7 +1686,7 @@ config zone
                 );
             }
             assert_no_secret(&serde_json::to_string(&receipt).unwrap(), PASSPHRASE);
-            for file in walk(&paths.root().to_path_buf()) {
+            for file in walk(paths.root()) {
                 assert_no_secret(
                     &String::from_utf8_lossy(&fs::read(file).unwrap()),
                     PASSPHRASE,

@@ -440,7 +440,9 @@ fn decode_u64(d: &mut Decoder<'_>) -> Result<u64, CodecError> {
         .map_err(|_| CodecError::Malformed("expected an unsigned integer"))
 }
 
-fn decode_state(d: &mut Decoder<'_>) -> Result<(Vec<[u8; 32]>, Vec<Vec<u8>>), CodecError> {
+type IssuersAndRevokedLineage = (Vec<[u8; 32]>, Vec<Vec<u8>>);
+
+fn decode_state(d: &mut Decoder<'_>) -> Result<IssuersAndRevokedLineage, CodecError> {
     let n = d
         .array()
         .map_err(|_| CodecError::Malformed("expected the issuer array"))?
@@ -474,9 +476,8 @@ fn encode_state(
     issuers: &[[u8; 32]],
     lineage: &[Vec<u8>],
 ) -> Result<(), CodecError> {
-    let w = |r: Result<&mut Encoder<Vec<u8>>, _>| {
-        r.map(|_| ()).map_err(|_| CodecError::EncodeFailed)
-    };
+    let w =
+        |r: Result<&mut Encoder<Vec<u8>>, _>| r.map(|_| ()).map_err(|_| CodecError::EncodeFailed);
     w(e.array(issuers.len() as u64))?;
     for issuer in issuers {
         w(e.bytes(issuer))?;
@@ -506,7 +507,9 @@ fn check_lineage(lineage: &[Vec<u8>]) -> Result<(), CodecError> {
         .iter()
         .any(|id| id.is_empty() || id.len() > MAX_LINEAGE_BYTES)
     {
-        return Err(CodecError::Malformed("revoked lineage id length out of range"));
+        return Err(CodecError::Malformed(
+            "revoked lineage id length out of range",
+        ));
     }
     if !lineage.windows(2).all(|p| p[0] < p[1]) {
         return Err(CodecError::Malformed(
@@ -694,7 +697,7 @@ struct Book {
 
 #[derive(Debug, Clone)]
 enum BookState {
-    Readable(Book),
+    Readable(Box<Book>),
     Unreadable,
 }
 
@@ -721,7 +724,7 @@ impl AuthorityBook {
     pub fn provision(anchor: AuthorityAnchor) -> Self {
         AuthorityBook {
             anchor,
-            state: BookState::Readable(Book::default()),
+            state: BookState::Readable(Box::default()),
         }
     }
 
@@ -729,7 +732,7 @@ impl AuthorityBook {
     /// anchor or re-verification failure yields an unreadable book.
     pub fn restore(anchor: AuthorityAnchor, stored: Option<&[u8]>) -> Self {
         let state = match stored.and_then(|bytes| restore_book(&anchor, bytes)) {
-            Some(book) => BookState::Readable(book),
+            Some(book) => BookState::Readable(Box::new(book)),
             None => BookState::Unreadable,
         };
         AuthorityBook { anchor, state }
@@ -829,8 +832,8 @@ impl AuthorityBook {
         if now < verified_at || now - verified_at > current.head.profile.max_stale_secs() {
             return Err(RecordDeny::Stale);
         }
-        let issuer =
-            PublicKey::from_bytes(&token_root, Algorithm::Ed25519).map_err(|_| RecordDeny::Forged)?;
+        let issuer = PublicKey::from_bytes(&token_root, Algorithm::Ed25519)
+            .map_err(|_| RecordDeny::Forged)?;
         Ok(OwnerVerified {
             authority: VerifiedAuthority {
                 issuer,
@@ -868,8 +871,7 @@ fn verify_signed(anchor: &AuthorityAnchor, record: &SignedRecord) -> Result<Reco
     if decoded.header().house_id != anchor.house_id {
         return Err(RecordDeny::Forged);
     }
-    let key =
-        VerifyingKey::from_bytes(&decoded.header().signer).map_err(|_| RecordDeny::Forged)?;
+    let key = VerifyingKey::from_bytes(&decoded.header().signer).map_err(|_| RecordDeny::Forged)?;
     if key.is_weak() {
         return Err(RecordDeny::Forged);
     }
@@ -901,7 +903,11 @@ impl Book {
 
     /// The owner of the current head, or an issuer named by the current
     /// authority state and not withdrawn since that state was signed.
-    fn signer_may_control(&self, current: &Current<'_>, signer: &[u8; 32]) -> Result<(), RecordDeny> {
+    fn signer_may_control(
+        &self,
+        current: &Current<'_>,
+        signer: &[u8; 32],
+    ) -> Result<(), RecordDeny> {
         if *signer == current.head.owner {
             return Ok(());
         }
@@ -1055,7 +1061,13 @@ impl Book {
 
     /// Record a sequence-scoped apply and drop the record it supersedes from
     /// the persisted list.
-    fn commit(&mut self, h: &RecordHeader, ty: RecordType, digest: [u8; 32], record: &SignedRecord) {
+    fn commit(
+        &mut self,
+        h: &RecordHeader,
+        ty: RecordType,
+        digest: [u8; 32],
+        record: &SignedRecord,
+    ) {
         if let Some((_, old)) = self
             .high_water
             .insert(Scope::of(h, ty), (h.sequence, digest))
@@ -1069,9 +1081,8 @@ impl Book {
 
 fn encode_book(anchor: &AuthorityAnchor, applied: &[SignedRecord]) -> Result<Vec<u8>, CodecError> {
     let mut e = Encoder::new(Vec::new());
-    let w = |r: Result<&mut Encoder<Vec<u8>>, _>| {
-        r.map(|_| ()).map_err(|_| CodecError::EncodeFailed)
-    };
+    let w =
+        |r: Result<&mut Encoder<Vec<u8>>, _>| r.map(|_| ()).map_err(|_| CodecError::EncodeFailed);
     w(e.array(5))?;
     w(e.str(BOOK_DOMAIN))?;
     w(e.u64(BOOK_VERSION))?;
@@ -1086,7 +1097,9 @@ fn encode_book(anchor: &AuthorityAnchor, applied: &[SignedRecord]) -> Result<Vec
     Ok(e.into_writer())
 }
 
-fn decode_book_fields(d: &mut Decoder<'_>) -> Result<(AuthorityAnchor, Vec<SignedRecord>), CodecError> {
+fn decode_book_fields(
+    d: &mut Decoder<'_>,
+) -> Result<(AuthorityAnchor, Vec<SignedRecord>), CodecError> {
     let malformed = |_| CodecError::Malformed("record book");
     if d.array().map_err(malformed)? != Some(5) {
         return Err(CodecError::Malformed("record book"));
@@ -1112,8 +1125,8 @@ fn decode_book_fields(d: &mut Decoder<'_>) -> Result<(AuthorityAnchor, Vec<Signe
             return Err(CodecError::Malformed("record book entry"));
         }
         let bytes = d.bytes().map_err(malformed)?.to_vec();
-        let signature =
-            <[u8; 64]>::try_from(d.bytes().map_err(malformed)?).map_err(|_| CodecError::MalformedSignature)?;
+        let signature = <[u8; 64]>::try_from(d.bytes().map_err(malformed)?)
+            .map_err(|_| CodecError::MalformedSignature)?;
         applied.push(SignedRecord::new(bytes, signature));
     }
     Ok((anchor, applied))

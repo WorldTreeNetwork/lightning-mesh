@@ -252,7 +252,7 @@ mod tests {
                 assert_eq!(record.name, format!("_acme-challenge.{}", auth.fqdn));
                 assert_eq!(record.value, auth.txt_digest);
                 assert_eq!(gate.zone(), zone);
-                assert_eq!(gate.writer().records(), &[record.clone()]);
+                assert_eq!(gate.writer().records(), std::slice::from_ref(&record));
                 assert_eq!(gate.decisions()[0].outcome, Ok(record));
                 assert_eq!(gate.decisions()[0].now, NOW);
                 assert_eq!(
